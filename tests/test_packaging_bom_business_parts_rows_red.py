@@ -164,7 +164,9 @@ class ABusinessPartRows(unittest.TestCase):
         row = self.rows(biz_doc([_row("JWXR21-P01", "左盖面纸", sheet="零部件排版工艺",
                                      row=4)]))[0]
         payload = json.loads(row.get("size_source_json") or "{}")
-        self.assertEqual("authority_workbook", payload.get("kind"))
+        # `## 494` §2.4：新写入的出处 kind 是 `reference_workbook`（老行的 `authority_workbook`
+        # 仍被识别，判据收在 `packaging_bom.REFERENCE_SIZE_KINDS`）。
+        self.assertEqual("reference_workbook", payload.get("kind"))
         self.assertEqual("零部件排版工艺", payload.get("sheet"))
         self.assertEqual(4, int(payload.get("row") or 0))
 

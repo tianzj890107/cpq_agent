@@ -1,4 +1,4 @@
-"""红测：业务部件没有几何时，材料费必须能按**权威尺寸**算出来。
+"""红测：业务部件没有几何时，材料费必须能按**清单尺寸**算出来。
 
 Spec：`docs/specs/packaging-business-part-cost-by-authority-size.md`
 
@@ -7,7 +7,7 @@ Spec：`docs/specs/packaging-business-part-cost-by-authority-size.md`
     `outline_status == "closed"` → 业务件（没有几何）永远 409；
   · `main.py` 的单件成本路由（`PACKAGING_PART_COST_PATH`）先 `_packaging_part_row(pid, code)`
     （只认 `DWG-Pxx`）→ 业务编码 404；
-  · 权威清单里的 `length_mm` / `width_mm` / `material_text`（`BUSINESS_AUTHORITY_KEYS` `:3291`）
+  · 对照表里的 `length_mm` / `width_mm` / `material_text`（`BUSINESS_AUTHORITY_KEYS` `:3291`）
     从来没被送进 `packaging_cost.compute_line()`。
 
 纪律：只读源码 + 假仓库 / 假文档 / 假成本公式；不连 PG / SQLite 生产库、不发 HTTP、
@@ -44,7 +44,7 @@ SIZE_SOURCES = ("authority_dimensions",)
 INPUT_KEYS = ("ok", "code", "message", "missing_variables", "part_code", "name", "material_text",
               "gsm", "variables", "size_source", "size_source_ref", "size_text")
 
-#: 一行业务部件（真样本形状：权威资料 + 未绑定几何）
+#: 一行业务部件（真样本形状：对照资料 + 未绑定几何）
 ROW = {"business_part_code": CODE, "name": "礼盒面纸",
        "authority": {"length_mm": 300.0, "width_mm": 200.0,
                      "material_text": "350G玖龙粉灰", "product_size_text": "300×200MM",
@@ -172,7 +172,7 @@ class AAuthoritySizeInputs(unittest.TestCase):
         got = _inputs()
         self.assertEqual(INPUT_KEYS, tuple(got.keys()),
                          "返回键必须固定十二个（Spec §C1）")
-        self.assertIs(True, got.get("ok"), "权威尺寸齐了就该给输入（Spec §C1）")
+        self.assertIs(True, got.get("ok"), "清单尺寸齐了就该给输入（Spec §C1）")
         self.assertEqual({"cut_length": 300.0, "cut_width": 200.0, "gsm": 350,
                           "quote_quantity": 1}, got.get("variables"),
                          "尺寸取权威长度/宽度、克重取材料原文（Spec §C1）")
@@ -187,11 +187,11 @@ class AAuthoritySizeInputs(unittest.TestCase):
         row = {"business_part_code": CODE,
                "authority": {"material_text": "350G玖龙粉灰"}}
         got = _inputs(row=row)
-        self.assertIs(False, got.get("ok"), "没有权威尺寸不许硬算（Spec §C1）")
+        self.assertIs(False, got.get("ok"), "没有清单尺寸不许硬算（Spec §C1）")
         self.assertEqual("PACKAGING_BUSINESS_PART_SIZE_UNKNOWN", got.get("code"))
         self.assertEqual(["authority_size"], got.get("missing_variables"))
         self.assertIn("几何映射", str(got.get("message")),
-                      "要说清两条出路（确认几何映射 / 补录权威尺寸）（Spec §C1）")
+                      "要说清两条出路（确认几何映射 / 补录清单尺寸）（Spec §C1）")
 
     def test_a3_zero_or_unparsable_size_is_missing_too(self):
         for length, width in ((0, 200), (300, 0), ("", 200), (None, None), ("abc", "x")):
@@ -255,14 +255,14 @@ class AAuthoritySizeInputs(unittest.TestCase):
 class BAssumptionText(unittest.TestCase):
     def test_b1_the_sentence_says_authority_size_and_not_checked(self):
         text = parts.business_cost_assumption(_inputs())
-        self.assertEqual("按权威尺寸（300×200 mm）算的材料开料，未与 CAD 几何核过", text,
+        self.assertEqual("按清单尺寸（300×200 mm）算的材料开料，未与 CAD 几何核过", text,
                          "口径那句话逐字（Spec §C2）")
 
     def test_b2_bound_geometry_is_appended_not_replaced(self):
         text = parts.business_cost_assumption(_inputs(), geometry_part_code="DWG-P03")
-        self.assertTrue(text.startswith("按权威尺寸（300×200 mm）算的材料开料，未与 CAD 几何核过"),
+        self.assertTrue(text.startswith("按清单尺寸（300×200 mm）算的材料开料，未与 CAD 几何核过"),
                         "前半句不许被改写（Spec §C2）")
-        self.assertIn("另有闭合几何件（DWG-P03）", text, "并存时要说明是「有意」按权威尺寸算（Spec §C2）")
+        self.assertIn("另有闭合几何件（DWG-P03）", text, "并存时要说明是「有意」按清单尺寸算（Spec §C2）")
 
     def test_b3_no_verdict_means_no_sentence(self):
         self.assertEqual("", parts.business_cost_assumption({"ok": False}), "没结论就没有口径那句")
@@ -300,7 +300,7 @@ class CCostRoute(unittest.TestCase):
                          "复用既有材料公式那一支（Spec §C3）")
         self.assertEqual({"cut_length": 300.0, "cut_width": 200.0, "gsm": 350,
                           "quote_quantity": 1}, got["seen"].get("variables"),
-                         "送给 compute_line 的必须是权威尺寸那四键（Spec §C3）")
+                         "送给 compute_line 的必须是清单尺寸那四键（Spec §C3）")
         self.assertEqual("task-1", got["body"].get("task_id"), "与既有单件成本同一个任务形状")
 
     def test_c4_saved_row_is_a_business_conclusion_not_a_geometric_one(self):
@@ -314,7 +314,7 @@ class CCostRoute(unittest.TestCase):
         self.assertEqual(BIZ_HASH, saved.get("business_parts_hash"))
         self.assertEqual("unbound", saved.get("geometry"), "披露这一件没有几何（Spec §C3）")
         analysis = saved.get("analysis") if isinstance(saved.get("analysis"), dict) else {}
-        self.assertEqual("按权威尺寸（300×200 mm）算的材料开料，未与 CAD 几何核过",
+        self.assertEqual("按清单尺寸（300×200 mm）算的材料开料，未与 CAD 几何核过",
                          (analysis.get("assumptions") or [""])[0],
                          "口径那句话必须是结论的第一条 assumption（Spec §C3）")
         self.assertEqual("task-1", (saved.get("source") or {}).get("task_id"))

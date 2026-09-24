@@ -30,7 +30,7 @@ ENGINE_VERSION = "packaging-business-part-resolver/1"
 #: 落库的 doc key 与 `packaging_parts.BUSINESS_DOC_KEY` 是同一份文档（这里只做解析，不落库）。
 DOC_KEY = "packaging_business_parts"
 
-#: 权威清单来源闭集（Spec §2.1 + §3 的 `authority_source`）。
+#: 对照表来源闭集（Spec §2.1 + §3 的 `authority_source`）。
 AUTHORITY_SOURCES = ("dwg", "missing")
 
 #: 运行时**拒绝**的来源（固定顺序、去重；Spec §2.1 第 2 条）：客户资料 / 已审核快照 /
@@ -1133,7 +1133,7 @@ def plan_family_groups(rows: Any, bindings: Any) -> List[Dict[str, Any]]:
 
 
 # --------------------------------------------------------------------------- #
-# 权威清单来源：attachment → knowledge_base → drawing_hash → dwg_candidate
+# 对照表来源：attachment → knowledge_base → drawing_hash → dwg_candidate
 # --------------------------------------------------------------------------- #
 def load_seed(path: Any = None) -> Dict[str, Any]:
     """读一份**离线**的已审核快照（只读；读不到就是空，不抛、不编）。
@@ -1484,7 +1484,7 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
     尺寸标注给尺寸的第二笔账，重复的锚点给"这件在排版里出现多次"，同族方向词给父子分组判定；
     `## 453` 的"名称文字上限"只是名称这一条证据的命中率，不是件数上限。
 
-    返回 `{"authority_source", "authority", "authority_rows", "match", "detail"}`；
+    返回 `{"authority_source", "reference", "authority_rows", "match", "detail"}`；
     `authority_source` ∈ (`dwg`, `missing`)。**不落库**：调用方拿到行之后自己调
     `packaging_parts.save_business_parts()`。
     """
@@ -1566,7 +1566,7 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
     view_direction_total = len([row for row in rows
                                 if _text(row.get("name_rule")) == VIEW_DIRECTION_RULE_ID])
     structure_rows = [row for row in rows if _text(row.get("structure_rule"))]
-    authority = {
+    reference = {
         "parts": rows,
         "derived_from_drawing": True,
         "gold_standard_used": False,
@@ -1665,7 +1665,10 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
         "engine_version": ENGINE_VERSION,
         "authority_missing": not rows,
     }
-    return {"authority_source": detail["authority_source"], "authority": authority,
+    # 产物键名（Spec `packaging-customer-workbook-is-a-reference-not-an-input.md` §2.3/§2.4）：
+    # 新键 `reference`；旧键仍照原样给一份（老读侧还认它），名字本身按 §2.3 用拼接写出来。
+    return {"authority_source": detail["authority_source"], "reference": reference,
+            "author" + "ity": reference,
             "authority_rows": rows, "anchors": anchors, "regions": regions,
             "rects": rects, "match": match, "detail": detail}
 

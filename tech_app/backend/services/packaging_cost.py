@@ -2616,7 +2616,7 @@ def _with_readiness(result: dict) -> dict:
 def _business_parts_scope(project_id: str) -> dict:
     """成本消费的**业务部件**版本（Spec `packaging-business-parts-and-cad-plan-view.md` §7）。
 
-    成本该遍历的是 `business_parts`（权威清单里的 28 个），不是 CAD 连通分量。这里只做
+    成本该遍历的是 `business_parts`（对照表里的 28 个），不是 CAD 连通分量。这里只做
     **披露**（版本 + 可用性 + 缺口），键**必须存在**：
 
     - 有清单 → `business_parts_id/hash` 与件数落进 `source_versions`，重新导入清单后

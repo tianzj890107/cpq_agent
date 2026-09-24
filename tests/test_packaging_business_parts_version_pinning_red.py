@@ -100,7 +100,8 @@ class ARowsPinTheListVersion(unittest.TestCase):
                              "行上必须固定它建的时候照的那一版清单（Spec §2.1）：%r" % (payload,))
             self.assertEqual(V1_HASH, payload.get("business_parts_hash"),
                              "行上必须固定清单内容哈希（Spec §2.1）：%r" % (payload,))
-            self.assertEqual("authority_workbook", payload.get("kind"), "既有出处键逐字不变")
+            # `## 494` §2.4：新写入用 `reference_workbook`；老行的 `authority_workbook` 仍被识别。
+            self.assertEqual("reference_workbook", payload.get("kind"), "出处 kind 按新口径")
             self.assertEqual("零部件排版工艺", payload.get("sheet"), "既有出处键逐字不变")
             self.assertEqual(4, payload.get("row"), "既有出处键逐字不变")
 

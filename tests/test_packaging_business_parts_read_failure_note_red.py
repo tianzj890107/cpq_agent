@@ -1,4 +1,4 @@
-"""红测：业务部件（权威清单）"读不到"不许显示成"已识别的几何区域还不是业务部件清单"。
+"""红测：业务部件（对照表）"读不到"不许显示成"已识别的几何区域还不是业务部件清单"。
 
 Spec：`docs/specs/packaging-business-parts-read-failure-note.md`
 
@@ -30,9 +30,9 @@ APP_JS = ROOT / "tech_app" / "frontend" / "app.js"
 
 PURE_FN = "packagingBusinessReadProblemText"
 HTTP500_TEXT = ("暂时读不到业务部件清单（HTTP 500），请稍后重试；"
-                "这不代表这个项目还没导入权威清单")
+                "这不代表这个项目还没导入对照表")
 NETWORK_TEXT = ("暂时读不到业务部件清单（网络错误），请稍后重试；"
-                "这不代表这个项目还没导入权威清单")
+                "这不代表这个项目还没导入对照表")
 LEGACY_SENTENCE = "已识别的几何区域还不是业务部件清单：下面列的是几何分量，不是业务零件。"
 LEGACY_ACTION = "导入权威部件清单（Excel）后再跑 BOM / 工艺 / 成本"
 #: `## 481`（Spec `packaging-business-tables-are-answer-keys-only.md` §2.4/§5.1）**重指**过的
@@ -180,7 +180,7 @@ class UExistingNoteUnchanged(unittest.TestCase):
         for literal in (LEGACY_SENTENCE, "packaging-business-missing",
                         "dataset.qqBusinessMissing", BUTTON_481, "对答案参照"):
             self.assertIn(literal, src,
-                          "既有'确实没有权威清单'的提示与入口文案逐字不变：%s" % literal)
+                          "既有'确实没有对照表'的提示与入口文案逐字不变：%s" % literal)
         # `## 481` 重指的那一句空态引导（Spec §2.4）：逐字是新文案。
         self.assertIn(ACTION_481, src, "空态引导句要逐字换成'只用来对答案'（Spec §2.4）")
         # 旧那句请人把业务表当输入的引导句**不许回潮**（Spec §2.4）。

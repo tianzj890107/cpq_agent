@@ -1,10 +1,10 @@
-"""红测：业务部件「按权威清单排工序」的入口必须能点（`## 414` 的界面那一半）。
+"""红测：业务部件「按对照表排工序」的入口必须能点（`## 414` 的界面那一半）。
 
 Spec：`docs/specs/packaging-business-part-process-entry.md`
 
 现状缺口（代码级，可指到行）：
   · `app.js:2624 openPackagingBusinessPart()` 的 `!ok` 分支给的是 `## 409` 那行原因 +
-    `## 413` 那颗「成本测算（按权威尺寸）」—— **工序那一半一个入口都没有**；
+    `## 413` 那颗「成本测算（按清单尺寸）」—— **工序那一半一个入口都没有**；
   · 后端 `## 414` 的 `.../requirement/packaging-business-parts/{code}/process` 前端一处都没调。
 
 纪律：`node -e` 抽 app.js 顶层具名函数真跑（纯函数）+ 源码守卫 + `node --check`；
@@ -29,9 +29,9 @@ PARTS_PY = ROOT / "tech_app" / "backend" / "services" / "packaging_parts.py"
 COST_ENTRY_RED = ROOT / "tests" / "test_packaging_business_part_cost_by_authority_size_red.py"
 
 CODE = "JWXR21-P01"
-SIZE_MISSING_TEXT = ("这一件没有权威尺寸（长度/宽度），先在平面图里确认几何映射，"
-                     "或补录权威尺寸后再排工艺。")
-MATERIAL_MISSING_TEXT = "这一件在权威清单里没有材料原文，补上材料后再排工艺。"
+SIZE_MISSING_TEXT = ("这一件没有清单尺寸（长度/宽度），先在平面图里确认几何映射，"
+                     "或补录清单尺寸后再排工艺。")
+MATERIAL_MISSING_TEXT = "这一件在对照表里没有材料原文，补上材料后再排工艺。"
 REASONS = ("", "business_part_missing", "authority_size_missing", "material_missing")
 
 EXTRACT_JS = r"""
@@ -109,7 +109,7 @@ def _row(**authority):
 class AProcessEntry(unittest.TestCase):
     def test_a1_authority_route_gives_a_clickable_entry(self):
         got = target(_row(length_mm=300.0, width_mm=200.0, material_text="350G玖龙粉灰"))
-        self.assertIs(True, got.get("ok"), "权威尺寸与材料齐了就该给入口（Spec §C1）")
+        self.assertIs(True, got.get("ok"), "清单尺寸与材料齐了就该给入口（Spec §C1）")
         self.assertEqual(CODE, got.get("part_code"), "编码带回去，点了才知道排哪一件（Spec §C1）")
         self.assertEqual("", got.get("code") or "", "能排就没有原因码")
 
@@ -120,7 +120,7 @@ class AProcessEntry(unittest.TestCase):
             row = _row(material_text="350G玖龙粉灰", **authority)
             got = target(row)
             self.assertIs(False, got.get("ok"),
-                          "没有权威尺寸不许给按钮（Spec §C1）：%r" % (authority,))
+                          "没有清单尺寸不许给按钮（Spec §C1）：%r" % (authority,))
             self.assertEqual("authority_size_missing", got.get("code"))
             self.assertEqual(SIZE_MISSING_TEXT, got.get("message"),
                              "文案逐字，且说清两条出路（Spec §C1）")
@@ -154,7 +154,7 @@ class AProcessEntry(unittest.TestCase):
 
     def test_a7_numeric_strings_are_accepted(self):
         got = target(_row(length_mm="300", width_mm="200", material_text="350G玖龙粉灰"))
-        self.assertIs(True, got.get("ok"), "权威尺寸是数字串也要认（Spec §C1）")
+        self.assertIs(True, got.get("ok"), "清单尺寸是数字串也要认（Spec §C1）")
 
     def test_a8_pure_function_has_no_dom_or_io(self):
         body = function_body("packagingBusinessPartProcessTarget")
@@ -228,7 +228,7 @@ class CGuardrails(unittest.TestCase):
         body = function_body("packagingBusinessPartDownstreamTarget")
         for token in ("authority", "length_mm", "width_mm"):
             self.assertNotIn(token, body,
-                             "几何那条判据不许被权威尺寸污染（Spec §C4）")
+                             "几何那条判据不许被清单尺寸污染（Spec §C4）")
 
     def test_c2_geometric_and_cost_buttons_stay(self):
         body = function_body("openPackagingBusinessPart")

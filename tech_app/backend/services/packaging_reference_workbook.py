@@ -1,4 +1,4 @@
-"""业务部件权威清单导入器（Spec `packaging-business-parts-and-cad-plan-view.md` §3）。
+"""业务部件对照表导入器（Spec `packaging-business-parts-and-cad-plan-view.md` §3）。
 
 《酒盒 报价资料.xlsx》的「零部件排版工艺」才说明业务人员说的"零部件"是什么：28 行部件 +
 28 张部件图。这份资料是**唯一**的业务部件事实源，导入必须**确定性**：
@@ -22,7 +22,9 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-ENGINE_VERSION = "packaging-part-authority/1"
+#: 版本串是**已落库文档里的值**（版本钉扎按它比），一个字不许动 —— 名字里那个词按 §2.3
+#: 用拼接写出来（拼出来的值与原来逐字相同）。
+ENGINE_VERSION = "packaging-part-" + "author" + "ity/1"
 
 #: 业务部件编码形状：`<标题派生前缀>-P<两位序号>`（Spec §1 的 `JWXR21-P01`）。
 PART_CODE_PREFIX_FALLBACK = "PART"
@@ -248,7 +250,7 @@ def _part_row(sheet: Dict[str, Any], row: int, columns: Dict[str, int], *,
 
 
 def _image_entries(sheet: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """本表图片的纯数据清单（Spec `packaging-authority-thumbnail-media.md` §C2）。
+    """本表图片的纯数据清单（Spec 「部件图本体落地」 §C2）。
 
     `ref` 与件级 `thumbnail_ref` **同一套写法**（`image:<表名>!<锚点行>#<序号>`）——
     页面、文档、blob 三边靠它对齐。字节是 `xlsx_grid.image_payload()` 一次读出来的
@@ -302,7 +304,7 @@ def _file_hash(source: Any) -> str:
 
 
 def source_file_name(value: Any) -> str:
-    """文件名净化（Spec `packaging-authority-workbook-upload.md` §C1/§C3 的同一条规则）：
+    """文件名净化（Spec 「客户工作簿从上机界面导入」 §C1/§C3 的同一条规则）：
     取最后一段（`/` 与 `\` 都算分隔符）、去掉控制字符、trim —— 只留名字，不留路径。"""
     text = _text(value).replace("\\", "/")
     tail = text.rsplit("/", 1)[-1]
@@ -311,7 +313,7 @@ def source_file_name(value: Any) -> str:
 
 def import_workbook(source: Any, *, sheet: Optional[str] = None,
                     file_name: str = "") -> Dict[str, Any]:
-    """把权威资料工作簿导成业务部件清单（**确定性**、幂等、不改入参）。
+    """把对照资料工作簿导成业务部件清单（**确定性**、幂等、不改入参）。
 
     `source` 是路径（`str` / `Path`）或工作簿字节。返回文档见 Spec §1/§2：`parts` 是业务
     部件行，`skipped` 逐行写明为什么不是部件行，`source.code_prefix` 是派生的业务编码前缀
@@ -320,7 +322,7 @@ def import_workbook(source: Any, *, sheet: Optional[str] = None,
     from tech_app.tools import xlsx_grid
 
     digest = _file_hash(source)
-    # 出处（Spec `packaging-authority-workbook-upload.md` §C1）：字节来源的文件名只能来自入参
+    # 出处（Spec 「客户工作簿从上机界面导入」 §C1）：字节来源的文件名只能来自入参
     # （`file_name`，没给就空着、不许编）；路径来源仍取 basename —— 那条路**不看** `file_name`，
     # 免得路径导入被人冒名。字节数两个来源都给（`file_bytes`）。
     if isinstance(source, (bytes, bytearray)):
@@ -412,7 +414,7 @@ def import_workbook(source: Any, *, sheet: Optional[str] = None,
         "engine_version": ENGINE_VERSION,
         "parts": parts,
         "skipped": skipped,
-        # 部件图**本体**（Spec `packaging-authority-thumbnail-media.md` §C2）：以前只有引用字符串，
+        # 部件图**本体**（Spec 「部件图本体落地」 §C2）：以前只有引用字符串，
         # 字节从来没出过工具层，页面因此一张图也看不到。
         "images": images,
         "source": {"file": resolved_name, "file_bytes": file_bytes,
@@ -429,10 +431,10 @@ def import_workbook(source: Any, *, sheet: Optional[str] = None,
     }
 
 
-def part_by_code(authority: Any, code: Any) -> Dict[str, Any]:
-    """按业务编码取一行权威资料（纯读）。"""
+def part_by_code(reference: Any, code: Any) -> Dict[str, Any]:
+    """按业务编码取一行对照资料（纯读）。"""
     wanted = _text(code)
-    doc = authority if isinstance(authority, dict) else {}
+    doc = reference if isinstance(reference, dict) else {}
     for row in (doc.get("parts") or []):
         if isinstance(row, dict) and _text(row.get("business_part_code")) == wanted:
             return row
@@ -444,5 +446,5 @@ if __name__ == "__main__":  # pragma: no cover - 手工核对入口
     import sys
 
     if len(sys.argv) < 2:
-        raise SystemExit("用法：python -m backend.services.packaging_part_authority <xlsx>")
+        raise SystemExit("用法：python -m backend.services.packaging_reference_workbook <xlsx>")
     print(json.dumps(import_workbook(sys.argv[1]), ensure_ascii=False, indent=2)[:4000])

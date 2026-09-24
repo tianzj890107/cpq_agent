@@ -1,4 +1,4 @@
-"""红测：业务部件没有几何时，工序明细必须能按**权威清单原文**编出来。
+"""红测：业务部件没有几何时，工序明细必须能按**对照表原文**编出来。
 
 Spec：`docs/specs/packaging-business-part-process-by-authority-route.md`
 
@@ -7,7 +7,7 @@ Spec：`docs/specs/packaging-business-part-process-by-authority-route.md`
     业务件行上没有这个键 → 恒 `PACKAGING_PART_NOT_CLOSED`；
   · `main.py` 的单件工艺路由（`PACKAGING_PART_PROCESS_PATH` `:8326`）先 `_packaging_part_row(pid, code)`
     （只认零件文档里的 `DWG-Pxx`）→ 业务编码 404；
-  · 权威清单的 `length_mm` / `width_mm` / `material_text` / `process_text`（`BUSINESS_AUTHORITY_KEYS`
+  · 对照表的 `length_mm` / `width_mm` / `material_text` / `process_text`（`BUSINESS_AUTHORITY_KEYS`
     `:3291`）从来没被送进 `process.outline_process(part, ...)`。
 
 纪律：只读源码 + 假仓库 / 假文档 / 假工艺模型；不连 PG / SQLite 生产库、不发 HTTP、不写文件、
@@ -48,7 +48,7 @@ INPUT_KEYS = ("ok", "code", "message", "missing_variables", "part_code", "name",
               "material_text", "process_text", "grounding", "size_source",
               "size_source_ref", "size_length", "size_width", "size_text")
 
-#: 一行业务部件（真样本形状：权威资料 + 未绑定几何 + 工艺路线原文）
+#: 一行业务部件（真样本形状：对照资料 + 未绑定几何 + 工艺路线原文）
 ROW = {"business_part_code": CODE, "name": "礼盒面纸",
        "authority": {"length_mm": 300.0, "width_mm": 200.0,
                      "material_text": "350G玖龙粉灰", "product_size_text": "300×200MM",
@@ -60,9 +60,9 @@ ROW = {"business_part_code": CODE, "name": "礼盒面纸",
 DOC = {"business_parts_id": BIZ_ID, "business_parts_hash": BIZ_HASH,
        "business_parts": [ROW], "geometry_evidence": {"components": []}}
 
-GROUNDING = ("尺寸原文：300×200MM；权威尺寸：300×200 mm；材料：350G玖龙粉灰；"
+GROUNDING = ("尺寸原文：300×200MM；清单尺寸：300×200 mm；材料：350G玖龙粉灰；"
              "工艺路线：印刷→覆膜→模切；备注：客户备注")
-ASSUMPTION = ("按权威清单的尺寸（300×200 mm）与材料原文编制工序，未与 CAD 几何核过："
+ASSUMPTION = ("按对照表的尺寸（300×200 mm）与材料原文编制工序，未与 CAD 几何核过："
               "没有展开轮廓、没有排样，料厚未知")
 PLAN = {"part_id": CODE, "part_name": "礼盒面纸", "material": "350G玖龙粉灰",
         "steps": [{"step_no": 10, "name": "备料"}, {"step_no": 20, "name": "印刷"},
@@ -204,7 +204,7 @@ class AAuthorityRouteInputs(unittest.TestCase):
                          "返回键必须固定十四个（Spec §C1）")
         self.assertEqual(300.0, got.get("size_length"), "两轴给数值，不留文本（Spec §C1）")
         self.assertEqual(200.0, got.get("size_width"))
-        self.assertIs(True, got.get("ok"), "权威尺寸与材料齐了就该给输入（Spec §C1）")
+        self.assertIs(True, got.get("ok"), "清单尺寸与材料齐了就该给输入（Spec §C1）")
         self.assertEqual(CODE, got.get("part_code"))
         self.assertEqual("礼盒面纸", got.get("name"))
         self.assertEqual("350G玖龙粉灰", got.get("material_text"))
@@ -220,11 +220,11 @@ class AAuthorityRouteInputs(unittest.TestCase):
         row = {"business_part_code": CODE,
                "authority": {"material_text": "350G玖龙粉灰"}}
         got = _inputs(row=row)
-        self.assertIs(False, got.get("ok"), "没有权威尺寸不许硬排工艺（Spec §C1）")
+        self.assertIs(False, got.get("ok"), "没有清单尺寸不许硬排工艺（Spec §C1）")
         self.assertEqual("PACKAGING_BUSINESS_PART_SIZE_UNKNOWN", got.get("code"))
         self.assertEqual(["authority_size"], got.get("missing_variables"))
         self.assertIn("几何映射", str(got.get("message")),
-                      "要说清两条出路（确认几何映射 / 补录权威尺寸）（Spec §C1）")
+                      "要说清两条出路（确认几何映射 / 补录清单尺寸）（Spec §C1）")
 
     def test_a3_zero_or_unparsable_size_is_missing_too(self):
         for length, width in ((0, 200), (300, 0), ("", 200), (None, None), ("abc", "x")):
@@ -278,10 +278,10 @@ class AAuthorityRouteInputs(unittest.TestCase):
 
     def test_a10_grounding_is_the_authority_block_in_fixed_order(self):
         self.assertEqual(GROUNDING, _inputs().get("grounding"),
-                         "权威原文块逐字、顺序固定（Spec §C1）")
+                         "清单原文块逐字、顺序固定（Spec §C1）")
         bare = {"business_part_code": CODE, "material": "350G灰板",
                 "authority": {"length_mm": 300.0, "width_mm": 200.0}}
-        self.assertEqual("权威尺寸：300×200 mm；材料：350G灰板", _inputs(row=bare).get("grounding"),
+        self.assertEqual("清单尺寸：300×200 mm；材料：350G灰板", _inputs(row=bare).get("grounding"),
                          "只收非空项、不写空段（Spec §C1）")
 
 
@@ -349,7 +349,7 @@ class CAssumptionText(unittest.TestCase):
 
     def test_c2_bound_geometry_appends_one_clause(self):
         text = parts.business_process_assumption(_inputs(), geometry_part_code="DWG-P03")
-        self.assertEqual(ASSUMPTION + "；这一件另有闭合几何件（DWG-P03），本结论有意按权威清单编制",
+        self.assertEqual(ASSUMPTION + "；这一件另有闭合几何件（DWG-P03），本结论有意按对照表编制",
                          text, "绑了几何件也只是追加一句（Spec §C3）")
 
     def test_c3_no_conclusion_no_sentence(self):
@@ -412,10 +412,10 @@ class DPostRoute(unittest.TestCase):
         self.assertIsNone(seen.get("overall"), "业务件没有整体 IR（Spec §C4）")
         self.assertIsNone(seen.get("geom"), "业务件没有几何（Spec §C4）")
         note = str(seen.get("note") or "")
-        self.assertIn(GROUNDING, note, "权威原文块必须进 note（Spec §C4）")
+        self.assertIn(GROUNDING, note, "清单原文块必须进 note（Spec §C4）")
         self.assertIn("客户要求先覆膜再烫金", note, "用户补充说明必须进 note（Spec §C4）")
         self.assertLess(note.index(GROUNDING), note.index("客户要求先覆膜再烫金"),
-                        "权威原文在前、用户说明在后（Spec §C4）")
+                        "清单原文在前、用户说明在后（Spec §C4）")
 
     def test_d4_missing_size_is_409_and_no_task_is_submitted(self):
         row = {"business_part_code": CODE, "authority": {"material_text": "350G玖龙粉灰"}}

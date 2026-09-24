@@ -227,10 +227,10 @@ class DRealSample(unittest.TestCase):
         if not shutil.which("dwg2dxf"):
             self.skipTest("本机没有 libredwg 的 dwg2dxf")
         try:
-            from tech_app.backend.services import packaging_part_authority
+            from tech_app.backend.services import packaging_reference_workbook
         except Exception as exc:                                            # noqa: BLE001
             self.skipTest("权威清单导入器不可用：%s" % exc)
-        self.authority = packaging_part_authority
+        self.authority = packaging_reference_workbook
 
     def real_geometry(self) -> dict:
         cache = pathlib.Path(tempfile.mkdtemp()) / "real.dxf"

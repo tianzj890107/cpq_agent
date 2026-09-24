@@ -28,7 +28,7 @@ if str(ROOT) not in sys.path:
 APP_JS = ROOT / "tech_app" / "frontend" / "app.js"
 
 UNBOUND_TEXT = ("这一件还没在 CAD 图中定位到几何件；先在平面图里确认几何映射，"
-                "或按权威尺寸补录后再算。")
+                "或按清单尺寸补录后再算。")
 OPEN_TEXT = "这一件绑定的几何件还没有闭合轮廓（尺寸来自包围盒），先把轮廓补出来再算。"
 MISSING_TEXT = "这一件没有业务部件编码，不能发起下游。"
 
@@ -195,7 +195,7 @@ class SGuardrails(unittest.TestCase):
         src = APP_JS.read_text(encoding="utf-8", errors="replace")
         self.assertIn("单件工艺 / 成本按业务部件版本另跑；", src,
                       "既有口径说明逐字保留（Spec §C2）")
-        self.assertIn("几何没绑定只影响依赖几何的尺寸，不影响有权威尺寸的材料与采购项。", src)
+        self.assertIn("几何没绑定只影响依赖几何的尺寸，不影响有清单尺寸的材料与采购项。", src)
 
     def test_s2_geometric_panel_untouched(self):
         body = function_body("packagingPartActionsHtml")

@@ -2,7 +2,7 @@
 
 为什么单独放这里：`packaging-cost-rule-snapshot.md` §4.3 明令**生产后端不得依赖
 openpyxl**（`test_d1_backend_never_imports_openpyxl` 逐文件扫 `tech_app/backend/**`）。
-业务部件导入器（`tech_app/backend/services/packaging_part_authority.py`）必须能读客户
+业务部件导入器（`tech_app/backend/services/packaging_reference_workbook.py`）必须能读客户
 工作簿，但自己不许出现那个依赖 —— 于是把"读 xlsx"这件事收在这一个工具模块里，后端只拿
 **纯 dict 网格**（格子值 / 合并区 / 图片锚点），既不起 openpyxl，也不认识 xlsx 格式。
 
@@ -16,7 +16,7 @@ import hashlib
 import os
 from typing import Any, Dict, List, Optional
 
-#: 图片字节的魔数 → media_type（Spec `packaging-authority-thumbnail-media.md` §C1）。
+#: 图片字节的魔数 → media_type（Spec 「部件图本体落地」 §C1）。
 #: 只认这几种；认不出一律 `application/octet-stream`（宁可保守，不猜格式）。
 IMAGE_MAGIC = ((b"\x89PNG\r\n\x1a\n", "image/png"), (b"\xff\xd8\xff", "image/jpeg"))
 

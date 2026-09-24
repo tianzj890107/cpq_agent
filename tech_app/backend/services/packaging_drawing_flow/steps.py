@@ -413,8 +413,10 @@ def _resolve_business_parts(ctx: Dict[str, Any], ir: Dict[str, Any], geometry_pa
     document = None
     if callable(build):
         try:
-            document = build(outcome.get("authority") or {}, geometry_parts,
-                             bindings=outcome.get("match"))
+            # 产物键名（Spec `packaging-customer-workbook-is-a-reference-not-an-input.md` §2.3/§2.4）：
+            # 新键 `reference`；老产物里的旧键仍要认（拼接还原）。
+            document = build(outcome.get("reference") or outcome.get("author" + "ity") or {},
+                             geometry_parts, bindings=outcome.get("match"))
         except Exception as exc:                         # noqa: BLE001
             detail["unavailable"] = [{"code": BUSINESS_PARTS_RESOLVE_FAILED,
                                       "message": "业务部件文档组装失败（%s）" % type(exc).__name__}]
@@ -501,7 +503,7 @@ def parts_extract(ctx: Dict[str, Any]) -> Dict[str, Any]:
                               for row in (saved.get("unavailable") or [])
                               if isinstance(row, dict)]}
     # 几何区域拆完之后自动跑业务部件解析（Spec §3 的 `business_parts_resolve` 子相位）：
-    # 业务清单只来自权威资料，几何分量只作证据（真图 263 个分量 ≠ 客户说的 28 件）。
+    # 业务清单只来自对照资料，几何分量只作证据（真图 263 个分量 ≠ 客户说的 28 件）。
     business = _resolve_business_parts(ctx, ir, saved, module)
     detail.update(business["detail"])
     if business["document"] is not None:

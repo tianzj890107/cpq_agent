@@ -40,10 +40,10 @@ BIZ_ID = "biz:authority0001"
 BIZ_HASH = "bizhash-1"
 USER = {"username": "PE1", "role": "process_manager"}
 
-UNBOUND_TEXT = ("按权威尺寸算的（300×200MM；来源：酒盒 报价资料.xlsx#Sheet1!B12）；"
+UNBOUND_TEXT = ("按清单尺寸算的（300×200MM；来源：酒盒 报价资料.xlsx#Sheet1!B12）；"
                 "这一件没有绑 CAD 几何。")
-BOUND_TEXT = ("按权威尺寸算的（300×200MM；来源：酒盒 报价资料.xlsx#Sheet1!B12）；"
-              "这一件另绑了几何件 DWG-P03，本结论有意按权威尺寸算。")
+BOUND_TEXT = ("按清单尺寸算的（300×200MM；来源：酒盒 报价资料.xlsx#Sheet1!B12）；"
+              "这一件另绑了几何件 DWG-P03，本结论有意按清单尺寸算。")
 
 ROW = {"business_part_code": CODE, "name": "礼盒面纸",
        "authority": {"length_mm": 300.0, "width_mm": 200.0,
@@ -244,15 +244,15 @@ class ABasisNote(unittest.TestCase):
 
     def test_a4_missing_evidence_only_drops_that_piece(self):
         got = basis({"size_source": "authority_dimensions", "geometry": "unbound"})
-        self.assertEqual("按权威尺寸算的；这一件没有绑 CAD 几何。", got.get("text"),
+        self.assertEqual("按清单尺寸算的；这一件没有绑 CAD 几何。", got.get("text"),
                          "两段证据都缺时不留空括号（Spec §C1）")
         got = basis({"size_source": "authority_dimensions", "size_text": "300×200MM",
                      "geometry": "unbound"})
-        self.assertEqual("按权威尺寸算的（300×200MM）；这一件没有绑 CAD 几何。", got.get("text"),
+        self.assertEqual("按清单尺寸算的（300×200MM）；这一件没有绑 CAD 几何。", got.get("text"),
                          "缺来源就少一段（Spec §C1）")
         got = basis({"size_source": "authority_dimensions",
                      "size_source_ref": "xlsx#B12", "geometry": "unbound"})
-        self.assertEqual("按权威尺寸算的（来源：xlsx#B12）；这一件没有绑 CAD 几何。",
+        self.assertEqual("按清单尺寸算的（来源：xlsx#B12）；这一件没有绑 CAD 几何。",
                          got.get("text"), "缺尺寸原文就少一段（Spec §C1）")
 
     def test_a5_empty_or_odd_geometry_is_unbound(self):

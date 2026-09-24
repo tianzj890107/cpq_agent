@@ -4,7 +4,7 @@ Spec：`docs/specs/packaging-part-thumbnail-absence-must-name-its-source.md`
 
 现状缺口（代码级，都可指到行）：
   · `packaging_parts.py:3943-3949 _business_part_thumbnail()`：只要 `thumbnail_ref` 为空就写死
-    `"reason": "thumbnail_missing"` —— 那是**工作簿世界**的码（原文「这份权威清单里这一件没有配到部件图」）；
+    `"reason": "thumbnail_missing"` —— 那是**工作簿世界**的码（原文「这份对照表里这一件没有配到部件图」）；
   · 图纸推导的清单（`packaging_business_part_resolver.py:1571 derived_from_drawing=True`）的行
     **从来没有 `thumbnail_ref` 这个键** ⇒ 28 行每行都拿到 `thumbnail_missing`，右栏点谁都同一句；
   · `main.py:7638` 与 `app.js:3563` 各抄了一份那句话，前端再写码也不会跟着说；
@@ -35,21 +35,21 @@ DISCLOSURE_FN = "packagingAuthorityDisclosureLines"
 
 #: 新码与它的那句话（Spec §2.1/§2.2，逐字）。
 NEW_CODE = "thumbnail_source_has_none"
-NEW_SENTENCE = ("这一版清单来自图纸推导，图纸本身不带部件图；要按行看部件图，需先导入权威清单。")
+NEW_SENTENCE = ("这一版清单来自图纸推导，图纸本身不带部件图；要按行看部件图，需先导入对照表。")
 
 #: 前端那份工作簿世界既有三码的句子（Spec §2.2：逐字不许动）。
 WORKBOOK_COPY = {
     "image_bytes_unreadable": "工作簿里的部件图读不出来（导入时就没读到字节）",
     "thumbnail_missing": "这份清单里这一件没有配到部件图",
-    "thumbnail_not_saved": "这件有部件图引用，但字节还没入库：重新导入一次权威清单即可",
+    "thumbnail_not_saved": "这件有部件图引用，但字节还没入库：重新导入一次对照表即可",
 }
 
 #: 服务端那份（`main.py PACKAGING_THUMBNAIL_REASON_COPY`）的工作簿世界三码——两份各是各的
 #: 字面（服务端 `thumbnail_missing` 多一个「权威」），本批**各自逐字**不许动。
 SERVER_WORKBOOK_COPY = {
     "image_bytes_unreadable": "工作簿里的部件图读不出来（导入时就没读到字节）",
-    "thumbnail_missing": "这份权威清单里这一件没有配到部件图",
-    "thumbnail_not_saved": "这件有部件图引用，但字节还没入库：重新导入一次权威清单即可",
+    "thumbnail_missing": "这份对照表里这一件没有配到部件图",
+    "thumbnail_not_saved": "这件有部件图引用，但字节还没入库：重新导入一次对照表即可",
 }
 
 #: 那句话只许出现在工作簿分支（Spec §2.4）。
@@ -149,7 +149,7 @@ def derived_authority():
 
 
 def workbook_authority(ref=""):
-    """权威清单工作簿来的行：有 `thumbnail_ref` 才有图这一栏。"""
+    """对照表工作簿来的行：有 `thumbnail_ref` 才有图这一栏。"""
     row = {
         "sequence_no": 1, "business_part_code": "P01", "name": "面纸",
         "length_mm": 200.0, "width_mm": 300.0, "material_text": "", "process_text": "",
@@ -182,7 +182,7 @@ def parts_doc(authority, thumbnails=None):
 def thumbnail_of(authority, code, thumbnails=None):
     from tech_app.backend.services import packaging_parts
     doc = parts_doc(authority, thumbnails)
-    return packaging_parts.authority_thumbnail_of("p1", doc, code)
+    return packaging_parts.reference_thumbnail_of("p1", doc, code)
 
 
 # --------------------------------------------------------------------------- #
@@ -261,7 +261,7 @@ class BServerCopy(unittest.TestCase):
 
     def test_b2_新句必须点名来源与出路(self):
         sentence = copy_sentence(NEW_CODE)
-        for token in ("图纸推导", "权威清单"):
+        for token in ("图纸推导", "对照表"):
             self.assertIn(token, sentence, "这句要说清来源与出路：%s" % token)
         for forbidden in ("这一件", "这一种"):
             self.assertNotIn(forbidden, sentence,
@@ -300,7 +300,7 @@ class CFrontendReasonText(unittest.TestCase):
 
     def test_c5_新句不许读成_这一件缺图(self):
         got = reason_text(NEW_CODE)
-        for token in ("图纸推导", "权威清单"):
+        for token in ("图纸推导", "对照表"):
             self.assertIn(token, got, "这句要说清来源与出路：%s" % token)
         self.assertNotIn("这一件", got, "整版没有图 ≠ 这一件缺图（Spec §2.2）")
 
@@ -329,7 +329,7 @@ class DWiring(unittest.TestCase):
         lines = [str(item) for item in (list_lines(doc) or [])]
         hit = [line for line in lines if "部件图" in line]
         self.assertEqual(1, len(hit), "图纸推导单要有且只有一句部件图披露：%r" % lines)
-        for token in ("图纸推导", "权威清单"):
+        for token in ("图纸推导", "对照表"):
             self.assertIn(token, hit[0], "清单级那句要说清来源与出路：%s" % token)
 
     def test_d4_工作簿单的清单级句逐字不变(self):

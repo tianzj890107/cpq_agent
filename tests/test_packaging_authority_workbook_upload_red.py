@@ -7,7 +7,7 @@
     客户给的 xlsx 必须先被人手工放到服务器文件系统上；
   · `tech_app/backend/main.py:7275-7281` 收下 `content_base64` 后直接 `b64decode`：
     **没有大小上限**，也没有把文件名带下去；
-  · `tech_app/backend/services/packaging_part_authority.py:313-314` 对字节来源
+  · `tech_app/backend/services/packaging_reference_workbook.py:313-314` 对字节来源
     `source["file"] = ""`、从来没有 `file_bytes` —— 落库的清单说不出"来自哪个文件、多大"。
 
 纪律：`node -e` 抽顶层具名函数真跑（纯函数）+ 源码守卫 + `node --check`；后端用**打桩**的
@@ -35,7 +35,7 @@ os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="cpq-workbook-upload-")
 os.environ.setdefault("AUTH_ENABLED", "false")
 
 from tech_app.backend import main                                        # noqa: E402
-from tech_app.backend.services import packaging_part_authority as authority  # noqa: E402
+from tech_app.backend.services import packaging_reference_workbook as authority  # noqa: E402
 
 APP_JS = ROOT / "tech_app" / "frontend" / "app.js"
 
@@ -184,7 +184,7 @@ class _ImportSpy:
 def call_import(body, spy, *, limit=None):
     """直接调导入路由（打桩导入器 + 假后勤），返回 (返回值, 异常, 打桩记录)。"""
     patches = [
-        (main.packaging_part_authority, "import_workbook", spy),
+        (main.packaging_reference_workbook, "import_workbook", spy),
         (main.packaging_parts, "load_parts", lambda pid: {}),
         (main.packaging_parts, "save_authority_thumbnails",
          lambda pid, record: {"written": 0, "reused": 0}),

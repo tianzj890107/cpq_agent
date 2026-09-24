@@ -152,8 +152,8 @@ class AXlsxGrid(unittest.TestCase):
 # --------------------------------------------------------------------------- #
 class BImportWorkbook(unittest.TestCase):
     def _authority(self):
-        from tech_app.backend.services import packaging_part_authority
-        return packaging_part_authority.import_workbook(sample_xlsx())
+        from tech_app.backend.services import packaging_reference_workbook
+        return packaging_reference_workbook.import_workbook(sample_xlsx())
 
     def test_b1_images_list_aligns_with_parts(self):
         authority = self._authority()
@@ -426,9 +426,9 @@ class EThumbnailBytes(unittest.TestCase):
 
     def _read(self, doc, code):
         from tech_app.backend.services import packaging_parts
-        fn = getattr(packaging_parts, "authority_thumbnail_of", None)
+        fn = getattr(packaging_parts, "reference_thumbnail_of", None)
         if fn is None:
-            self.fail("packaging_parts 没有 authority_thumbnail_of()（Spec §C5）")
+            self.fail("packaging_parts 没有 reference_thumbnail_of()（Spec §C5）")
         return fn("proj", doc, code)
 
     def test_e3_hit_returns_bytes_and_media_type(self):
@@ -550,7 +550,7 @@ class GGuards(unittest.TestCase):
                                  "部件图不许往 attachments/ 写（Spec §C3/C7）")
 
     def test_g2_importer_ownership_and_skip_rules_unchanged(self):
-        source = (ROOT / "tech_app" / "backend" / "services" / "packaging_part_authority.py").read_text(encoding="utf-8")
+        source = (ROOT / "tech_app" / "backend" / "services" / "packaging_reference_workbook.py").read_text(encoding="utf-8")
         self.assertTrue('item["thumbnail_source"] = "order"' in source,
                         "部件图归属算法不许改（Spec §C7）")
         self.assertTrue(
@@ -558,7 +558,7 @@ class GGuards(unittest.TestCase):
             in source, "跳过原因闭集不许改（Spec §C7）")
 
     def test_g3_grid_stays_openpyxl_free_for_the_backend(self):
-        backend = (ROOT / "tech_app" / "backend" / "services" / "packaging_part_authority.py").read_text(encoding="utf-8")
+        backend = (ROOT / "tech_app" / "backend" / "services" / "packaging_reference_workbook.py").read_text(encoding="utf-8")
         self.assertTrue("import openpyxl" not in backend,
                         "后端不许直接 import openpyxl（Spec §C1）")
         grid = (ROOT / "tech_app" / "tools" / "xlsx_grid.py").read_text(encoding="utf-8")

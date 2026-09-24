@@ -17,7 +17,7 @@
 | `empty_required_table` | 关键包装表（7 张主体表）行数为 0 |
 | `kb_version_missing` | `kb_version` 为 None 或 0 |
 | `demo_only` | `env == "production"` 且任一关键表**全部**是 `source_type='demo'` |
-| `authority_missing` | `env == "production"` 且关键表存在 `source_type='demo'` 的行、而这些行没有申报权威出处（`authority_ref` 为空） |
+| `authority_missing` | `env == "production"` 且关键表存在 `source_type='demo'` 的行、而这些行没有申报对照出处（`authority_ref` 为空） |
 | `unclassified_rows` | `env == "production"` 且存在 `source_type='unknown'` 的行 |
 | `box_type_missing_fit_clearance` | `env == "production"` 且 `kb_packaging_box_type` 有非 `demo` 行没登记 `fit_clearance` |
 | `below_min_rows` | `--min-rows 表=下限` 指定的表行数低于下限 |
@@ -63,7 +63,7 @@ REQUIRED_TABLES = tuple(cpq_kb.PACKAGING_REQUIRED_TABLES)
 DEMO = "demo"
 UNKNOWN = "unknown"
 
-#: 盒型库统一表名（`fit_clearance` 是匹配硬门槛维度，权威行不许留空）。
+#: 盒型库统一表名（`fit_clearance` 是匹配硬门槛维度，对照表的行不许留空）。
 BOX_TABLE = "kb_packaging_box_type"
 
 EXIT_GO = 0
@@ -84,7 +84,7 @@ def _source_type(row) -> str:
 
 
 def _authority_ref(row) -> str:
-    """取一行的权威出处（升格时按 `cpq_kb.promote_rows` 写入）；空 = 没人认领。"""
+    """取一行的对照出处（升格时按 `cpq_kb.promote_rows` 写入）；空 = 没人认领。"""
     if not isinstance(row, dict):
         return ""
     return str(row.get("authority_ref") or "").strip()
@@ -157,11 +157,11 @@ def preflight(tables: dict, *, env: str = "local", kb_version=None,
             unclaimed = [row for row in demo_rows if not _authority_ref(row)]
             if all(_source_type(row) == DEMO for row in rows) and len(unclaimed) == len(rows):
                 problems.append(_problem("demo_only", name,
-                                         "%s 全是演示数据且没有一行申报权威出处："
+                                         "%s 全是演示数据且没有一行申报对照出处："
                                          "生产库不得用演示盒型/工艺/费率报价" % name))
             elif unclaimed:
                 problems.append(_problem("authority_missing", name,
-                                         "%s 有 %d 行还是演示数据且没有申报权威出处"
+                                         "%s 有 %d 行还是演示数据且没有申报对照出处"
                                          "（authority_ref 为空）：生产库不得用没人认领的样例数据报价"
                                          % (name, len(unclaimed))))
         if provenance[UNKNOWN] > 0:

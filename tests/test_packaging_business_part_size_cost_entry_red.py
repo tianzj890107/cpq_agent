@@ -1,9 +1,9 @@
-"""红测：业务部件「按权威尺寸算材料费」的入口必须能点（`## 412` 的界面那一半）。
+"""红测：业务部件「按清单尺寸算材料费」的入口必须能点（`## 412` 的界面那一半）。
 
 Spec：`docs/specs/packaging-business-part-size-cost-entry.md`
 
 现状缺口（代码级，可指到行）：
-  · `app.js:2571 openPackagingBusinessPart()` 的 `!ok` 分支只渲染一行原因 —— 没有几何但有权威尺寸
+  · `app.js:2571 openPackagingBusinessPart()` 的 `!ok` 分支只渲染一行原因 —— 没有几何但有清单尺寸
     的件（真样本 24 件）在界面上仍然"算不了"；
   · 后端 `## 412` 的 `.../packaging-business-parts/{code}/cost` 前端一处都没调
     （`packagingPartEndpoint()` `:1502` 只指几何零件那条路）。
@@ -29,8 +29,8 @@ MAIN_PY = ROOT / "tech_app" / "backend" / "main.py"
 PARTS_PY = ROOT / "tech_app" / "backend" / "services" / "packaging_parts.py"
 
 CODE = "JWXR21-P01"
-SIZE_MISSING_TEXT = ("这一件没有权威尺寸（长度/宽度），先在平面图里确认几何映射，"
-                     "或补录权威尺寸后再算。")
+SIZE_MISSING_TEXT = ("这一件没有清单尺寸（长度/宽度），先在平面图里确认几何映射，"
+                     "或补录清单尺寸后再算。")
 
 EXTRACT_JS = r"""
 const fs = require("fs");
@@ -107,7 +107,7 @@ def _row(**authority):
 class ASizeCostEntry(unittest.TestCase):
     def test_a1_authority_size_gives_a_clickable_entry(self):
         got = target(_row(length_mm=300.0, width_mm=200.0, material_text="350G玖龙粉灰"))
-        self.assertIs(True, got.get("ok"), "有权威尺寸就该给入口（Spec §C1）")
+        self.assertIs(True, got.get("ok"), "有清单尺寸就该给入口（Spec §C1）")
         self.assertEqual(CODE, got.get("part_code"), "编码带回去，点了才知道算哪一件（Spec §C1）")
         self.assertEqual("", got.get("code") or "", "能算就没有原因码")
 
@@ -117,7 +117,7 @@ class ASizeCostEntry(unittest.TestCase):
                           {"length_mm": "abc", "width_mm": "x"}):
             got = target(_row(**authority))
             self.assertIs(False, got.get("ok"),
-                          "没有权威尺寸不许给按钮（Spec §C1）：%r" % (authority,))
+                          "没有清单尺寸不许给按钮（Spec §C1）：%r" % (authority,))
             self.assertEqual("authority_size_missing", got.get("code"))
             self.assertEqual(SIZE_MISSING_TEXT, got.get("message"),
                              "文案要说清两条出路（Spec §C1）")
@@ -139,7 +139,7 @@ class ASizeCostEntry(unittest.TestCase):
 
     def test_a5_numeric_strings_are_accepted(self):
         got = target(_row(length_mm="300", width_mm="200"))
-        self.assertIs(True, got.get("ok"), "权威尺寸是数字串也要认（Spec §C1）")
+        self.assertIs(True, got.get("ok"), "清单尺寸是数字串也要认（Spec §C1）")
 
     def test_a6_pure_function_has_no_dom_or_io(self):
         body = function_body("packagingBusinessPartSizeCostTarget")
@@ -192,7 +192,7 @@ class CGuardrails(unittest.TestCase):
         body = function_body("packagingBusinessPartDownstreamTarget")
         for token in ("authority", "length_mm", "width_mm"):
             self.assertNotIn(token, body,
-                             "几何那条判据不许被权威尺寸污染（Spec §C4）")
+                             "几何那条判据不许被清单尺寸污染（Spec §C4）")
 
     def test_c2_geometric_buttons_stay(self):
         body = function_body("openPackagingBusinessPart")

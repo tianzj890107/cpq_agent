@@ -1,4 +1,4 @@
-"""红测：BOM 面板要说得出「部件组行是权威清单来的，还是几何模板展开的」
+"""红测：BOM 面板要说得出「部件组行是对照表来的，还是几何模板展开的」
 （Spec `packaging-bom-business-rows-account-panel.md`）。
 
 现状缺口（代码级，可指到行）：
@@ -7,8 +7,8 @@
     判据只认行上的 `source == "packaging_business_parts_authority"` 且 `bom_category` 属部件组），
     `load_bom()` 顶层键就是 `business_rows`（`:1423`）；
   · 而 `requirement-confirm.js` 里 `business_rows` **0 处引用**（`grep -c` 实测）：材料组那本账
-    已经有两块落点（映射表 + 清单版本），**部件组这一半一行都没有** —— 权威清单来的 28 行与
-    几何模板展开的 10 行在表格里同形，用户看不出该不该去导权威清单。
+    已经有两块落点（映射表 + 清单版本），**部件组这一半一行都没有** —— 对照表来的 28 行与
+    几何模板展开的 10 行在表格里同形，用户看不出该不该去导对照表。
 
 纪律：`node -e` 抽闭包内具名函数体执行（纯函数 + 真跑渲染串）+ 源码守卫 + `node --check`；
 不起服务、不发 HTTP、不连 PG / 34、不写业务数据。禁止为了让红测转绿而修改本文件。
@@ -27,9 +27,9 @@ if str(ROOT) not in sys.path:
 
 CONFIRM_JS = ROOT / "tech_app" / "frontend" / "requirement-confirm.js"
 
-HEADLINE_READY = "部件组行：来自权威清单 28 行（盒型件 26 件 · 选配件 2 件），其中缺输入 3 行。"
-HEADLINE_EMPTY = "这一版 BOM 的部件组行没有一行来自权威清单（部件组是按几何零件模板展开的）。"
-HEADLINE_UNKNOWN = ("后端没给部件组行的来源账（老载荷）：说不清这一版 BOM 的部件组行是权威清单还是模板来的。")
+HEADLINE_READY = "部件组行：来自对照表 28 行（盒型件 26 件 · 选配件 2 件），其中缺输入 3 行。"
+HEADLINE_EMPTY = "这一版 BOM 的部件组行没有一行来自对照表（部件组是按几何零件模板展开的）。"
+HEADLINE_UNKNOWN = ("后端没给部件组行的来源账（老载荷）：说不清这一版 BOM 的部件组行是对照表还是模板来的。")
 
 RECORD_READY = {"business_rows": {"row_total": 28, "box_part_total": 26, "optional_part_total": 2,
                                   "needs_input_total": 3,
@@ -110,8 +110,8 @@ def function_body(name: str) -> str:
 class ARowsAccount(unittest.TestCase):
     def test_a1_ready_reports_scale_and_missing_input(self):
         out = value("pbBusinessRowsAccount", [RECORD_READY])
-        self.assertEqual("ready", out["state"], "有来自权威清单的行就是 ready（Spec §C1）")
-        self.assertEqual(28, out["total"], "来自权威清单几行（Spec §C1）")
+        self.assertEqual("ready", out["state"], "有来自对照表的行就是 ready（Spec §C1）")
+        self.assertEqual(28, out["total"], "来自对照表几行（Spec §C1）")
         self.assertEqual(26, out["boxParts"], "其中盒型件几件（Spec §C1）")
         self.assertEqual(2, out["optionalParts"], "其中选配件几件（Spec §C1）")
         self.assertEqual(3, out["needsInput"], "其中几行缺输入（Spec §C1）")
@@ -119,7 +119,7 @@ class ARowsAccount(unittest.TestCase):
 
     def test_a2_zero_authority_rows_is_its_own_state(self):
         out = value("pbBusinessRowsAccount", [RECORD_EMPTY])
-        self.assertEqual("empty", out["state"], "一行都没来自权威清单也是一档（Spec §C1）")
+        self.assertEqual("empty", out["state"], "一行都没来自对照表也是一档（Spec §C1）")
         self.assertEqual(HEADLINE_EMPTY, out["headline"], "模板展开的人话逐字（Spec §C1）")
         self.assertEqual(0, out["total"], "0 行就是 0（Spec §C1）")
 
@@ -130,7 +130,7 @@ class ARowsAccount(unittest.TestCase):
         self.assertNotEqual(empty["headline"], legacy["headline"], "两种态各有各的一句话（Spec §C1）")
         self.assertNotIn("0 行", empty["headline"].replace("没有一行", ""),
                          "empty 不许说成「没有部件组行」（Spec §C3）")
-        self.assertIn("没有一行来自权威清单", empty["headline"], "empty 说的是来源（Spec §C1）")
+        self.assertIn("没有一行来自对照表", empty["headline"], "empty 说的是来源（Spec §C1）")
 
     def test_a4_legacy_payload_is_unknown(self):
         cases = [[{}], [{"stats": {"total": 10}, "items": []}], [{"business_rows": None}],

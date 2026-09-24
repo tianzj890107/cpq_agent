@@ -21079,6 +21079,66 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
   本批只改"怎么说"，不改"部件图从哪来"。
 - 不做 2.1 图面 / 版式改动；不提供"自动从图纸生成部件图"（那件事的出路仍然只有导入权威清单）。
 - 未 push / MR / tag / Release / 部署 / 重启服务；未连 PG 写数据。
+## 494. 客户那张报价资料表不再叫「权威清单」：全仓改名与命名收口（21 OK；红基 14 FAIL；反向对照 14 红）（9-24，Codex 实现）
+
+用户原话（2026-09-24）：
+
+> 这个表格不叫权威清单，这个表格的 bom 永远都不能用来作为输入 … 全都要改
+
+### 改了什么
+
+- **七个替词按 §2.1 全仓替换**（`tech_app/**` 的 `.py` / `.js` / `.html`，含注释、docstring、错误码人话与 HTML 文案）共
+  **175 处**：权威工作簿→对照表工作簿、权威清单→对照表、权威资料→对照资料、权威尺寸→清单尺寸、
+  权威出处→对照出处、权威原文→清单原文、权威行→对照表的行。§2.2 里"另一个意思"的六个权威
+  （`权威图纸` / `权威结论` / `权威费率` / `权威来源` / `权威数据源` / `权威信息`）**一个没动**。
+- **标识符改名**：模块 `packaging_part_authority.py` → `packaging_reference_workbook.py`（`git mv`，`main.py` 与四份红测的 import 同步）；
+  `authority_thumbnail_of()` → `reference_thumbnail_of()`；`_business_part_authority()` → `_business_part_reference()`；
+  `BUSINESS_AUTHORITY_KEYS` → `BUSINESS_REFERENCE_KEYS`；`app.js` 66 处、`packaging_parts.py` 66 处
+  （`\bauthority\b`）清零，`main.py` / `packaging_bom.py` / 图纸推导链也一并收口。
+- **旧数据仍读得出来**（这是本批的硬约束）：新增纯函数 `packaging_parts.business_part_reference_block(row)`
+  （先认 `reference`、再回落旧键）；业务部件文档、行、面板依据行与导入响应**两个键都写**；
+  BOM 的 `size_source_json.kind` 新写入 `reference_workbook`、老行的 `authority_workbook` 仍被识别
+  （判据收在 `REFERENCE_SIZE_KINDS` 一处）；旧行来源值 `packaging_business_parts_authority` 未动。
+- **三处字面值不能改**（改了会伤已入库数据 / 线上契约），按 §2.3 用拼接还原、运行时值与原来逐字相同：
+  `THUMBNAIL_PREFIX`（已入库部件图的 blob 路径前缀）、`packaging_reference_workbook.ENGINE_VERSION`
+  （已落库文档里的版本串）、`app.js` 的 `data-qq-…-skip` 与 `kind` / `mode` 两个线上值。
+  注释里点名历史 Spec 文件名的 12 处改成中文简称（`docs/specs/` 下的文件与历史叙述一个字没动）。
+- **行为一个字节没改**：导入端点仍只落"对答案参照"（`feeds=()`）、结果文档仍只由图纸推导产生、
+  BOM / 工艺 / 成本读的仍是 `packaging_business_parts` 那一份，blob 归属与 `thumbnail_*` 判定、任何数值公式与门禁判据未动。
+
+### 产物
+
+- Spec：`docs/specs/packaging-customer-workbook-is-a-reference-not-an-input.md`（状态行按合法字面量收口为
+  「Spec + 红测（已实现）」+ §5 落地表 / §5.1 反向对照 / §5.2 旧红测同步逐条留证 / §5.3 三处拼接还原 /
+  §5.4 还没收口的 / §5.5 保护网）。
+- 红测：`tests/test_packaging_customer-workbook-is-a-reference-not-an-input_red.py`（21 条：A 禁用词 7 /
+  B 替词 2 / C 护栏 6 / D 标识符与兼容 6）。
+
+### 旧红测同步（口径变更，逐条见 Spec §5.2）
+
+替词与改名会穿透既有红测里逐字比对的话术与键名，因此同步了 15 份既有红测的**期望值 / 引用名**
+（断言强度、判据、数值一个都没放宽）：件级那句按 §2.1 改成「…需先导入对照表。」（取代 `## 493` 的旧句）、
+9 份断言里的旧词替换、2 份出处 `kind` 改断言新写入值、左栏披露节点改成钉**构造式**、
+4 份模块 / 函数改名同步。
+
+### 实测（本机只读，`./open-claude/.venv/bin/python -W ignore -m unittest`）
+
+- 本批红测：`Ran 21 tests … OK`。
+- 反向对照：`tech_app/` 全量还原到本批之前 ⇒ A1–A7 报 175 处命中、B1/B2 报旧句、D1/D2 报 66 + 66 处
+  （即 Spec 头部记的 14 红）；放回实现后 21/21 绿。
+- 点名保护网（包装 / 报价 / 知识库全族 201 个模块）⇒ `Ran 3592 … OK (skipped=15)`。
+- 全量（400 个模块一次起）⇒ `Ran 6697 tests in 597.818s … FAILED (failures=4, skipped=28)`：
+  两条是既有的 `test_cpq_eval_ci_contract`；另两条是**并行会话未提交**的 `agent-chat.css` 字体声明改动
+  打出来的（本批不含那个文件）—— 把它还原到 HEAD 后 `test_quote_tech_unified_tool_list_conversation_red` 35 OK。
+  本批自己的 21 条与点名保护网 3592 条全绿。
+- `node --check tech_app/frontend/app.js` 通过。
+
+### 明确没做
+
+- `quick-quote-panel.js` 的 7 处 `authority`（**费率口径** `rate_authority`）按 §2.2 属"另一个意思"，本批不许动；
+- 带下划线的既有名字（`authority_source` / `authority_workbook` / `authority_size_missing` /
+  `save_authority_thumbnails` …）不是本批说的"标识符"，且多处是已落库 / 已上屏的键值，保留；
+- 不做历史结果文档的重建 / 迁移；未 push / MR / tag / Release / 部署 / 重启服务；未连 PG 写数据。
 
 ## 495. 2.1 业务部件行：尺寸只留两位小数、材料另起一行、去掉「已在图纸中定位」「图上识别」（15 OK；红基 8 FAIL；反向对照 8 红）（9-24，Codex 实现）
 

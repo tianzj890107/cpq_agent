@@ -44,7 +44,7 @@ class WineBoxAuthorityWorkbookFacts(unittest.TestCase):
 
 class BusinessPartLayerRed(unittest.TestCase):
     def test_authoritative_workbook_importer_exists(self):
-        module = ROOT / "tech_app/backend/services/packaging_part_authority.py"
+        module = ROOT / "tech_app/backend/services/packaging_reference_workbook.py"
         self.assertTrue(module.exists(), "缺少包装业务部件权威资料导入器")
         if module.exists():
             source = module.read_text(encoding="utf-8")

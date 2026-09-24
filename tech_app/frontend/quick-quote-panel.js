@@ -76,7 +76,7 @@
     expired: "已过期"
   };
   var SOURCE_LABELS = {
-    workbook: "权威工作簿",
+    workbook: "对照表工作簿",
     dwg_confirmed: "DWG 实样确认",
     demo: "演示数据",
     unknown: "未分类"
@@ -658,7 +658,7 @@
   var QUOTE_ACTIONS = ["save_quote", "transfer_precise"];
   var QUOTE_ACTION_LABELS = { save_quote: "出价（落版本）", transfer_precise: "转精准报价" };
   /* 费率权威段缺 `reason` 时的兜底文案（后端给了就用后端的，这里只兜底，不判"能不能用"）。 */
-  var RATE_AUTHORITY_FALLBACK = "费率不是权威工作簿费率：只能作为试算，出价前必须换成权威费率";
+  var RATE_AUTHORITY_FALLBACK = "费率不是对照表工作簿费率：只能作为试算，出价前必须换成权威费率";
 
   function renderDiffTable(rows) {
     rows = rows || [];

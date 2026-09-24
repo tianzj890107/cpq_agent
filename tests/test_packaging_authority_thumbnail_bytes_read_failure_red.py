@@ -7,7 +7,7 @@ Spec：`docs/specs/packaging-authority-thumbnail-bytes-read-failure.md`
     `thumb.available` 直接吐 `<img class="packaging-business-thumb" src=…>`，**没有 `onerror`** ——
     读端点 404（`thumbnail_bytes_missing`）或 500 时只剩碎图，面板照旧写"已配到部件图"；
   · `:2357-2361` 的三元表达式把**任何表外 reason** 都写成
-    "部件图还没入库（重新导入权威清单即可）"（把"字节被清理"赖到"没导入"上）；
+    "部件图还没入库（重新导入对照表即可）"（把"字节被清理"赖到"没导入"上）；
   · 前端自己抄了一份文案（服务端 `main.py:7382-7389 PACKAGING_THUMBNAIL_REASON_COPY` 才是
     权威那份），前端加码不会跟着说。
 
@@ -35,10 +35,10 @@ BYTES_FN = "packagingBusinessThumbnailBytesFailureText"
 REASON_COPY = {
     "image_bytes_unreadable": "工作簿里的部件图读不出来（导入时就没读到字节）",
     "thumbnail_missing": "这份清单里这一件没有配到部件图",
-    "thumbnail_not_saved": "这件有部件图引用，但字节还没入库：重新导入一次权威清单即可",
+    "thumbnail_not_saved": "这件有部件图引用，但字节还没入库：重新导入一次对照表即可",
 }
 BYTES_COPY = ("这一件清单里有部件图，但这一次没取到字节（可能已被清理，"
-              "也可能是接口暂时读不到）；刷新或重新导入权威清单可重建")
+              "也可能是接口暂时读不到）；刷新或重新导入对照表可重建")
 
 EXTRACT_JS = r"""
 const fs = require("fs");
@@ -175,7 +175,7 @@ class TWiring(unittest.TestCase):
                       "清单侧的三种 reason 必须走纯函数，不许在面板里另抄一份（Spec §2.3）")
         self.assertNotIn('? "工作簿里的部件图读不出来', body,
                          "面板里那份内联三元式必须删掉（Spec §2.3）")
-        self.assertNotIn("部件图还没入库（重新导入权威清单即可）", body,
+        self.assertNotIn("部件图还没入库（重新导入对照表即可）", body,
                          "那条宽泛兜底必须删掉（Spec §2.3）")
         self.assertIn("<img", body, "可用时的 <img> 不许被换成别的渲染方式")
         self.assertIn("onerror", body, "<img> 必须接住取不到字节这件事（Spec §2.3）")

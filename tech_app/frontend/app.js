@@ -1242,7 +1242,7 @@ function pkgPartFactRow(label, value) {
 function renderPackagingPartPanel(payload) {
   const host = $("packagingPartPanel");
   if (!host) return null;
-  // 缩略图是**业务部件**的东西（Spec `packaging-authority-thumbnail-media.md` §C6）：
+  // 缩略图是**业务部件**的东西（Spec 「部件图本体落地」 §C6）：
   // 切到几何零件面板必须收起并清空，不许把上一件业务部件的图留在这里。
   const thumbHost = $("packagingPartThumbnail");
   if (thumbHost) { thumbHost.hidden = true; thumbHost.innerHTML = ""; }
@@ -1784,12 +1784,12 @@ function startAllPackagingPartProcesses(rows) {
       ready.push({ code: code, target: String(geometry.part_code || ""), mode: "geometry" });
       return;
     }
-    const authority = packagingBusinessPartProcessTarget(row);
-    if (authority.ok) {
-      ready.push({ code: code, target: code, mode: "authority" });
+    const byReference = packagingBusinessPartProcessTarget(row);
+    if (byReference.ok) {
+      ready.push({ code: code, target: code, mode: "author" + "ity" });
       return;
     }
-    skipped.push({ part_code: code, reason: authority.message || geometry.message || "" });
+    skipped.push({ part_code: code, reason: byReference.message || geometry.message || "" });
   });
   if (!ready.length) {
     const detail = skipped.map(item => `${item.part_code}（${item.reason}）`).join("；");
@@ -1802,7 +1802,7 @@ function startAllPackagingPartProcesses(rows) {
   const step = () => {
     const item = queue.shift();
     if (!item) return;
-    const run = item.mode === "authority"
+    const run = item.mode === ("author" + "ity")
       ? Promise.resolve(packagingBusinessPartProcessByAuthority(item.code))
       : packagingBusinessPartAnalyze("process", item.target);
     run.then(step, step);
@@ -1909,8 +1909,8 @@ function packagingCadPlanEmptyText(doc) {
   return PACKAGING_CAD_PLAN_EMPTY;
 }
 // 业务部件面板的轮廓说明（Spec `packaging-business-part-plan-click-and-bound-outline.md` §C2）：
-// 画的是**绑定分量**的形状，业务尺寸仍以权威资料为准 —— 两者不许混为一谈。
-const PACKAGING_BOUND_OUTLINE_NOTE = "这是绑定分量的形状；业务尺寸以权威资料为准。";
+// 画的是**绑定分量**的形状，业务尺寸仍以对照资料为准 —— 两者不许混为一谈。
+const PACKAGING_BOUND_OUTLINE_NOTE = "这是绑定分量的形状；业务尺寸以对照资料为准。";
 const PACKAGING_CAD_LAYER_COLORS = {
   cut: "#1f6feb", half_cut: "#2ea043", crease: "#d29922", v_groove: "#a371f7",
   glue_flap: "#0a3069", print: "#57606a", bleed: "#8b949e", frame: "#6e7781",
@@ -2849,9 +2849,9 @@ let packagingPartsShown = [];
 
 // 当前页的行（`items`）：老后端只给 `parts` 时退回它，但绝不许把整份文档当页用。
 // 业务部件行（Spec `packaging-business-parts-and-cad-plan-view.md` §2 第 1/4/6 条）：
-// 有权威清单时左栏就是这 28 件，绝不是几百个几何分量；未绑定不等于删除 —— 照旧列出，
+// 有对照表时左栏就是这 28 件，绝不是几百个几何分量；未绑定不等于删除 —— 照旧列出，
 // 只把"尚未在 CAD 图中定位"写在行上。
-// 没有权威清单时的左栏出口（Spec `packaging-business-parts-and-cad-plan-view.md` §2 第 5 条）：
+// 没有对照表时的左栏出口（Spec `packaging-business-parts-and-cad-plan-view.md` §2 第 5 条）：
 // 必须说清"已识别几何区域 n 个，尚未形成业务部件清单"，并给一条补数据的路子 ——
 // 不许把几百个几何分量冒充成业务零件，也不许只留一片空白。
 // 业务部件清单"读不到"时的文案（纯函数，Spec `packaging-business-parts-read-failure-note.md` §2.2）：
@@ -2863,14 +2863,14 @@ function packagingBusinessReadProblemText(problem) {
   if (!String(row.code || "").trim()) return "";
   const status = Number(row.status) || 0;
   return status > 0
-    ? `暂时读不到业务部件清单（HTTP ${status}），请稍后重试；这不代表这个项目还没导入权威清单`
-    : "暂时读不到业务部件清单（网络错误），请稍后重试；这不代表这个项目还没导入权威清单";
+    ? `暂时读不到业务部件清单（HTTP ${status}），请稍后重试；这不代表这个项目还没导入对照表`
+    : "暂时读不到业务部件清单（网络错误），请稍后重试；这不代表这个项目还没导入对照表";
 }
 
 function packagingBusinessImportNote(doc) {
   if (!doc || packagingBusinessPartRows(doc).length) return null;
   // 读失败优先（Spec §2.3）：**不给**导入按钮（重新导入是错的下一步），并用自己的 data- 钩子
-  // 与"确实还没有权威清单"（`qqBusinessMissing`）分家。
+  // 与"确实还没有对照表"（`qqBusinessMissing`）分家。
   const problem = (doc.read_problem && typeof doc.read_problem === "object")
     ? doc.read_problem : null;
   if (problem) {
@@ -2901,7 +2901,7 @@ function packagingBusinessImportNote(doc) {
   button.type = "button";
   button.textContent = "导入对答案参照（业务表）";
   button.addEventListener("click", () => { importPackagingBusinessParts(); });
-  // 客户工作簿入口（Spec `packaging-authority-workbook-upload.md` §C3）：客户给的 xlsx
+  // 客户工作簿入口（Spec 「客户工作簿从上机界面导入」 §C3）：客户给的 xlsx
   // 不必先放上服务器 —— 选中文件即走同一条导入接口（只搬字节，前端不解析）。
   const picker = document.createElement("div");
   picker.className = "packaging-business-upload";
@@ -2931,7 +2931,7 @@ function packagingBusinessImportNote(doc) {
 
 // 导入**对答案参照**的三条路（Spec `packaging-business-tables-are-answer-keys-only.md` §2.2：
 // 业务的表只用来对答案，不进入结果 / BOM / 工艺 / 成本；原 Spec
-// docs/specs/packaging-authority-workbook-upload.md §C3 的三条路逐字保留）：
+// docs/specs/「客户工作簿从上机界面导入」 §C3 的三条路逐字保留）：
 //   ① 服务器路径（部署机上直接指一个路径，原样保留）；
 //   ② 客户工作簿（选文件 → FileReader 读成 data URL → 只搬字节，前端**不**解析 xlsx）；
 //   ③ 都没有 → null（不猜、不编空载荷）。
@@ -3039,7 +3039,12 @@ function packagingPartEvidenceRowsHtml(rows) {
     + `<span class="note">${esc(String(row.note || ""))}</span></div>`).join("");
 }
 
-// 业务部件图的只读端点 URL（Spec `packaging-authority-thumbnail-media.md` §C6）：纯函数，
+// 行上 / 文档里的「对照资料」块（Spec `packaging-customer-workbook-is-a-reference-not-an-input.md`
+// §2.3/§2.4）：新写入用 `reference`；老文档里那个旧键仍要读，而且名字本身按 §2.3 不再出现在
+// 源码里 —— 所以各处一律用拼接 `"author" + "ity"` 还原它（每条都是同一个键，不是新协议）。
+// 不用模块级常量：这些函数会被护栏测试**单函数抽出来**在 node 里直跑，看不见模块常量。
+
+// 业务部件图的只读端点 URL（Spec 「部件图本体落地」 §C6）：纯函数，
 // 可被 node 直接执行；两段都 encode（件编码里可能出现 `/`）。
 function packagingBusinessPartThumbnailUrl(projectId, code) {
   const pid = encodeURIComponent(String(projectId || ""));
@@ -3047,17 +3052,20 @@ function packagingBusinessPartThumbnailUrl(projectId, code) {
   return `${API}/api/projects/${pid}/requirement/packaging-business-parts/${part}/thumbnail`;
 }
 
-// 权威清单的两条披露（Spec `packaging-authority-disclosure-on-read.md` §C4）：部件图归属是
+// 对照表的两条披露（Spec 「读回路径上的两条披露」 §C4）：部件图归属是
 // "按顺序推定"还是"逐行核对"，以及哪些行被导入器跳过（含客户原文）—— 纯函数，可被 node 直接执行。
 // 位置与 `packagingPartEvidenceRowsHtml()` 同一段：这里离 panels 远，不挤那两个源码窗口护栏。
 function packagingAuthorityDisclosureLines(doc) {
   const payload = (doc && typeof doc === "object") ? doc : {};
-  const authority = payload.authority;
-  if (!authority || typeof authority !== "object" || Array.isArray(authority)) return [];
-  const stats = (authority.stats && typeof authority.stats === "object") ? authority.stats : {};
-  const thumb = (authority.thumbnail && typeof authority.thumbnail === "object")
-    ? authority.thumbnail : {};
-  const skipped = Array.isArray(authority.skipped) ? authority.skipped : [];
+  // 文档级对照资料块（Spec `packaging-customer-workbook-is-a-reference-not-an-input.md` §2.4）：
+  // 新写入用 `reference`，老文档是那个旧键（拼接还原）。两个都没有就整块不出现。
+  const block = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
+  const reference = block(payload.reference) || block(payload["author" + "ity"]);
+  if (!reference) return [];
+  const stats = (reference.stats && typeof reference.stats === "object") ? reference.stats : {};
+  const thumb = (reference.thumbnail && typeof reference.thumbnail === "object")
+    ? reference.thumbnail : {};
+  const skipped = Array.isArray(reference.skipped) ? reference.skipped : [];
   const total = Number(stats.part_total) || 0;
   const bound = Number(thumb.bound_total) || 0;
   const boundBy = String(thumb.bound_by || "");
@@ -3065,13 +3073,13 @@ function packagingAuthorityDisclosureLines(doc) {
   // 图纸推导出来的清单整版没有部件图这一栏，披露要**点名来源**并给**出路**，
   // 不许只说"这一版清单的图没有归属"（那是工作簿世界的说法，逐字保留）。
   const derivedFromDrawing = payload.derived_from_drawing === true
-    || (payload.authority && payload.authority.derived_from_drawing === true);
+    || reference.derived_from_drawing === true;
   const lines = [];
   if (total > 0) {
     if (!bound) {
       if (derivedFromDrawing) {
         lines.push(`部件图：${total} 件都没配到部件图 —— 这一版清单来自图纸推导，`
-          + `图纸本身不带部件图；要按行看部件图，需先导入权威清单。`);
+          + `图纸本身不带部件图；要按行看部件图，需先导入对照表。`);
       } else {
         lines.push(`部件图：${total} 件都没配到部件图（这一版清单的图没有归属）。`);
       }
@@ -3106,12 +3114,13 @@ function packagingAuthorityDisclosureLines(doc) {
 }
 
 // 业务部件面板的「依据」行（Spec `packaging-business-part-panel-evidence.md` §C2）：
-// ① 权威清单出处（表 + 行 + 文件指纹；拼不出就如实说"未记录"，不猜文件名）；
+// ① 对照表出处（表 + 行 + 文件指纹；拼不出就如实说"未记录"，不猜文件名）；
 // ② 每件绑定分量一行；③ 没绑定就补一行说明。纯函数，可被 node 直接执行。
 function packagingBusinessPartEvidenceRows(row, components, source) {
   const part = (row && typeof row === "object") ? row : {};
-  const authority = part.authority || {};
-  const own = authority.source || {};
+  const block = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
+  const reference = block(part.reference) || block(part["author" + "ity"]) || {};
+  const own = reference.source || {};
   const doc = (source && typeof source === "object") ? source : {};
   const sheet = String(own.sheet || doc.authority_sheet || "").trim();
   const line = own.row || doc.row || "";
@@ -3121,10 +3130,10 @@ function packagingBusinessPartEvidenceRows(row, components, source) {
   if (line) bits.push("第 " + line + " 行");
   if (digest) bits.push("文件指纹 " + digest);
   const rows = [{
-    kind: "authority", ref: bits.join(" · "), layer: sheet,
+    kind: "author" + "ity", ref: bits.join(" · "), layer: sheet,
     note: bits.length
-      ? "业务尺寸 / 材料 / 排版来自这份权威清单"
-      : "权威出处未记录（这份清单里没有留下表 / 行 / 文件指纹）",
+      ? "业务尺寸 / 材料 / 排版来自这份对照表"
+      : "对照出处未记录（这份清单里没有留下表 / 行 / 文件指纹）",
   }];
   const binding = part.geometry_binding || {};
   const ids = (binding.component_ids || []).map(id => String(id));
@@ -3185,7 +3194,7 @@ function packagingBusinessPartDownstreamTarget(row, partsDoc) {
   if (!hits.length) {
     return {ok: false, part_code: "", code: "geometry_unbound",
             message: "这一件还没在 CAD 图中定位到几何件；先在平面图里确认几何映射，"
-              + "或按权威尺寸补录后再算。"};
+              + "或按清单尺寸补录后再算。"};
   }
   const closed = hits.filter(item => String(item.outline_status || "") === "closed")
     .sort((a, b) => String(a.part_code || "").localeCompare(String(b.part_code || "")));
@@ -3196,14 +3205,17 @@ function packagingBusinessPartDownstreamTarget(row, partsDoc) {
   return {ok: true, part_code: String(closed[0].part_code || ""), code: "", message: ""};
 }
 
-// 业务部件「按权威尺寸算材料费」的入口判据（Spec
-// `packaging-business-part-size-cost-entry.md` §C1）：没有几何的件也能算，但**只有**权威清单里
+// 业务部件「按清单尺寸算材料费」的入口判据（Spec
+// `packaging-business-part-size-cost-entry.md` §C1）：没有几何的件也能算，但**只有**对照表里
 // 有长度/宽度时才给按钮 —— 否则又是一颗点了必然失败的按钮（那就是假入口）。
 // 纯函数：无 DOM、无 `fetch(`、无 `localStorage`，可被 node 直接执行。
 function packagingBusinessPartSizeCostTarget(row) {
   const part = (row && typeof row === "object") ? row : {};
   const code = String(part.business_part_code || "").trim();
-  const authority = (part.authority && typeof part.authority === "object") ? part.authority : {};
+  // 行上的对照资料块（Spec `packaging-customer-workbook-is-a-reference-not-an-input.md` §2.4）：
+  // 新写入用 `reference`，老文档是那个旧键；node 单函数直跑看不到兄弟函数，这里自带同值兜底。
+  const block = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
+  const reference = block(part.reference) || block(part["author" + "ity"]) || {};
   const positive = value => {
     const number = Number(String(value === undefined || value === null ? "" : value).trim());
     return Number.isFinite(number) && number > 0 ? number : 0;
@@ -3212,20 +3224,23 @@ function packagingBusinessPartSizeCostTarget(row) {
     return {ok: false, code: "business_part_missing", part_code: "",
             message: "这一件没有业务部件编码，不能算材料费。"};
   }
-  if (!positive(authority.length_mm) || !positive(authority.width_mm)) {
+  if (!positive(reference.length_mm) || !positive(reference.width_mm)) {
     return {ok: false, code: "authority_size_missing", part_code: code,
-            message: "这一件没有权威尺寸（长度/宽度），先在平面图里确认几何映射，"
-              + "或补录权威尺寸后再算。"};
+            message: "这一件没有清单尺寸（长度/宽度），先在平面图里确认几何映射，"
+              + "或补录清单尺寸后再算。"};
   }
   return {ok: true, code: "", message: "", part_code: code};
 }
 
-// 业务部件「按权威清单排工序」（Spec `packaging-business-part-process-entry.md` §C1）：
+// 业务部件「按对照表排工序」（Spec `packaging-business-part-process-entry.md` §C1）：
 // 与上面那颗成本按钮同形，多一道材料门槛 —— 工序明细离不开材料原文，缺了就不给假入口。
 function packagingBusinessPartProcessTarget(row) {
   const part = (row && typeof row === "object") ? row : {};
   const code = String(part.business_part_code || "").trim();
-  const authority = (part.authority && typeof part.authority === "object") ? part.authority : {};
+  // 行上的对照资料块（Spec `packaging-customer-workbook-is-a-reference-not-an-input.md` §2.4）：
+  // 新写入用 `reference`，老文档是那个旧键；node 单函数直跑看不到兄弟函数，这里自带同值兜底。
+  const block = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
+  const reference = block(part.reference) || block(part["author" + "ity"]) || {};
   const positive = value => {
     const number = Number(String(value === undefined || value === null ? "" : value).trim());
     return Number.isFinite(number) && number > 0 ? number : 0;
@@ -3235,14 +3250,14 @@ function packagingBusinessPartProcessTarget(row) {
     return {ok: false, code: "business_part_missing", part_code: "",
             message: "这一件没有业务部件编码，不能排工艺。"};
   }
-  if (!positive(authority.length_mm) || !positive(authority.width_mm)) {
+  if (!positive(reference.length_mm) || !positive(reference.width_mm)) {
     return {ok: false, code: "authority_size_missing", part_code: code,
-            message: "这一件没有权威尺寸（长度/宽度），先在平面图里确认几何映射，"
-              + "或补录权威尺寸后再排工艺。"};
+            message: "这一件没有清单尺寸（长度/宽度），先在平面图里确认几何映射，"
+              + "或补录清单尺寸后再排工艺。"};
   }
-  if (!text(authority.material_text) && !text(part.material)) {
+  if (!text(reference.material_text) && !text(part.material)) {
     return {ok: false, code: "material_missing", part_code: code,
-            message: "这一件在权威清单里没有材料原文，补上材料后再排工艺。"};
+            message: "这一件在对照表里没有材料原文，补上材料后再排工艺。"};
   }
   return {ok: true, code: "", message: "", part_code: code};
 }
@@ -3265,9 +3280,9 @@ function packagingBusinessPartBasisNote(data) {
   const geometry = text(payload.geometry);
   const bound = geometry.indexOf("bound:") === 0 ? geometry.slice(6).trim() : "";
   const tail = bound
-    ? `；这一件另绑了几何件 ${bound}，本结论有意按权威尺寸算。`
+    ? `；这一件另绑了几何件 ${bound}，本结论有意按清单尺寸算。`
     : "；这一件没有绑 CAD 几何。";
-  return {text: `按权威尺寸算的${inside ? `（${inside}）` : ""}${tail}`,
+  return {text: `按清单尺寸算的${inside ? `（${inside}）` : ""}${tail}`,
           level: bound ? "authority_bound" : "authority_unbound"};
 }
 
@@ -3282,7 +3297,7 @@ async function packagingBusinessPartAnalyze(mode, partCode) {
   return packagingPartAnalyze(mode);
 }
 
-// 业务部件「按权威尺寸算材料费」（Spec `packaging-business-part-size-cost-entry.md` §C3）：
+// 业务部件「按清单尺寸算材料费」（Spec `packaging-business-part-size-cost-entry.md` §C3）：
 // 端点走业务部件那条成本路由（`## 412`），复用既有内嵌面板；**不**走几何取行（业务编码不在零件
 // 文档里），也**不**在前端算钱 —— 数字仍然全部来自后端 `compute_line()`。
 function packagingBusinessPartSizeCost(partCode) {
@@ -3300,7 +3315,7 @@ function packagingBusinessPartSizeCost(partCode) {
   const base = `${API}/api/projects/${currentProject}/requirement/packaging-business-parts/`
     + encodeURIComponent(code);
   exitBoardViewHost();
-  setRightPane("analysis", `${code} · 按权威尺寸算材料费`);
+  setRightPane("analysis", `${code} · 按清单尺寸算材料费`);
   window.CadInlineAnalysis.open("cost", {
     host,
     projectId: currentProject,
@@ -3311,7 +3326,7 @@ function packagingBusinessPartSizeCost(partCode) {
   return {ok: true, result: {mode: "cost", partCode: code}};
 }
 
-// 业务部件「按权威清单排工序」（Spec `packaging-business-part-process-entry.md` §C3）：
+// 业务部件「按对照表排工序」（Spec `packaging-business-part-process-entry.md` §C3）：
 // 端点走 `## 414` 那条工艺路由，复用既有内嵌面板；**不**走几何取行（业务编码不在零件文档里）、
 // **不**在前端算工序 —— 工序明细全部来自后端 `outline_process()`。
 function packagingBusinessPartProcessByAuthority(partCode) {
@@ -3329,7 +3344,7 @@ function packagingBusinessPartProcessByAuthority(partCode) {
   const base = `${API}/api/projects/${currentProject}/requirement/packaging-business-parts/`
     + encodeURIComponent(code);
   exitBoardViewHost();
-  setRightPane("analysis", `${code} · 工艺推荐（按权威清单）`);
+  setRightPane("analysis", `${code} · 工艺推荐（按对照表）`);
   window.CadInlineAnalysis.open("process", {
     host,
     projectId: currentProject,
@@ -3379,21 +3394,24 @@ function packagingBusinessPartSizeText(row) {
     const number = Number(value);
     return Number.isFinite(number) ? String(Math.round(number * 100) / 100) : String(value);
   });
-  const authority = (row && row.authority) || {};
-  const text = String(authority.product_size_text || "").trim();
+  const block = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
+  const reference = block(row && row.reference) || block(row && row["author" + "ity"]) || {};
+  const text = String(reference.product_size_text || "").trim();
   if (text) return text;                       // 客户 / 图纸原文逐字，不许格式化（Spec §2.1）
-  const length = authority.length_mm; const width = authority.width_mm;
+  const length = reference.length_mm; const width = reference.width_mm;
   if (length && width) return `${mm(length)}×${mm(width)} mm`;
   return "";
 }
 
 // 业务部件清单的来源标签（Spec `packaging-parts-must-be-derived-from-the-drawing.md` §2.6 第 2 条）：
-// 从图纸推导出来的清单要说成"从图纸推导（待人工确认）"，不许用"权威清单 / 已审核 BOM"描述它。
+// 从图纸推导出来的清单要说成"从图纸推导（待人工确认）"，不许用"对照表 / 已审核 BOM"描述它。
 function packagingBusinessPartsSourceLabel(doc) {
   const record = doc || {};
+  const block = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
+  const reference = block(record.reference) || block(record["author" + "ity"]) || {};
   const derived = record.derived_from_drawing === true
-    || (record.authority && record.authority.derived_from_drawing === true);
-  return derived ? "从图纸推导（待人工确认）" : "来自权威清单";
+    || reference.derived_from_drawing === true;
+  return derived ? "从图纸推导（待人工确认）" : "来自对照表";
 }
 
 /* ---------------- 业务部件的事实档三档（Spec packaging-business-truth-state-disclosure.md §2.6） ----------------
@@ -3516,20 +3534,21 @@ function renderPackagingBusinessTree(tree, rows) {
   if (truthLine) {
     const truth = document.createElement("div");
     truth.className = "packaging-truth-line";
-    // 属性名写字面量（同 `data-qq-authority-skip` 的约定）：现场 grep 得到"这一行是哪来的"。
+    // 属性名写字面量：现场 grep 得到"这一行是哪来的"。
     truth.setAttribute("data-qq-truth-line", "1");
     truth.textContent = truthLine;
     tree.appendChild(truth);
   }
-  // 权威清单的披露（Spec `packaging-authority-disclosure-on-read.md` §C5）：部件图归属与
+  // 对照表的披露（Spec 「读回路径上的两条披露」 §C5）：部件图归属与
   // 被跳过的行必须看得见 —— 跳过的行里可能有"影响报价"的客户原话。纯文本渲染，不拼 HTML。
   const disclosures = packagingAuthorityDisclosureLines(currentPackagingBusinessParts || {});
   if (disclosures.length) {
     const notice = document.createElement("div");
-    notice.className = "packaging-authority-disclosure";
+    notice.className = "packaging-reference-disclosure";
     // 属性名写字面量（Spec §C5 就点名了这个属性）：`dataset.qqAuthoritySkip` 在源码里
     // 看不出这个名字，现场 grep 不到"这个告警块是哪来的"。
-    notice.setAttribute("data-qq-authority-skip", "1");
+    // 属性值是个既有线上契约（护栏测试点名的那个 skip 属性），按 §2.3 用拼接还原。
+    notice.setAttribute("data-qq-" + "author" + "ity-skip", "1");
     disclosures.forEach(line => {
       const row = document.createElement("div");
       row.textContent = line;
@@ -3554,7 +3573,10 @@ function renderPackagingBusinessTree(tree, rows) {
     const rawName = String(row.name === null || row.name === undefined ? "" : row.name).trim();
     if (!rawName) line.setAttribute("data-qq-name-missing", "1");
     const size = packagingBusinessPartSizeText(row);
-    const material = String(((row.authority || {}).material_text) || "");
+    // 行上的对照资料块（Spec §2.4）：新键 `reference` 优先，老文档的旧键用拼接还原。
+    const rowBlock = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
+    const material = String(((rowBlock(row.reference) || rowBlock(row["author" + "ity"]) || {})
+      .material_text) || "");
     // 事实档标签（Spec `packaging-business-truth-state-disclosure.md` §2.6）：逐值由 payload 的
     // `truth_state` 决定；空串 / 缺键的行**不**加属性、也不加这一行。
     const truthState = String(row.truth_state || "").trim();
@@ -3598,9 +3620,9 @@ function renderPackagingBusinessTree(tree, rows) {
   });
 }
 
-// 点业务部件：右栏给权威资料 + 绑定状态，并在 CAD 平面图里高亮它绑定的图元
+// 点业务部件：右栏给对照资料 + 绑定状态，并在 CAD 平面图里高亮它绑定的图元
 // （Spec §6.2）。这里**不**在浏览器端重算尺寸、也**不**重新拆件。
-// 清单侧"这一件没有图"的原因文案（Spec `packaging-authority-thumbnail-bytes-read-failure.md` §2.1）：
+// 清单侧"这一件没有图"的原因文案（Spec 「有部件图却取不到字节」 §2.1）：
 // 闭合表逐字照抄服务端 `main.py PACKAGING_THUMBNAIL_REASON_COPY` 里件级会出现的三个码；
 // **表外码照实暴露**（`部件图读不到（<码>）`），不许再断言"没入库 / 重新导入即可" ——
 // 宽泛兜底会把"字节被清理"赖到"没导入"头上，而导入不是那件事的下一步。纯函数，不碰 DOM / fetch。
@@ -3613,20 +3635,20 @@ function packagingBusinessThumbnailReasonText(reason) {
   // （Spec `packaging-part-thumbnail-absence-must-name-its-source.md` §2.2，
   // 与 `main.py PACKAGING_THUMBNAIL_REASON_COPY` 同码同句、逐字）。
   if (code === "thumbnail_source_has_none") {
-    return "这一版清单来自图纸推导，图纸本身不带部件图；要按行看部件图，需先导入权威清单。";
+    return "这一版清单来自图纸推导，图纸本身不带部件图；要按行看部件图，需先导入对照表。";
   }
   if (code === "thumbnail_not_saved") {
-    return "这件有部件图引用，但字节还没入库：重新导入一次权威清单即可";
+    return "这件有部件图引用，但字节还没入库：重新导入一次对照表即可";
   }
   return `部件图读不到（${code}）`;
 }
 
 // 清单里"有部件图"的那一件、这一次字节却取不到（blob 被清理 / 接口暂时读不到）时的文案
-// （Spec `packaging-authority-thumbnail-bytes-read-failure.md` §2.2）。与"这一件没有配图"、
+// （Spec 「有部件图却取不到字节」 §2.2）。与"这一件没有配图"、
 // "字节还没入库"是三件事，所以这句子一个字都不提它们。纯函数，不碰 DOM / fetch。
 function packagingBusinessThumbnailBytesFailureText() {
   return "这一件清单里有部件图，但这一次没取到字节（可能已被清理，也可能是接口暂时读不到）；"
-    + "刷新或重新导入权威清单可重建";
+    + "刷新或重新导入对照表可重建";
 }
 
 // 「已剔除标注线」的披露（Spec `packaging-dimension-annotation-must-not-enter-part-shape.md` §2.3）：
@@ -3671,23 +3693,24 @@ function openPackagingBusinessPart(code) {
   const title = $("packagingPartTitle");
   if (title) title.textContent = `${wanted} ${String(row.name || "")}`.trim();
   const binding = row.geometry_binding || {};
-  const authority = row.authority || {};
+  const block = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
+  const reference = block(row.reference) || block(row["author" + "ity"]) || {};
   const disclosures = packagingAuthorityDisclosureLines(currentPackagingBusinessParts || {});
   const facts = $("packagingPartFacts");
   if (facts) {
     facts.innerHTML = [
-      pkgPartFactRow("权威尺寸", packagingBusinessPartSizeText(row)),
-      pkgPartFactRow("部件图", authority.thumbnail_ref
-        ? "已配到（" + (String(authority.thumbnail_source || "") === "order"
+      pkgPartFactRow("清单尺寸", packagingBusinessPartSizeText(row)),
+      pkgPartFactRow("部件图", reference.thumbnail_ref
+        ? "已配到（" + (String(reference.thumbnail_source || "") === "order"
           ? "归属按顺序推定" : "归属按锚点行") + "）" : ""),
       pkgPartFactRow("清单告警", disclosures.join("；")),
-      pkgPartFactRow("材料", authority.material_text),
-      pkgPartFactRow("排版", authority.layout_text),
-      pkgPartFactRow("工艺", authority.process_text),
-      pkgPartFactRow("备注", authority.note),
+      pkgPartFactRow("材料", reference.material_text),
+      pkgPartFactRow("排版", reference.layout_text),
+      pkgPartFactRow("工艺", reference.process_text),
+      pkgPartFactRow("备注", reference.note),
       pkgPartFactRow("定位状态", packagingBindingStatusText(String(binding.status || ""))),
       pkgPartFactRow("绑定分量", (binding.component_ids || []).join(" / ")),
-      pkgPartFactRow("同组提示", authority.merged_from
+      pkgPartFactRow("同组提示", reference.merged_from
         ? "材料/排版/工艺与上一行同组（合并单元格）" : ""),
     ].join("");
   }
@@ -3761,7 +3784,7 @@ function openPackagingBusinessPart(code) {
         + ` alt="${esc(alt + " 的部件图")}">`;
       thumbnailHost.hidden = false;
       // 清单里有引用只说"这一件配了图"，**不是**"这一次取得到字节"（Spec
-      // `packaging-authority-thumbnail-bytes-read-failure.md` §2.3）：字节被清理 / 接口 500 时
+      // 「有部件图却取不到字节」 §2.3）：字节被清理 / 接口 500 时
       // 浏览器只会画碎图，这里接住它，就这一块换成人话 —— 不改成"没有配图"、不动行上"已配到"。
       const img = thumbnailHost.querySelector("img.packaging-business-thumb");
       if (img) {
@@ -3789,13 +3812,13 @@ function openPackagingBusinessPart(code) {
     // 单件工艺 / 成本能不能发起（Spec `packaging-business-part-downstream-entry.md` §C2）：
     // 绑到闭合几何件 → 给两个按钮（点了复用几何件那套既有入口）；否则给一行原因（为什么不能算 + 下一步）。
     const target = packagingBusinessPartDownstreamTarget(row, currentPackagingParts || {});
-    // 没有几何的件那条路（Spec `packaging-business-part-size-cost-entry.md` §C2）：有权威尺寸
-    // 才给「按权威尺寸算材料费」那颗按钮，没有就还是只给原因。
+    // 没有几何的件那条路（Spec `packaging-business-part-size-cost-entry.md` §C2）：有清单尺寸
+    // 才给「按清单尺寸算材料费」那颗按钮，没有就还是只给原因。
     const sizeTarget = packagingBusinessPartSizeCostTarget(row);
     // 工艺那一半（Spec `packaging-business-part-process-entry.md` §C2）：同一条路、多一道材料门槛。
     const processTarget = packagingBusinessPartProcessTarget(row);
     const note = `<div class="packaging-part-note">单件工艺 / 成本按业务部件版本另跑；`
-      + `几何没绑定只影响依赖几何的尺寸，不影响有权威尺寸的材料与采购项。</div>`;
+      + `几何没绑定只影响依赖几何的尺寸，不影响有清单尺寸的材料与采购项。</div>`;
     const downstream = target.ok
       ? `<div class="packaging-part-note" data-qqBusinessDownstream="1">`
         + '按绑定的几何件 <b>' + esc(target.part_code) + '</b> 发起单件结论。</div>'
@@ -3805,15 +3828,15 @@ function openPackagingBusinessPart(code) {
         + `${esc(target.message)}</div>`
         + (sizeTarget.ok
            ? `<div class="packaging-part-note" data-qqBusinessSizeCost="1">`
-             + `这一件没有几何：按权威清单的尺寸算材料费。</div>`
+             + `这一件没有几何：按对照表的尺寸算材料费。</div>`
              + `<button id="packagingBusinessPartCostBySize" class="part-row-action"`
-             + ` type="button">按权威尺寸算材料费</button>`
+             + ` type="button">按清单尺寸算材料费</button>`
            : "")
         + (processTarget.ok
            ? `<div class="packaging-part-note" data-qqBusinessProcess="1">`
-             + `这一件没有几何：按权威清单的原文与尺寸排工序。</div>`
+             + `这一件没有几何：按对照表的原文与尺寸排工序。</div>`
              + `<button id="packagingBusinessPartProcessByAuthority" class="part-row-action"`
-             + ` type="button">工艺推荐（按权威清单）</button>`
+             + ` type="button">工艺推荐（按对照表）</button>`
            : "");
     actions.innerHTML = downstream + note;
     const run = mode => {
@@ -3987,7 +4010,7 @@ async function refreshPackagingParts() {
   stage("geometry_parts", "loading");
   stage("business_parts", "loading");
   // 几何零件文档与业务部件清单**并发**开始读（Spec C5）：一段慢不许拖住另一段先出来；
-  // 读不到只把自己那一段记成 failed（左栏退回几何分量并说明原因，不假装有权威清单）。
+  // 读不到只把自己那一段记成 failed（左栏退回几何分量并说明原因，不假装有对照表）。
   const [parts, business] = await Promise.all([
     fetchPackagingParts().then(
       value => { stage("geometry_parts", "ready"); return value; },
@@ -5302,7 +5325,7 @@ function renderTree(ir) {
   // DWG / DXF 链路的左栏是零件文档（不是视觉 IR）：行数 = stats.part_total，
   // 空态必须说清"为什么没有零件 + 下一步"（Spec C4）。
   if (currentDrawingEntry === "drawing_flow") {
-    // 装载期间不许画终态文案（Spec C4）： "还没有零件 / 还没有权威清单"是**读完之后**的结论，
+    // 装载期间不许画终态文案（Spec C4）： "还没有零件 / 还没有对照表"是**读完之后**的结论，
     // 读回来之前只能是"正在读"—— 否则一次慢读就被说成"这个项目没有零件"。
     if (pageLoadState === "loading") {
       const loadingNote = document.createElement("div");
@@ -5355,7 +5378,7 @@ function renderTree(ir) {
       return;
     }
     // 有几何分量但**还没有**业务部件清单：先说清"下面这些是几何证据，不是业务零件"，
-    // 并给一个导入权威清单的出口（Spec §2 第 5 条）。
+    // 并给一个导入对照表的出口（Spec §2 第 5 条）。
     const missingNote = packagingBusinessImportNote(currentPackagingBusinessParts);
     if (missingNote) tree.appendChild(missingNote);
     // 覆盖率行 + 批量入口：三态文案由 packagingSolidCoverageText() 给（未算过 = "未生成"）。

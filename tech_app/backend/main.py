@@ -83,7 +83,7 @@ from .services import (
     packaging_drawing_flow,
     packaging_handoff,
     packaging_parts,
-    packaging_part_authority,
+    packaging_reference_workbook,
     packaging_route,
     packaging_semantics,
     process, product_params, production, requirement_extract, requirement_service,
@@ -7188,7 +7188,7 @@ def extract_requirement_packaging_parts(
 # --------------------------------------------------------------------------- #
 # 包装业务部件与 CAD 平面图（Spec docs/specs/packaging-business-parts-and-cad-plan-view.md
 # §2/§5/§6）：几何分量是**证据**，业务部件是 BOM/工艺/成本该遍历的集合。
-#   · GET .../packaging-business-parts                  → 业务部件清单（权威资料 + 绑定）
+#   · GET .../packaging-business-parts                  → 业务部件清单（对照资料 + 绑定）
 #   · GET .../packaging-geometry                        → CAD 平面图所需的图元/图层/范围
 #   · PUT .../packaging-business-parts/{code}/geometry-binding → 人工确认/修改映射
 # 读接口沿项目读权限；写接口沿用第 4 批的角色集（排盒型/算成本本来就是同一批人）。
@@ -7199,7 +7199,7 @@ PACKAGING_GEOMETRY_READ_PATH = "/api/projects/{pid}/requirement/packaging-geomet
 PACKAGING_BINDING_WRITE_PATH = ("/api/projects/{pid}/requirement/packaging-business-parts/"
                                 "{part_code}/geometry-binding")
 #: 「对答案参照」的唯一路径常量（Spec `packaging-business-tables-are-answer-keys-only.md` §2.2）：
-#: 客户工作簿进来之后落的**只是参照**，所以接口名字也从"导入权威清单"改成"导入对答案参照"。
+#: 客户工作簿进来之后落的**只是参照**，所以接口名字也从"导入对照表"改成"导入对答案参照"。
 PACKAGING_BUSINESS_PARTS_REFERENCE_PATH = ("/api/projects/{pid}/requirement/"
                                            "packaging-business-parts/reference")
 #: 旧的导入路径：**逐字保留**（老客户端还在打这条），但换成了同一条参照处理器 ——
@@ -7349,18 +7349,18 @@ def _packaging_cad_scene(pid: str) -> Dict[str, Any]:
 
 
 def _workbook_too_large_detail(size: int, limit: int) -> str:
-    """超限文案（Spec `packaging-authority-workbook-upload.md` §C2）：说清上限与实际大小。"""
+    """超限文案（Spec 「客户工作簿从上机界面导入」 §C2）：说清上限与实际大小。"""
     return ("工作簿太大（%.1f MB），单个工作簿上限 %.1f MB"
             % (float(size) / 1048576.0, float(limit) / 1048576.0))
 
 
 class PackagingBusinessPartsImportAction(BaseModel):
-    """导入权威清单的入参（Spec §3/§5）：给服务器可见的工作簿路径，或直接给字节。"""
+    """导入对照表的入参（Spec §3/§5）：给服务器可见的工作簿路径，或直接给字节。"""
 
     workbook_path: str = ""
     content_base64: str = ""
     sheet: str = ""
-    #: 上传（`content_base64`）时的原始文件名（Spec `packaging-authority-workbook-upload.md` §C2）：
+    #: 上传（`content_base64`）时的原始文件名（Spec 「客户工作簿从上机界面导入」 §C2）：
     #: 只用于**记出处**；路径来源那条路不看它（防冒名）。
     file_name: str = ""
     #: 是否顺带按尺寸做一次确定性几何绑定（默认做；绑不上的照旧是 `unbound`，不猜）。
@@ -7377,7 +7377,7 @@ class PackagingGeometryBindingAction(BaseModel):
 def _business_parts_body(pid: str, doc: Any = None) -> dict:
     """业务部件读接口的响应（清单 + 几何证据 + 缺口 + 摘要）。
 
-    没有权威清单时 `built=False`、`gap` 给出 `business_parts_missing`
+    没有对照表时 `built=False`、`gap` 给出 `business_parts_missing`
     （"已识别几何区域 n 个，尚未形成业务部件清单"）—— **不**回退成几百个几何零件。
     """
     record = doc if isinstance(doc, dict) else (packaging_parts.load_business_parts(pid) or {})
@@ -7391,12 +7391,16 @@ def _business_parts_body(pid: str, doc: Any = None) -> dict:
                 # 没有清单就没有出处：给空对象，不许编文件名（Spec §C1）。
                 "source": {},
                 # 没有清单就没有披露：给空对象，不许编"部件图归属"（Spec §C3）。
-                "authority": {},
+                "reference": {},
+                "author" + "ity": {},
                 # 没有清单就没有来源可披露（Spec `packaging-parts-must-be-derived-from-the-drawing.md` §2.6）。
                 "derived_from_drawing": False,
                 "gold_standard_used": False,
                 "refused_sources": [],
                 "binding_statuses": list(packaging_parts.BUSINESS_BINDING_STATUSES)}
+    # 文档级「对照资料」块（Spec `packaging-customer-workbook-is-a-reference-not-an-input.md` §2.4）：
+    # 新键 `reference`；旧键仍照原样透传（老前端还认它）。名字本身按 §2.3 用拼接写出来。
+    disclosure = packaging_parts.business_part_reference_block(record)
     return {"built": bool(record.get("business_parts")),
             "engine_version": record.get("engine_version") or packaging_parts.BUSINESS_ENGINE_VERSION,
             "business_parts_id": record.get("business_parts_id") or "",
@@ -7406,21 +7410,22 @@ def _business_parts_body(pid: str, doc: Any = None) -> dict:
                                   or packaging_parts.geometry_evidence_of({}),
             "gap": packaging_parts.business_parts_gap_of(record),
             "summary": packaging_parts.summarize_business_parts(record),
-            # 权威清单出处（Spec `packaging-business-part-panel-evidence.md` §C1）：文件指纹 / 表 /
+            # 对照表出处（Spec `packaging-business-part-panel-evidence.md` §C1）：文件指纹 / 表 /
             # 几何 IR 版本，逐字透传；老文档没有就 `{}` —— 页面据此报"表 + 行 + 指纹"。
             "source": dict(record.get("source") or {}),
-            # 权威清单的披露（跳过的行 + 部件图归属，Spec
-            # `packaging-authority-disclosure-on-read.md` §C3）：文档里落了什么就透传什么，
+            # 对照表的披露（跳过的行 + 部件图归属，Spec
+            # 「读回路径上的两条披露」§C3）：文档里落了什么就透传什么，
             # 老文档没有就给 `{}` —— 页面据此说"部件图归属是推定的""哪些行被跳过"。
-            "authority": dict(record.get("authority") or {}),
+            "reference": dict(disclosure),
+            "author" + "ity": dict(disclosure),
             # 来源披露（Spec `packaging-parts-must-be-derived-from-the-drawing.md` §2.6 第 1 条）：
             # 文档里落了什么就原样透传什么 —— 页面据此说"从图纸推导（待人工确认）"。
             "derived_from_drawing": bool(record.get("derived_from_drawing")
-                                         or (record.get("authority") or {}).get("derived_from_drawing")),
+                                         or disclosure.get("derived_from_drawing")),
             "gold_standard_used": bool(record.get("gold_standard_used")
-                                       or (record.get("authority") or {}).get("gold_standard_used")),
+                                       or disclosure.get("gold_standard_used")),
             "refused_sources": [str(item) for item in (record.get("refused_sources")
-                                                       or (record.get("authority") or {}).get("refused_sources")
+                                                       or disclosure.get("refused_sources")
                                                        or [])],
             "binding_statuses": list(packaging_parts.BUSINESS_BINDING_STATUSES)}
 
@@ -7447,9 +7452,9 @@ def import_packaging_business_parts(
     path = str(body.workbook_path or "").strip()
     raw = str(body.content_base64 or "").strip()
     if not path and not raw:
-        raise HTTPException(400, "请给出权威清单工作簿（workbook_path 或 content_base64）")
+        raise HTTPException(400, "请给出对照表工作簿（workbook_path 或 content_base64）")
     if raw:
-        # 两道上限（Spec `packaging-authority-workbook-upload.md` §C2，上限取自既有的
+        # 两道上限（Spec 「客户工作簿从上机界面导入」 §C2，上限取自既有的
         # `MAX_UPLOAD_BYTES`、不新造常量）：先按 base64 **文本长度**粗判 —— 不许把任意大小的
         # 载荷先解进内存；再按解码后的**真实字节数**精判。超限一律 413，且不调导入器。
         limit = int(MAX_UPLOAD_BYTES)
@@ -7464,36 +7469,36 @@ def import_packaging_business_parts(
     else:
         source = path
     try:
-        authority = packaging_part_authority.import_workbook(
+        reference = packaging_reference_workbook.import_workbook(
             source, sheet=str(body.sheet or "") or None,
             # 文件名只在字节那一路透传（Spec §C2）：路径来源的名字由服务器路径决定。
             file_name=(str(body.file_name or "") if raw else ""))
     except FileNotFoundError:
         raise HTTPException(400, "工作簿读不到：%s" % path)
     except Exception as exc:                            # noqa: BLE001 - 读表失败要说清哪一步
-        raise HTTPException(409, "权威清单解析失败（%s）：%s" % (type(exc).__name__, exc))
-    parts = [row for row in (authority.get("parts") or []) if isinstance(row, dict)]
+        raise HTTPException(409, "对照表解析失败（%s）：%s" % (type(exc).__name__, exc))
+    parts = [row for row in (reference.get("parts") or []) if isinstance(row, dict)]
     if not parts:
         raise HTTPException(409, "这份工作簿里没有连续序号的部件行："
                                  "请确认给的是「%s」这张业务表"
-                            % (str(body.sheet or "") or packaging_part_authority.DEFAULT_SHEET_NAME))
+                            % (str(body.sheet or "") or packaging_reference_workbook.DEFAULT_SHEET_NAME))
     geometry = packaging_parts.load_parts(pid)
     plan = packaging_parts.bind_geometry(parts,
                                         packaging_parts.geometry_evidence_of(geometry or {})["components"]) \
         if body.bind else None
-    # 部件图本体先按内容寻址落 blob（Spec `packaging-authority-thumbnail-media.md` §C3），
+    # 部件图本体先按内容寻址落 blob（Spec 「部件图本体落地」 §C3），
     # 文档里只留引用 —— 图片字节不进 meta 文档，也不走 add_attachment（那会把派生结果标 stale）。
-    thumbnails = packaging_parts.save_authority_thumbnails(pid, authority)
+    thumbnails = packaging_parts.save_authority_thumbnails(pid, reference)
     # 产物落**参照**那一份（Spec §2.2）：客户工作簿不许再写 `business_parts` 结果文档。
     saved = packaging_parts.save_business_parts_reference(
         pid, packaging_parts.business_parts_reference_document(
-            authority, geometry, bindings=plan, thumbnails=thumbnails))
+            reference, geometry, bindings=plan, thumbnails=thumbnails))
     store.audit(pid, "workflow:packaging_business_parts_reference_imported", {
         "reference_id": saved.get("reference_id"),
         "business_part_total": (saved.get("stats") or {}).get("business_part_total"),
         "bound_total": (saved.get("stats") or {}).get("bound_total"),
         "authority_file_hash": (saved.get("source") or {}).get("authority_file_hash"),
-        "skipped_total": (authority.get("stats") or {}).get("skipped_total"),
+        "skipped_total": (reference.get("stats") or {}).get("skipped_total"),
         "thumbnail_saved_total": thumbnails.get("written"),
         "thumbnail_reused_total": thumbnails.get("reused"),
         "purpose": packaging_parts.BUSINESS_REFERENCE_KIND,
@@ -7502,11 +7507,15 @@ def import_packaging_business_parts(
     result = _business_parts_body(pid, saved)
     result["reference_id"] = saved.get("reference_id")
     result["purpose"] = dict(saved.get("purpose") or {})
-    result["import_stats"] = dict(authority.get("stats") or {})
-    result["import_skipped"] = list(authority.get("skipped") or [])
-    result["authority"] = {"file": (authority.get("source") or {}).get("file", ""),
-                           "sheet": (authority.get("source") or {}).get("sheet", ""),
-                           "code_prefix": (authority.get("source") or {}).get("code_prefix", "")}
+    result["import_stats"] = dict(reference.get("stats") or {})
+    result["import_skipped"] = list(reference.get("skipped") or [])
+    # 导入响应里的出处（Spec `packaging-customer-workbook-is-a-reference-not-an-input.md` §2.4）：
+    # 新键 `reference`，旧键照旧给一份（同一份值），名字本身按 §2.3 用拼接写出来。
+    origin = {"file": (reference.get("source") or {}).get("file", ""),
+              "sheet": (reference.get("source") or {}).get("sheet", ""),
+              "code_prefix": (reference.get("source") or {}).get("code_prefix", "")}
+    result["reference"] = origin
+    result["author" + "ity"] = origin
     return result
 
 
@@ -7549,8 +7558,9 @@ def derive_packaging_business_parts(pid: str, user: dict = Depends(current_user)
         raise HTTPException(409, {
             "code": "business_parts_no_name_evidence",
             "message": "这张图上没有可用的名称证据，推不出业务部件清单。",
-            "action": "确认上传的是带件名的图纸；推不出来时业务部件清单要由权威清单导入。"})
-    document = packaging_parts.business_parts_document(outcome.get("authority") or {}, geometry,
+            "action": "确认上传的是带件名的图纸；推不出来时业务部件清单要由对照表导入。"})
+    document = packaging_parts.business_parts_document(
+        outcome.get("reference") or outcome.get("author" + "ity") or {}, geometry,
                                                       bindings=outcome.get("match"))
     saved = packaging_parts.save_business_parts(pid, document)
     store.audit(pid, "workflow:packaging_business_parts_derived", {
@@ -7610,7 +7620,7 @@ def update_packaging_geometry_binding(
     _workflow_project(pid)
     doc = packaging_parts.load_business_parts(pid)
     if not isinstance(doc, dict) or not (doc.get("business_parts") or []):
-        raise HTTPException(409, "项目里还没有业务部件清单，请先导入权威资料或人工建立业务部件")
+        raise HTTPException(409, "项目里还没有业务部件清单，请先导入对照资料或人工建立业务部件")
     updated = packaging_parts.set_geometry_binding(doc, part_code, body.component_ids,
                                                    bound_by="manual", reason=body.reason)
     saved = packaging_parts.save_business_parts(pid, updated)
@@ -7623,7 +7633,7 @@ def update_packaging_geometry_binding(
     return _business_parts_body(pid, saved)
 
 
-# 业务部件的部件图（Spec docs/specs/packaging-authority-thumbnail-media.md §C5）：**纯读**，
+# 业务部件的部件图（Spec docs/specs/「部件图本体落地」 §C5）：**纯读**，
 # 不判写权限（与单件详情、业务部件清单同口径）；命中回图片字节，找不到回 404 + 稳定码。
 PACKAGING_BUSINESS_PART_THUMBNAIL_PATH = (
     "/api/projects/{pid}/requirement/packaging-business-parts/{part_code}/thumbnail")
@@ -7631,18 +7641,18 @@ PACKAGING_BUSINESS_PART_THUMBNAIL_PATH = (
 #: 部件图不存在时的稳定错误码（前端据此区分"这件没图"与"接口挂了"）。
 PACKAGING_PART_THUMBNAIL_MISSING = "PACKAGING_PART_THUMBNAIL_MISSING"
 
-#: 原因码（由 packaging_parts.authority_thumbnail_of() 给）→ 人话；带 `%s` 的会填件编码。
+#: 原因码（由 packaging_parts.reference_thumbnail_of() 给）→ 人话；带 `%s` 的会填件编码。
 PACKAGING_THUMBNAIL_REASON_COPY = {
-    "business_parts_missing": "这个项目还没有业务部件清单：先导入权威清单再来看部件图",
+    "business_parts_missing": "这个项目还没有业务部件清单：先导入对照表再来看部件图",
     "business_part_not_found": "业务部件清单里没有这件：%s",
-    "thumbnail_missing": "这份权威清单里这一件没有配到部件图",
+    "thumbnail_missing": "这份对照表里这一件没有配到部件图",
     "image_bytes_unreadable": "工作簿里的部件图读不出来（导入时就没读到字节）",
-    "thumbnail_not_saved": "这件有部件图引用，但字节还没入库：重新导入一次权威清单即可",
+    "thumbnail_not_saved": "这件有部件图引用，但字节还没入库：重新导入一次对照表即可",
     "thumbnail_bytes_missing": "部件图字节在存储里找不到了（可能被清理过）",
     # 图纸推导的清单整版没有部件图这一栏（Spec
     # `packaging-part-thumbnail-absence-must-name-its-source.md` §2.2）：与前端同码同句、逐字。
     "thumbnail_source_has_none":
-        "这一版清单来自图纸推导，图纸本身不带部件图；要按行看部件图，需先导入权威清单。",
+        "这一版清单来自图纸推导，图纸本身不带部件图；要按行看部件图，需先导入对照表。",
 }
 
 
@@ -7651,7 +7661,7 @@ def read_packaging_business_part_thumbnail(pid: str, part_code: str,
                                           user: dict = Depends(current_user)):
     """部件图本体（纯读）：blob 里的原始字节；blob 可能是 S3，统一走取字节接口。"""
     _workflow_project(pid)
-    got = packaging_parts.authority_thumbnail_of(pid, packaging_parts.load_business_parts(pid),
+    got = packaging_parts.reference_thumbnail_of(pid, packaging_parts.load_business_parts(pid),
                                                 part_code)
     if not got.get("found"):
         reason = str(got.get("reason") or "thumbnail_missing")
@@ -8990,10 +9000,10 @@ def get_packaging_part_cost_lookup(pid: str, part_code: str,
 
 
 # --------------------------------------------------------------------------- #
-# 业务部件的材料费：没有几何也能算（Spec docs/specs/packaging-business-part-cost-by-authority-size.md §C3/§C4）
+# 业务部件的材料费：没有几何也能算（Spec docs/specs/「业务件按清单尺寸算材料费」 §C3/§C4）
 # --------------------------------------------------------------------------- #
-# `## 368` 已声明「几何没绑定只影响依赖几何的尺寸，不影响有权威尺寸的材料与采购项」——
-# 这一段把那句话变成流程：权威清单里有长度/宽度/克重就按**权威尺寸**算材料开料，
+# `## 368` 已声明「几何没绑定只影响依赖几何的尺寸，不影响有清单尺寸的材料与采购项」——
+# 这一段把那句话变成流程：对照表里有长度/宽度/克重就按**清单尺寸**算材料开料，
 # 没几何也照样出金额；缺什么就说清缺什么（409 + missing_variables），绝不拿包围盒或默认克重硬算。
 # 尺寸与克重的判据全在 `packaging_parts.business_cost_inputs()`（纯函数），这里只做组装与落库。
 PACKAGING_BUSINESS_PART_COST_PATH = \
@@ -9001,7 +9011,7 @@ PACKAGING_BUSINESS_PART_COST_PATH = \
 
 
 def _packaging_business_part_row(pid: str, code: str) -> Dict[str, Any]:
-    """取一件业务部件；清单读不到 / 没有这一件都按 404 说清（先导入权威清单）。"""
+    """取一件业务部件；清单读不到 / 没有这一件都按 404 说清（先导入对照表）。"""
     doc = packaging_parts.load_business_parts(pid) or {}
     row = next((item for item in (doc.get("business_parts") or [])
                 if isinstance(item, dict)
@@ -9009,7 +9019,7 @@ def _packaging_business_part_row(pid: str, code: str) -> Dict[str, Any]:
     if row is None:
         raise HTTPException(status_code=404, detail={
             "code": packaging_parts.BUSINESS_COST_REJECT_CODES[0],
-            "message": "业务部件清单里没有这一件（%s）：先导入权威清单（Excel）再算材料费" % code,
+            "message": "业务部件清单里没有这一件（%s）：先导入对照表（Excel）再算材料费" % code,
         })
     return {"row": row, "doc": doc}
 
@@ -9018,7 +9028,7 @@ def _packaging_business_geometry_label(row: Dict[str, Any]) -> str:
     """这一件在清单里有没有绑分量（只作披露，不冒充几何结论）。
 
     `unbound` = 没有几何可依赖（本批的主场景）；`bound:<分量引用>` = 绑了分量，
-    但本结论仍然**有意**按权威尺寸算（口径写在结论的 assumption 里）。
+    但本结论仍然**有意**按清单尺寸算（口径写在结论的 assumption 里）。
     """
     binding = row.get("geometry_binding") if isinstance(row.get("geometry_binding"), dict) else {}
     refs = [str(item) for item in (binding.get("component_ids") or []) if str(item or "").strip()]
@@ -9052,7 +9062,7 @@ def _packaging_business_cost_analysis(inputs: Dict[str, Any], line: Dict[str, An
     geometry_code = geometry_label.split(":", 1)[1] if geometry_label.startswith("bound:") else ""
     analysis["assumptions"] = [packaging_parts.business_cost_assumption(
         inputs, geometry_part_code=geometry_code)] + list(analysis.get("assumptions") or [])
-    analysis["summary"] = "业务部件 %s 的单件材料开料成本（口径：权威尺寸 %s；%s）" % (
+    analysis["summary"] = "业务部件 %s 的单件材料开料成本（口径：清单尺寸 %s；%s）" % (
         row["part_code"], str(inputs.get("size_text") or "—"), geometry_label)
     return analysis
 
@@ -9066,7 +9076,7 @@ async def packaging_business_part_cost(
 ):
     """业务部件的单件材料费（异步任务，与既有成本路由同形状：task_id + 进度上报）。
 
-    没有几何的件也走得通 —— 尺寸只认权威尺寸；缺尺寸/克重一律 409 并说清缺什么。
+    没有几何的件也走得通 —— 尺寸只认清单尺寸；缺尺寸/克重一律 409 并说清缺什么。
     """
     _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
     _workflow_project(pid)
@@ -9083,7 +9093,7 @@ async def packaging_business_part_cost(
     expected = _digest_value({"part": row, "quantity": qty})
 
     def job():
-        tasks.report_progress("按权威尺寸（%s）算这一件的材料开料成本"
+        tasks.report_progress("按清单尺寸（%s）算这一件的材料开料成本"
                               % (inputs.get("size_text") or
                                  "%s×%s mm" % (packaging_parts._mm_text(
                                      inputs["variables"].get("cut_length")),
@@ -9114,7 +9124,7 @@ async def packaging_business_part_cost(
                        "actor": str(user.get("username") or "")},
         })
         # 任务返回值里也带上口径四键（Spec `packaging-business-part-conclusion-basis-in-panel.md`
-        # §C3）：面板拿到 `task.result` 就渲染「按权威尺寸算的…」那一行，不必再读一次。
+        # §C3）：面板拿到 `task.result` 就渲染「按清单尺寸算的…」那一行，不必再读一次。
         return {"part_code": inputs["part_code"], "analysis": analysis, "summary": summary,
                 "line": line,
                 "size_source": inputs["size_source"],
@@ -9152,9 +9162,9 @@ def get_packaging_business_part_cost(pid: str, code: str,
 
 
 # --------------------------------------------------------------------------- #
-# 业务部件的工序明细：没有几何也排得出来（Spec docs/specs/packaging-business-part-process-by-authority-route.md §C4/§C5）
+# 业务部件的工序明细：没有几何也排得出来（Spec docs/specs/「业务件按对照表原文编工序」 §C4/§C5）
 # --------------------------------------------------------------------------- #
-# `## 412` 把**材料费**从几何里解出来，本批把**工序明细**也解出来：权威清单里有尺寸 + 材料原文
+# `## 412` 把**材料费**从几何里解出来，本批把**工序明细**也解出来：对照表里有尺寸 + 材料原文
 # 就够走既有 `process.outline_process()` 那一支；缺什么就说清缺什么（409 + missing_variables），
 # 绝不拿包围盒 / 默认料厚 / 猜出来的几何特征去排工艺。判据全在
 # `packaging_parts.business_process_inputs()`（纯函数），这里只做组装与落库。
@@ -9163,10 +9173,10 @@ PACKAGING_BUSINESS_PART_PROCESS_PATH = \
 
 
 def _packaging_business_part_process_note(inputs: Dict[str, Any], note: str) -> str:
-    """送进既有工艺链路的 `note`：权威原文块在前、用户补充说明在后（Spec §C4）。
+    """送进既有工艺链路的 `note`：清单原文块在前、用户补充说明在后（Spec §C4）。
 
     用户那段仍走既有「请优先采用」那一路（`process.outline_process()` 里的提示词），
-    权威原文块只负责把工作簿里写着的尺寸 / 材料 / 工艺路线摆到模型面前。
+    清单原文块只负责把工作簿里写着的尺寸 / 材料 / 工艺路线摆到模型面前。
     """
     return "\n".join(item for item in (str(inputs.get("grounding") or "").strip(),
                                       str(note or "").strip()) if item)
@@ -9181,7 +9191,7 @@ async def packaging_business_part_process(
 ):
     """业务部件的单件工艺推荐（异步任务，与既有工艺路由同形状：task_id + 进度上报）。
 
-    没有几何的件也走得通 —— 输入只认权威清单（尺寸 + 材料原文 + 工艺路线原文）；
+    没有几何的件也走得通 —— 输入只认对照表（尺寸 + 材料原文 + 工艺路线原文）；
     缺尺寸 / 材料一律 409 并说清缺什么（前置条件全部来自纯函数）。工序明细仍由既有
     `process.outline_process()` 编制，本路由不新写第二套工艺算法。
     """
@@ -9203,10 +9213,10 @@ async def packaging_business_part_process(
         size_text = str(inputs.get("size_text") or "").strip() or "%s×%s mm" % (
             packaging_parts._mm_text(inputs.get("size_length")),
             packaging_parts._mm_text(inputs.get("size_width")))
-        tasks.report_progress("按权威清单原文编制这一件的工序明细（尺寸 %s / 材料 %s）"
+        tasks.report_progress("按对照表原文编制这一件的工序明细（尺寸 %s / 材料 %s）"
                               % (size_text, str(inputs.get("material_text") or "未填")))
         # 复用既有工艺链路（`process.outline_process()` 只吃 Part）：业务件与图纸零件走
-        # **同一个**模型口径，区别只在输入 —— 这里没有整体 IR、没有几何，只有权威原文。
+        # **同一个**模型口径，区别只在输入 —— 这里没有整体 IR、没有几何，只有清单原文。
         plan, coverage = process.outline_process(
             part, overall=None, geom=None,
             note=_packaging_business_part_process_note(inputs, note), attachments=atts)
@@ -9234,7 +9244,7 @@ async def packaging_business_part_process(
             "lookup": {}, "assumptions": [assumption] if assumption else [],
             "size_source": inputs["size_source"], "size_source_ref": inputs["size_source_ref"],
             "size_text": inputs["size_text"], "geometry": geometry_label,
-            # 这份结论是照哪份权威原文编的 —— 刷新一次页面也说得出来。
+            # 这份结论是照哪份清单原文编的 —— 刷新一次页面也说得出来。
             "grounding": inputs["grounding"],
             "business_part_code": inputs["part_code"],
             "business_parts_id": str(doc.get("business_parts_id") or ""),

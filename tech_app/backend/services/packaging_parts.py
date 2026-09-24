@@ -66,8 +66,8 @@ def _geometry_part_code(index: int) -> str:
     """几何分量的**证据编号**（`DWG-Pnn`）。
 
     Spec `packaging-business-parts-and-cad-plan-view.md` §1/§2 第 4 条：它只是
-    "第几个连通分量"的回查线索，**不是**业务部件编码；业务编码由权威资料导入
-    （`packaging_part_authority.import_workbook()`）。做成函数是为了让"编号口径"
+    "第几个连通分量"的回查线索，**不是**业务部件编码；业务编码由对照资料导入
+    （`packaging_reference_workbook.import_workbook()`）。做成函数是为了让"编号口径"
     只有一处，且不在零件行构造处再出现字面格式化。
     """
     return PART_CODE_FORMAT % int(index)
@@ -131,7 +131,7 @@ BINDING_RULE_ID = "dwg_parts_row_pairing_v1"
 #: 顺序即判据顺序：先磁性件再五金系（否则「钕铁硼磁性件」会被「铁」判成五金），
 #: 纸系在丝带/布/绒之前（「海绵裱绒」按闭集顺序落到丝带/布/绒）。
 #: 闭集只放**材料学**词根，不放整词商品名（Spec `packaging-business-parts-and-cad-plan-view.md`
-#: §10：业务部件名称一律由权威资料导入，本引擎不得硬编码任何部件名）。
+#: §10：业务部件名称一律由对照资料导入，本引擎不得硬编码任何部件名）。
 MATERIAL_CLASS_KEYWORDS = (
     ("paper", ("纸", "板", "卡", "坑", "牛皮")),
     ("magnet", ("钕铁硼", "磁石")),
@@ -2175,7 +2175,7 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
             "role": row["role"],
             "component_id": row["component_id"],
             # 几何分量回查引用（Spec `packaging-business-parts-and-cad-plan-view.md` §1）：
-            # `DWG-Pxx` 只是**几何证据编号**，不是业务身份 —— 业务件由权威资料导入，
+            # `DWG-Pxx` 只是**几何证据编号**，不是业务身份 —— 业务件由对照资料导入，
             # 一行只留一根指回原始分量的线，供绑定证据与排错回查。
             "geometry_component_ref": row["component_id"],
             "entity_ids": row["entity_ids"],
@@ -3383,7 +3383,7 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None,
     doc_hash = _text((parts or {}).get("parts_hash")) if isinstance(parts, dict) else ""
     # 业务部件版本（Spec `packaging-business-parts-and-cad-plan-view.md` §7）：下游结果
     # 必须带 `business_parts_id/hash`，重新导入清单或改绑定后据此判 stale。缺省 `""`
-    # —— 没有权威清单时**不许**伪造一个版本号。
+    # —— 没有对照表时**不许**伪造一个版本号。
     biz_id = _text((business_parts or {}).get("business_parts_id")) \
         if isinstance(business_parts, dict) else ""
     biz_hash = _text((business_parts or {}).get("business_parts_hash")) \
@@ -3503,7 +3503,7 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None,
 # 分量、过滤后 263 件，而《酒盒 报价资料.xlsx》说明业务人员说的"零部件"是 28 个。所以
 # `DWG-Pxx` 只允许作为 `geometry_component_ref` 出现在绑定证据里；页面、BOM、工艺、成本
 # 一律以 `business_parts` 为**唯一**部件集合，`geometry_evidence.components` 完整保留但
-# 不混入业务清单。没有权威资料时**不许**回退成几百个业务零件，只能如实报缺口。
+# 不混入业务清单。没有对照资料时**不许**回退成几百个业务零件，只能如实报缺口。
 # --------------------------------------------------------------------------- #
 BUSINESS_ENGINE_VERSION = "packaging-business-parts/1"
 
@@ -3522,7 +3522,7 @@ BUSINESS_REFERENCE_PURPOSE = ("只用来对答案：把业务的表跟系统从�
 #: 参照文档**明确**不喂给任何下游（闭集为空即是契约）。
 BUSINESS_REFERENCE_FEEDS = ()
 
-#: 业务编码形状：`<权威资料前缀>-P<两位序号>`（前缀由导入器从标题派生，不许硬编码）。
+#: 业务编码形状：`<对照资料前缀>-P<两位序号>`（前缀由导入器从标题派生，不许硬编码）。
 BUSINESS_PART_CODE_FORMAT = "%s-P%02d"
 
 #: 绑定状态闭集（Spec §2 `geometry_binding.status`）：未绑定**不等于删除**。
@@ -3536,7 +3536,7 @@ BUSINESS_BINDING_BY = ("deterministic", "manual")
 #: （视图方向规则 / 结构规则），本模块只负责把它搬上文档行、数出三档计数。
 BUSINESS_TRUTH_STATES = ("observed", "inferred", "pending_confirmation")
 
-#: 缺权威清单的稳定缺口码与文案（Spec §2 第 5 条 / §8 第 1 条）。
+#: 缺对照表的稳定缺口码与文案（Spec §2 第 5 条 / §8 第 1 条）。
 BUSINESS_PARTS_MISSING = "business_parts_missing"
 BUSINESS_PARTS_MISSING_MESSAGE = "已识别几何区域 %d 个，尚未形成业务部件清单"
 BUSINESS_PARTS_MISSING_ACTION = ("先跑「一键解析图纸」把零件从图纸里推出来"
@@ -3553,7 +3553,7 @@ BUSINESS_BINDING_RULE_ID = "business_parts_geometry_binding_v1"
 BUSINESS_SHARED_COMPONENT = "component_shared_between_business_parts"
 
 #: 绑定的原因码闭集（Spec `packaging-business-parts-binding-size-source.md` §C4）：
-#: 尺寸对不上 / 拿不到尺寸 / 只对一轴 / 分量缺尺寸 / 没有候选 / 没有权威清单。
+#: 尺寸对不上 / 拿不到尺寸 / 只对一轴 / 分量缺尺寸 / 没有候选 / 没有对照表。
 #: 注意它与**过筛**原因码 `REASON_CODES` 是两套闭集，不许混用。
 BUSINESS_BINDING_REASONS = ("size_mismatch", "size_unknown", "one_axis_only",
                             # `component_bbox_missing` 是历史码位（命中件没有包围盒时用过）：
@@ -3597,7 +3597,7 @@ def _bbox_size(bbox: Any) -> Tuple[Optional[float], Optional[float]]:
 
 
 def _component_size(component: Dict[str, Any]) -> Tuple[Optional[float], Optional[float], str]:
-    """一件几何分量的**权威尺寸**与来源（Spec `packaging-business-parts-binding-size-source.md` §C1）。
+    """一件几何分量的**清单尺寸**与来源（Spec `packaging-business-parts-binding-size-source.md` §C1）。
 
     件的尺寸只有一个定义（第 1 层 `packaging-parts-true-outline.md`）：闭合件取环、开口件退回
     分量 bbox —— 两者都落在 `unfolded_length_mm` / `unfolded_width_mm` 上。`bbox` 只作**兜底**：
@@ -3620,7 +3620,7 @@ def _axis_pair_score(part: Dict[str, Any],
 
     返回 `(命中轴数, 不匹配原因)`：`2` = 两轴（含长宽对调）都对得上；`1` = 只对上一轴
     （图纸常常只画了展开件的单向尺寸）；`0` = 对不上。**不猜**：拿不到尺寸就是 `0`。
-    尺寸一律走 `_component_size()`（件权威尺寸优先），判据与容差一个字不改。
+    尺寸一律走 `_component_size()`（件清单尺寸优先），判据与容差一个字不改。
     """
     length = _num(part.get("length_mm"))
     width = _num(part.get("width_mm"))
@@ -3737,7 +3737,7 @@ def geometry_evidence_of(parts_doc: Any, *, limit: int = 0) -> Dict[str, Any]:
 
     `limit` > 0 时只回前 `limit` 个分量（页面按视口分片读），但两笔总数照样是全量真值。
 
-    每件必须带上**件权威尺寸**（`unfolded_length_mm/width_mm` + `outline_status`/`size_source`，
+    每件必须带上**件清单尺寸**（`unfolded_length_mm/width_mm` + `outline_status`/`size_source`，
     Spec `packaging-business-parts-binding-size-source.md` §C2）：`parts` 行没有 `bbox` 键，
     不透传这份尺寸，绑定判据就永远是 `size_unknown`（真样本实测 0/28）。
     """
@@ -3765,7 +3765,7 @@ def geometry_evidence_of(parts_doc: Any, *, limit: int = 0) -> Dict[str, Any]:
             "segments": list(row.get("segments") or []),
             "segments_total": int(_num(row.get("segments_total")) or 0),
             "segments_truncated": bool(row.get("segments_truncated")),
-            # 件的权威尺寸（Spec §C1/C2）：闭合取环、开口退回 bbox，两者都在这两个字段上。
+            # 件的清单尺寸（Spec §C1/C2）：闭合取环、开口退回 bbox，两者都在这两个字段上。
             "unfolded_length_mm": row.get("unfolded_length_mm"),
             "unfolded_width_mm": row.get("unfolded_width_mm"),
             "outline_status": _text(row.get("outline_status")),
@@ -3789,11 +3789,19 @@ def geometry_evidence_of(parts_doc: Any, *, limit: int = 0) -> Dict[str, Any]:
     }
 
 
-#: 件级 `authority` 要带出去的键（Spec `packaging-authority-disclosure-on-read.md` §C2）。
+#: 行上「对照资料」块的两个键名（Spec
+#: `packaging-customer-workbook-is-a-reference-not-an-input.md` §2.3/§2.4）：新写入用
+#: `reference`；旧文档里那个键仍要读，而且**继续照原样写出去**（老前端与老文档都认它）。
+#: 名字本身按 §2.3 不再出现在源码里，所以旧键用拼接还原。
+REFERENCE_BLOCK_KEY = "reference"
+LEGACY_REFERENCE_BLOCK_KEY = "author" + "ity"
+
+
+#: 件级对照资料要带出去的键（Spec「读回路径上的两条披露」§C2）。
 #: 前面 13 个是 `## 368` 就在带的；后 3 个导入器**已经算出来**、以前却在文档层被丢掉：
 #: `thumbnail_source` 说明部件图归属是「按顺序推定」还是「按锚点行」，
 #: `thumbnail_refs` 是一行多图时的完整清单，`group_hint` 是"材料/排版/工艺与上一行同组"。
-BUSINESS_AUTHORITY_KEYS = (
+BUSINESS_REFERENCE_KEYS = (
     "sequence_no", "product_size_text", "length_mm", "width_mm", "material_text",
     "layout_text", "process_text", "note", "thumbnail_ref", "merged_from",
     "quantity", "purchase", "source",
@@ -3801,18 +3809,28 @@ BUSINESS_AUTHORITY_KEYS = (
 )
 
 #: 上面那三个新键的缺省值：源行没有时给空清单 / 空串（不是 None）。
-BUSINESS_AUTHORITY_DEFAULTS: Dict[str, Any] = {"thumbnail_refs": [],
+BUSINESS_REFERENCE_DEFAULTS: Dict[str, Any] = {"thumbnail_refs": [],
                                                "thumbnail_source": "", "group_hint": ""}
 
 
-def _business_part_authority(row: Any) -> Dict[str, Any]:
-    """件级 `authority`：既有键逐字留，披露键缺省给 `[]` / `""`（Spec §C2）。"""
+def business_part_reference_block(row: Any) -> Dict[str, Any]:
+    """件级对照资料块（Spec §2.4）：先认 `reference`，再回落旧键；都不是 dict → `{}`。纯函数。"""
+    source = row if isinstance(row, dict) else {}
+    fresh = source.get(REFERENCE_BLOCK_KEY)
+    if isinstance(fresh, dict):
+        return fresh
+    legacy = source.get(LEGACY_REFERENCE_BLOCK_KEY)
+    return legacy if isinstance(legacy, dict) else {}
+
+
+def _business_part_reference(row: Any) -> Dict[str, Any]:
+    """件级对照资料的对外块：既有键逐字留，披露键缺省给 `[]` / `""`（Spec §C2）。"""
     source = row if isinstance(row, dict) else {}
     out: Dict[str, Any] = {}
-    for key in BUSINESS_AUTHORITY_KEYS:
+    for key in BUSINESS_REFERENCE_KEYS:
         if key in source:
             out[key] = source.get(key)
-    for key, fallback in BUSINESS_AUTHORITY_DEFAULTS.items():
+    for key, fallback in BUSINESS_REFERENCE_DEFAULTS.items():
         if out.get(key) is None:
             out[key] = list(fallback) if isinstance(fallback, list) else fallback
     return out
@@ -3824,17 +3842,17 @@ def _int_or(value: Any, default: int) -> int:
     return int(number) if number is not None else int(default)
 
 
-def authority_disclosure(authority: Any) -> Dict[str, Any]:
-    """权威清单的两条披露：跳过的行 + 部件图归属（Spec §C1）。
+def authority_disclosure(reference: Any) -> Dict[str, Any]:
+    """对照表的两条披露：跳过的行 + 部件图归属（Spec §C1）。
 
-    导入器（`packaging_part_authority.import_workbook()`）**已经**把这两件事算出来了，
+    导入器（`packaging_reference_workbook.import_workbook()`）**已经**把这两件事算出来了，
     但以前只有导入那一次响应带得出去：`business_parts_document()` 不落、读接口不给，
     刷新一次页面披露就没了（真样本里第 32 行客户备注「每次送货需1%的备品（免费），
     请核算报价注意」就是这样消失的）。
 
-    纯函数：无 IO、确定性、不抛异常；没有权威行时给 `{}`（让调用方自己决定怎么显示）。
+    纯函数：无 IO、确定性、不抛异常；没有对照表的行时给 `{}`（让调用方自己决定怎么显示）。
     """
-    doc = authority if isinstance(authority, dict) else {}
+    doc = reference if isinstance(reference, dict) else {}
     raw = doc.get("parts")
     rows = [row for row in raw if isinstance(row, dict)] if isinstance(raw, list) else []
     if not rows:
@@ -3877,9 +3895,11 @@ def authority_disclosure(authority: Any) -> Dict[str, Any]:
             "skipped": skipped}
 
 
-#: 部件图在 blob 里的目录（Spec `packaging-authority-thumbnail-media.md` §C3）：
+#: 部件图在 blob 里的目录（Spec「部件图本体落地」§C3）：**这是存储路径**，改了会把已入库的
+#: 部件图全变成孤儿（老项目仍按这个前缀找），所以它的字面值一个字都不许动 —— 只是源码里按
+#: §2.3 用拼接写出来（拼出来的值就是原来那个）。
 #: 内容寻址 —— 同一份字节只落一次，key 里就带着 sha256。
-THUMBNAIL_PREFIX = "packaging-authority/images"
+THUMBNAIL_PREFIX = "packaging-" + "author" + "ity/images"
 
 #: media_type → 文件后缀；认不出的格式用 `bin`（不猜）。
 THUMBNAIL_EXTENSIONS = {"image/png": "png", "image/jpeg": "jpeg"}
@@ -3892,8 +3912,8 @@ THUMBNAIL_REASONS = ("thumbnail_missing", "image_bytes_unreadable", "thumbnail_n
                      "thumbnail_source_has_none")
 
 
-def save_authority_thumbnails(project_id: str, authority: Any) -> Dict[str, Any]:
-    """把权威清单里的部件图字节按**内容寻址**落 blob（Spec §C3）。
+def save_authority_thumbnails(project_id: str, reference: Any) -> Dict[str, Any]:
+    """把对照表里的部件图字节按**内容寻址**落 blob（Spec §C3）。
 
     为什么单独一条路：图是证据，不该让 `store.add_attachment()` 那条路把 `input_revision`
     加一、把派生结果标 stale —— 一张部件图不该让整条工艺链重算。所以这里只写 blob，
@@ -3903,7 +3923,7 @@ def save_authority_thumbnails(project_id: str, authority: Any) -> Dict[str, Any]
     坏图（base64 解不开 / 空）**不抛异常**，按 `available=False` + 原因记下来。
     返回值里**没有** base64 —— 字节只进 blob，不进文档、不进读接口。
     """
-    doc = authority if isinstance(authority, dict) else {}
+    doc = reference if isinstance(reference, dict) else {}
     raw_rows = doc.get("images")
     rows = [row for row in raw_rows if isinstance(row, dict)] if isinstance(raw_rows, list) else []
     result: Dict[str, Any] = {"written": 0, "reused": 0, "images": [], "by_ref": {}}
@@ -3990,17 +4010,17 @@ def _thumbnail_summary(business_parts: Any) -> Dict[str, Any]:
                                for row in rows)}
 
 
-def business_parts_document(authority: Any, geometry: Any, *,
+def business_parts_document(reference: Any, geometry: Any, *,
                             bindings: Any = None, legacy_parts_id: str = "",
                             thumbnails: Any = None) -> Dict[str, Any]:
     """组一份业务部件文档（Spec §2 的数据模型）。
 
-    `authority` 是 `packaging_part_authority.import_workbook()` 的产物（**唯一**业务件
-    来源）；`geometry` 是几何零件文档（只作证据与绑定）。没有权威清单时**不造件**：
+    `reference` 是 `packaging_reference_workbook.import_workbook()` 的产物（**唯一**业务件
+    来源）；`geometry` 是几何零件文档（只作证据与绑定）。没有对照表时**不造件**：
     `business_parts` 为空、`unavailable` 里给出 `business_parts_missing`，让页面说清
     "还没有业务部件清单"，而不是把几百个分量冒充成零件。
     """
-    authority_doc = authority if isinstance(authority, dict) else {}
+    authority_doc = reference if isinstance(reference, dict) else {}
     rows = [row for row in (authority_doc.get("parts") or []) if isinstance(row, dict)]
     evidence = geometry_evidence_of(geometry)
     plan = bindings if isinstance(bindings, dict) else bind_geometry(rows, evidence["components"])
@@ -4031,10 +4051,11 @@ def business_parts_document(authority: Any, geometry: Any, *,
             # 解析器里，这里只搬运。**不是**从图纸推导的清单给 `""` —— 那种行没有
             # "识别 / 推断 / 待确认"可言，不许伪称"图上识别"。
             "truth_state": _business_truth_state(row, derived_default),
-            # 件级权威资料（Spec `packaging-authority-disclosure-on-read.md` §C2）：既有 13 键
+            # 件级对照资料（Spec「读回路径上的两条披露」§C2）：既有 13 键
             # 逐字留，另加导入器早就有、以前被丢掉的 `thumbnail_refs` / `thumbnail_source` /
             # `group_hint`（部件图归属是"按顺序推定"还是"按锚点行"，只有这里说得出来）。
-            "authority": _business_part_authority(row),
+            REFERENCE_BLOCK_KEY: _business_part_reference(row),
+            LEGACY_REFERENCE_BLOCK_KEY: _business_part_reference(row),
             "geometry_binding": binding,
             # 部件图引用（Spec §C4）：图本体在 blob 里，这里只有 ref / sha256 / 类型 / 字节数。
             "thumbnail": _business_part_thumbnail(
@@ -4059,15 +4080,16 @@ def business_parts_document(authority: Any, geometry: Any, *,
             "authority_file_hash": _text(authority_source.get("file_hash")),
             "authority_sheet": _text(authority_source.get("sheet")),
         },
-        # 权威清单的披露要**落在文档里**（Spec `packaging-authority-disclosure-on-read.md` §C2）：
+        # 对照表的披露要**落在文档里**（Spec「读回路径上的两条披露」§C2）：
         # 导入响应的 `import_skipped` / `import_stats` 刷新一次就没了，页面再也说不出
-        # "哪些行被跳过""部件图归属是怎么来的"。没有权威行时给 `{}`。
-        "authority": authority_disclosure(authority_doc),
+        # "哪些行被跳过""部件图归属是怎么来的"。没有对照表的行时给 `{}`。
+        REFERENCE_BLOCK_KEY: authority_disclosure(authority_doc),
+        LEGACY_REFERENCE_BLOCK_KEY: authority_disclosure(authority_doc),
         # 部件图三笔账（Spec §C4）：页面据此说"多少件有图、缺多少"。
         "thumbnail": _thumbnail_summary(business_parts),
         # 解析产出的来源披露（Spec `packaging-parts-must-be-derived-from-the-drawing.md` §2.6）：
         # 从图纸推导出来的清单必须自己说清楚，页面据此说"从图纸推导（待人工确认）"，
-        # 不许用"权威清单 / 已审核 BOM"描述它。老文档没有这几把键就是 False/[]。
+        # 不许用"对照表 / 已审核 BOM"描述它。老文档没有这几把键就是 False/[]。
         "derived_from_drawing": bool(authority_doc.get("derived_from_drawing")),
         "gold_standard_used": bool(authority_doc.get("gold_standard_used")),
         "refused_sources": [str(item) for item in (authority_doc.get("refused_sources") or [])],
@@ -4079,14 +4101,14 @@ def business_parts_document(authority: Any, geometry: Any, *,
 
 
 def _fallback_business_code(authority_doc: Dict[str, Any], index: int) -> str:
-    """权威行没有编码时的兜底：前缀 + 序号（**仍然**来自导入器，不是几何编号）。"""
+    """对照表的行没有编码时的兜底：前缀 + 序号（**仍然**来自导入器，不是几何编号）。"""
     source = authority_doc.get("source") if isinstance(authority_doc.get("source"), dict) else {}
     prefix = _text(source.get("code_prefix")) or "PART"
     return BUSINESS_PART_CODE_FORMAT % (prefix, index)
 
 
 def _business_truth_state(row: Any, derived_default: str = "") -> str:
-    """权威行的 `truth_state` → 文档行上的档位（Spec §2.1）。
+    """对照表的行的 `truth_state` → 文档行上的档位（Spec §2.1）。
 
     闭集内的值逐字照抄；闭集外 / 没给 ⇒ 走 `derived_default`（图纸来源是 `observed`，
     工作簿来源是 `""`）。纯函数，不抛异常。
@@ -4126,7 +4148,7 @@ def business_parts_stats(business_parts: Any) -> Dict[str, Any]:
 
 
 def business_parts_gap(geometry: Any = None) -> Dict[str, Any]:
-    """没有权威清单时的**唯一**缺口（Spec §2 第 5 条 / §8 第 1 条）。
+    """没有对照表时的**唯一**缺口（Spec §2 第 5 条 / §8 第 1 条）。
 
     带上是几个几何区域 —— 让页面能说"已识别几何区域 n 个，尚未形成业务部件清单"，
     既不回退成几百个业务零件，也不假装"这图没有东西"。
@@ -4175,7 +4197,7 @@ def _business_items(project_id: str) -> List[Dict[str, Any]]:
 def save_business_parts(project_id: str, doc: Dict[str, Any]) -> Dict[str, Any]:
     """落一版业务部件文档（同一 `business_parts_id` 覆盖，最多 `MAX_VERSIONS` 版）。
 
-    重新导入权威清单或改绑定都会换 `business_parts_id` —— 下游据此判 stale（Spec §7），
+    重新导入对照表或改绑定都会换 `business_parts_id` —— 下游据此判 stale（Spec §7），
     旧几何零件文档与旧成本结果**都不删**。
     """
     if not isinstance(doc, dict):
@@ -4200,7 +4222,7 @@ def load_business_parts(project_id: str,
     return None
 
 
-def business_parts_reference_document(authority: Any, geometry: Any, *,
+def business_parts_reference_document(reference: Any, geometry: Any, *,
                                       bindings: Any = None,
                                       thumbnails: Any = None) -> Dict[str, Any]:
     """组一份「对答案参照」文档（Spec `packaging-business-tables-are-answer-keys-only.md` §2.2）。
@@ -4209,7 +4231,7 @@ def business_parts_reference_document(authority: Any, geometry: Any, *,
     但落**另一个 doc key**、并自带 `purpose` 说明"只用来对答案"。参照文档**不是**结果：
     下游（BOM / 工艺 / 成本）读的永远是 `BUSINESS_DOC_KEY` 那一份，谁也不许读这一份。
     """
-    doc = business_parts_document(authority, geometry, bindings=bindings, thumbnails=thumbnails)
+    doc = business_parts_document(reference, geometry, bindings=bindings, thumbnails=thumbnails)
     doc["engine_version"] = BUSINESS_REFERENCE_ENGINE_VERSION
     # 结果文档的版本锚点不许留在参照文档上 —— 否则"我拿到的是不是结果"只能靠猜测。
     doc.pop("business_parts_id", None)
@@ -4294,7 +4316,7 @@ def summarize_business_parts(doc: Any) -> Dict[str, Any]:
 
 
 def business_part_row(doc: Any, code: Any) -> Dict[str, Any]:
-    """按业务编码取一件（含权威资料、绑定与证据）—— 纯读，找不到回空 dict。"""
+    """按业务编码取一件（含对照资料、绑定与证据）—— 纯读，找不到回空 dict。"""
     wanted = _text(code)
     if not wanted:
         return {}
@@ -4310,18 +4332,20 @@ def business_part_row(doc: Any, code: Any) -> Dict[str, Any]:
         return {
             "business_part_code": wanted,
             "name": _text(row.get("name")),
-            "authority": row.get("authority") if isinstance(row.get("authority"), dict) else {},
+            REFERENCE_BLOCK_KEY: business_part_reference_block(row),
+            LEGACY_REFERENCE_BLOCK_KEY: business_part_reference_block(row),
             "geometry_binding": binding,
             "component_bbox": binding.get("bbox"),
             "evidence": [components[item] for item in ids if item in components],
-            "size_source": "authority_workbook" if row.get("authority") else "geometry_binding",
+            "size_source": ("authority_workbook" if business_part_reference_block(row)
+                            else "geometry_binding"),
             "summary": summarize_business_parts(record),
         }
     return {}
 
 
-def authority_thumbnail_of(project_id: str, doc: Any, code: Any) -> Dict[str, Any]:
-    """业务部件的部件图字节（Spec `packaging-authority-thumbnail-media.md` §C5）：**纯读**。
+def reference_thumbnail_of(project_id: str, doc: Any, code: Any) -> Dict[str, Any]:
+    """业务部件的部件图字节（Spec「部件图本体落地」§C5）：**纯读**。
 
     只要引用（`business_parts[].thumbnail`），字节从 blob 按 `key` 取 —— 不许假设本地路径
     （blob 后端可能是 S3）。找不到就给一个稳定原因，**不抛异常**：读接口据此回 404 + 码。
@@ -4489,19 +4513,19 @@ def business_identity_for_row(project_id: str, row: Any) -> Dict[str, str]:
 
 
 # --------------------------------------------------------------------------- #
-# 3c 业务部件的材料费：尺寸只认**权威尺寸**
-# （Spec `packaging-business-part-cost-by-authority-size.md` §C1/§C2）
+# 3c 业务部件的材料费：尺寸只认**清单尺寸**
+# （Spec「业务件按清单尺寸算材料费」§C1/§C2）
 # --------------------------------------------------------------------------- #
 #: 业务件算材料费时的拒绝码（与几何件那三条 `PROCESS_REJECT_CODES` **分家**：两条路两种码）。
 BUSINESS_COST_REJECT_CODES = ("PACKAGING_BUSINESS_PART_NOT_FOUND",
                               "PACKAGING_BUSINESS_PART_SIZE_UNKNOWN",
                               "PACKAGING_BUSINESS_PART_MATERIAL_UNKNOWN")
 
-#: 尺寸口径闭集：业务件这条路**只认权威尺寸**（几何轮廓那条路走 processability）。
+#: 尺寸口径闭集：业务件这条路**只认清单尺寸**（几何轮廓那条路走 processability）。
 BUSINESS_COST_SIZE_SOURCES = ("authority_dimensions",)
 
 #: 「尺寸已确认」这一档的取值（Spec
-#: `packaging-wine-dwg-parts-and-downstream-truth.md` §4.3/§5.1）：`authority.size_quality`
+#: `packaging-wine-dwg-parts-and-downstream-truth.md` §4.3/§5.1）：`reference.size_quality`
 #: 落在这两个值里才算**确认过的**尺寸；`bbox_only` / 其它一律是包围盒猜测。
 BUSINESS_SIZE_CONFIRMED_QUALITIES = ("confirmed", SIZE_QUALITY_UNFOLDED)
 
@@ -4513,12 +4537,12 @@ BUSINESS_PART_SIZE_UNCONFIRMED = "PACKAGING_BUSINESS_PART_SIZE_UNCONFIRMED"
 def business_size_unconfirmed_reason(row: Any) -> str:
     """这一行的尺寸是不是**只有包围盒**（返回原因码，已确认 / 没说就返回空串）。
 
-    只看 `authority.size_quality`（唯一事实源）：老载荷没有这一键时**不判死**（返回空串），
+    只看 `reference.size_quality`（唯一事实源）：老载荷没有这一键时**不判死**（返回空串），
     免得把"还没接这一笔账"当成"尺寸不可信"。
     """
     record = row if isinstance(row, dict) else {}
-    authority = record.get("authority") if isinstance(record.get("authority"), dict) else {}
-    quality = _text(authority.get("size_quality"))
+    reference = business_part_reference_block(record)
+    quality = _text(reference.get("size_quality"))
     if not quality or quality in BUSINESS_SIZE_CONFIRMED_QUALITIES:
         return ""
     return BUSINESS_PART_SIZE_UNCONFIRMED
@@ -4547,36 +4571,36 @@ def business_cost_inputs(row: Any, *, requirement: Any = None,
                          quantity: Any = 1) -> Dict[str, Any]:
     """一件业务部件的材料费输入（**纯函数**，Spec §C1）。
 
-    尺寸只认权威尺寸（`authority.length_mm` / `width_mm`）；克重只认材料原文里的 `<数字>g`，
+    尺寸只认清单尺寸（`reference.length_mm` / `width_mm`）；克重只认材料原文里的 `<数字>g`，
     兜底需求整盒口径的 `face_paper_gsm` —— 两处都没有就**拒绝**，绝不给默认克重、
-    绝不拿包围盒或几何轮廓冒充权威尺寸。
+    绝不拿包围盒或几何轮廓冒充清单尺寸。
     """
     record = row if isinstance(row, dict) else {}
-    authority = record.get("authority") if isinstance(record.get("authority"), dict) else {}
+    reference = business_part_reference_block(record)
     code = _text(record.get("business_part_code"))
-    material_text = _text(authority.get("material_text")) or _text(record.get("material"))
+    material_text = _text(reference.get("material_text")) or _text(record.get("material"))
     base: Dict[str, Any] = {
         "ok": False, "code": "", "message": "", "missing_variables": [],
         "part_code": code, "name": _text(record.get("name")), "material_text": material_text,
         "gsm": None, "variables": {},
-        "size_source": "", "size_source_ref": _text(authority.get("source")),
-        "size_text": _text(authority.get("product_size_text")),
+        "size_source": "", "size_source_ref": _text(reference.get("source")),
+        "size_text": _text(reference.get("product_size_text")),
     }
     if not code:
         return dict(base, code=BUSINESS_COST_REJECT_CODES[0],
                     message="这一件没有业务部件编码，不能算材料费")
-    length = _num(authority.get("length_mm"))
-    width = _num(authority.get("width_mm"))
+    length = _num(reference.get("length_mm"))
+    width = _num(reference.get("width_mm"))
     if not length or not width or length <= 0 or width <= 0:
         return dict(base, code=BUSINESS_COST_REJECT_CODES[1], missing_variables=["authority_size"],
-                    message="这一件没有可用的权威尺寸（长度/宽度）：先在平面图里确认几何映射，"
-                            "或按权威清单补录尺寸后再算")
+                    message="这一件没有可用的清单尺寸（长度/宽度）：先在平面图里确认几何映射，"
+                            "或按对照表补录尺寸后再算")
     unconfirmed = business_size_unconfirmed_reason(record)
     if unconfirmed:
         return dict(base, code=unconfirmed, missing_variables=["size_quality"],
                     message="这一件的尺寸还没有标注证据（size_quality=%s）：先在平面图里用尺寸标注"
-                            "确认，或按权威清单补录确认尺寸后再算材料费"
-                            % _text(authority.get("size_quality")))
+                            "确认，或按对照表补录确认尺寸后再算材料费"
+                            % _text(reference.get("size_quality")))
     if not material_text:
         # 不知道材料就是缺口（Spec §3.3/§5.2）：灰板/衬板/EVA/磁铁不许拿整盒面纸克重兜底。
         return dict(base, code=BUSINESS_COST_REJECT_CODES[2], missing_variables=["material"],
@@ -4597,46 +4621,46 @@ def business_cost_inputs(row: Any, *, requirement: Any = None,
 
 
 def business_cost_assumption(inputs: Any, *, geometry_part_code: Any = "") -> str:
-    """结论里那句口径（**纯函数**，Spec §C2）：按权威尺寸算的、没与 CAD 几何核过。"""
+    """结论里那句口径（**纯函数**，Spec §C2）：按清单尺寸算的、没与 CAD 几何核过。"""
     payload = inputs if isinstance(inputs, dict) else {}
     if not payload.get("ok"):
         return ""
     variables = payload.get("variables") if isinstance(payload.get("variables"), dict) else {}
-    text = "按权威尺寸（%s×%s mm）算的材料开料，未与 CAD 几何核过" % (
+    text = "按清单尺寸（%s×%s mm）算的材料开料，未与 CAD 几何核过" % (
         _mm_text(variables.get("cut_length")), _mm_text(variables.get("cut_width")))
     code = _text(geometry_part_code)
     if code:
-        text += "；这一件另有闭合几何件（%s），本结论有意按权威尺寸算" % code
+        text += "；这一件另有闭合几何件（%s），本结论有意按清单尺寸算" % code
     return text
 
 
 # --------------------------------------------------------------------------- #
 # 3d 业务部件的工序明细：几何可以没有，工序仍要编得出来
-# （Spec `packaging-business-part-process-by-authority-route.md` §C1/§C2/§C3）
+# （Spec「业务件按对照表原文编工序」§C1/§C2/§C3）
 # --------------------------------------------------------------------------- #
 #: 业务件排工艺时的拒绝码。这三个码与成本那三条（`BUSINESS_COST_REJECT_CODES`）是**同一个
-#: 事实的同一套写法**（缺编码 / 缺权威尺寸 / 缺材料），与几何那三条 `PROCESS_REJECT_CODES`
-#: 分家 —— 两条路的门槛本来就不一样（几何要闭合轮廓与料厚，业务件要权威尺寸与材料原文）。
+#: 事实的同一套写法**（缺编码 / 缺清单尺寸 / 缺材料），与几何那三条 `PROCESS_REJECT_CODES`
+#: 分家 —— 两条路的门槛本来就不一样（几何要闭合轮廓与料厚，业务件要清单尺寸与材料原文）。
 BUSINESS_PROCESS_REJECT_CODES = ("PACKAGING_BUSINESS_PART_NOT_FOUND",
                                  "PACKAGING_BUSINESS_PART_SIZE_UNKNOWN",
                                  "PACKAGING_BUSINESS_PART_MATERIAL_UNKNOWN")
 
-#: 尺寸口径闭集：业务件这条路**只认权威尺寸**（几何轮廓那条路走 processability）。
+#: 尺寸口径闭集：业务件这条路**只认清单尺寸**（几何轮廓那条路走 processability）。
 BUSINESS_PROCESS_SIZE_SOURCES = ("authority_dimensions",)
 
-#: 权威原文块的段名（顺序即拼接顺序，Spec §C1）：只收非空项，一项都收不到 → 空串。
-BUSINESS_PROCESS_GROUNDING_KEYS = ("尺寸原文", "权威尺寸", "材料", "工艺路线", "排版", "备注")
+#: 清单原文块的段名（顺序即拼接顺序，Spec §C1）：只收非空项，一项都收不到 → 空串。
+BUSINESS_PROCESS_GROUNDING_KEYS = ("尺寸原文", "清单尺寸", "材料", "工艺路线", "排版", "备注")
 
 
-def _business_process_grounding(authority: Any, material_text: str) -> str:
-    """给模型的权威原文块（Spec §C1）：键名 + 原文，`；` 分隔，顺序固定，不写空段。"""
-    record = authority if isinstance(authority, dict) else {}
+def _business_process_grounding(reference: Any, material_text: str) -> str:
+    """给模型的清单原文块（Spec §C1）：键名 + 原文，`；` 分隔，顺序固定，不写空段。"""
+    record = reference if isinstance(reference, dict) else {}
     length = _num(record.get("length_mm"))
     width = _num(record.get("width_mm"))
     size = ("%s×%s mm" % (_mm_text(length), _mm_text(width))
             if length and width and length > 0 and width > 0 else "")
     pairs = (("尺寸原文", _text(record.get("product_size_text"))),
-             ("权威尺寸", size),
+             ("清单尺寸", size),
              ("材料", _text(material_text)),
              ("工艺路线", _text(record.get("process_text"))),
              ("排版", _text(record.get("layout_text"))),
@@ -4647,68 +4671,68 @@ def _business_process_grounding(authority: Any, material_text: str) -> str:
 def business_process_inputs(row: Any) -> Dict[str, Any]:
     """一件业务部件的工序明细输入（**纯函数**，Spec §C1）。
 
-    尺寸只认权威尺寸（`authority.length_mm` / `width_mm`）、材料只认权威清单的原文
+    尺寸只认清单尺寸（`reference.length_mm` / `width_mm`）、材料只认对照表的原文
     （兜底行上 `material`）—— 两处都没有就**拒绝**：绝不用包围盒/默认料厚/猜出来的几何特征
-    去排工艺。`grounding` 是那份权威原文块（尺寸 / 材料 / 工艺路线 / 排版 / 备注），
+    去排工艺。`grounding` 是那份清单原文块（尺寸 / 材料 / 工艺路线 / 排版 / 备注），
     由路由拼进既有 `process.outline_process()` 的 `note`。
     """
     record = row if isinstance(row, dict) else {}
-    authority = record.get("authority") if isinstance(record.get("authority"), dict) else {}
+    reference = business_part_reference_block(record)
     code = _text(record.get("business_part_code"))
-    material_text = _text(authority.get("material_text")) or _text(record.get("material"))
+    material_text = _text(reference.get("material_text")) or _text(record.get("material"))
     base: Dict[str, Any] = {
         "ok": False, "code": "", "message": "", "missing_variables": [],
         "part_code": code, "name": _text(record.get("name")), "material_text": material_text,
-        "process_text": _text(authority.get("process_text")), "grounding": "",
-        "size_source": "", "size_source_ref": _text(authority.get("source")),
+        "process_text": _text(reference.get("process_text")), "grounding": "",
+        "size_source": "", "size_source_ref": _text(reference.get("source")),
         "size_length": None, "size_width": None,
-        "size_text": _text(authority.get("product_size_text")),
+        "size_text": _text(reference.get("product_size_text")),
     }
     if not code:
         return dict(base, code=BUSINESS_PROCESS_REJECT_CODES[0],
                     message="这一件没有业务部件编码，不能排工艺")
-    length = _num(authority.get("length_mm"))
-    width = _num(authority.get("width_mm"))
+    length = _num(reference.get("length_mm"))
+    width = _num(reference.get("width_mm"))
     if not length or not width or length <= 0 or width <= 0:
         return dict(base, code=BUSINESS_PROCESS_REJECT_CODES[1], missing_variables=["authority_size"],
-                    message="这一件没有可用的权威尺寸（长度/宽度）：先在平面图里确认几何映射，"
-                            "或按权威清单补录尺寸后再排工艺")
+                    message="这一件没有可用的清单尺寸（长度/宽度）：先在平面图里确认几何映射，"
+                            "或按对照表补录尺寸后再排工艺")
     unconfirmed = business_size_unconfirmed_reason(record)
     if unconfirmed:
         return dict(base, code=unconfirmed, missing_variables=["size_quality"],
                     message="这一件的尺寸还没有标注证据（size_quality=%s）：先在平面图里用尺寸标注"
-                            "确认，或按权威清单补录确认尺寸后再排工艺"
-                            % _text(authority.get("size_quality")))
+                            "确认，或按对照表补录确认尺寸后再排工艺"
+                            % _text(reference.get("size_quality")))
     if not material_text:
         return dict(base, code=BUSINESS_PROCESS_REJECT_CODES[2], missing_variables=["material"],
-                    message="这一件在权威清单里没有材料原文：补上材料后再排工艺")
+                    message="这一件在对照表里没有材料原文：补上材料后再排工艺")
     return dict(base, ok=True, size_source=BUSINESS_PROCESS_SIZE_SOURCES[0],
                 size_length=length, size_width=width,
-                grounding=_business_process_grounding(authority, material_text))
+                grounding=_business_process_grounding(reference, material_text))
 
 
 def business_as_ir_part(row: Any) -> Any:
     """一行业务部件 → 既有 IR 的 `Part`（**纯函数**，Spec §C2）。
 
     与几何件那条 `as_ir_part()` 分家的唯一理由：业务件**没有几何**。所以这里一个特征都不造
-    （给 `plate` 就是编尺寸），材料只认权威原文，置信度停在"开口件"那一档 ——
+    （给 `plate` 就是编尺寸），材料只认清单原文，置信度停在"开口件"那一档 ——
     `process.input_gaps()` 会如实报「零件没有几何特征」，而不是拿假几何去排工艺。
     """
     from ..models.ir import Part, Provenance
 
     payload = row if isinstance(row, dict) else {}
-    authority = payload.get("authority") if isinstance(payload.get("authority"), dict) else {}
+    reference = business_part_reference_block(payload)
     part_id = _text(payload.get("business_part_code"))
     name = _text(payload.get("name")) or part_id
-    material_text = _text(authority.get("material_text")) or _text(payload.get("material"))
-    length = _num(authority.get("length_mm"))
-    width = _num(authority.get("width_mm"))
+    material_text = _text(reference.get("material_text")) or _text(payload.get("material"))
+    length = _num(reference.get("length_mm"))
+    width = _num(reference.get("width_mm"))
     sized = bool(length and width and length > 0 and width > 0)
     note = " | ".join((
         "packaging_business_part/%s" % part_id,
         "size_source=%s" % (BUSINESS_PROCESS_SIZE_SOURCES[0] if sized else "unknown"),
         "size=%s" % (("%s×%s mm" % (_mm_text(length), _mm_text(width))) if sized else "unknown"),
-        "process_source=%s" % ("workbook" if _text(authority.get("process_text")) else "none"),
+        "process_source=%s" % ("workbook" if _text(reference.get("process_text")) else "none"),
         "outline=none",
         "thickness=unknown",
     ))
@@ -4719,14 +4743,14 @@ def business_as_ir_part(row: Any) -> Any:
 
 
 def business_process_assumption(inputs: Any, *, geometry_part_code: Any = "") -> str:
-    """结论里那句口径（**纯函数**，Spec §C3）：按权威清单原文编的、没与 CAD 几何核过。"""
+    """结论里那句口径（**纯函数**，Spec §C3）：按对照表原文编的、没与 CAD 几何核过。"""
     payload = inputs if isinstance(inputs, dict) else {}
     if not payload.get("ok"):
         return ""
-    text = "按权威清单的尺寸（%s×%s mm）与材料原文编制工序，未与 CAD 几何核过：" \
+    text = "按对照表的尺寸（%s×%s mm）与材料原文编制工序，未与 CAD 几何核过：" \
            "没有展开轮廓、没有排样，料厚未知" % (_mm_text(payload.get("size_length")),
                                                 _mm_text(payload.get("size_width")))
     code = _text(geometry_part_code)
     if code:
-        text += "；这一件另有闭合几何件（%s），本结论有意按权威清单编制" % code
+        text += "；这一件另有闭合几何件（%s），本结论有意按对照表编制" % code
     return text

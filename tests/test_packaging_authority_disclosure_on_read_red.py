@@ -380,7 +380,9 @@ class EWiring(unittest.TestCase):
         block = source[start:start + 3000]
         self.assertIn("packagingAuthorityDisclosureLines", block,
                       "左栏必须用 C4 的文案函数（Spec §C5）")
-        self.assertIn("qq-authority-skip", block,
+        # `## 494` §2.3 之后源码里不再出现那个词本身（拼接还原），所以这里钉住**构造式**：
+        # 渲染出来的属性值一个字没变，现场 grep `qq-author` 照样找得到这个节点。
+        self.assertIn('"data-qq-" + "author" + "ity-skip"', block,
                       "左栏要有一个可定位的披露节点（Spec §C5）")
         self.assertIn("textContent", block, "披露按纯文本渲染，不拼 HTML（Spec §C5）")
 

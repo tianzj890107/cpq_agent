@@ -544,11 +544,11 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       + ` data-pb-business-parts-gap="${pbEsc(facts.gapCode)}">`
       + `${pbEsc(facts.headline)}</div>`;
   }
-  // 这一版 BOM 的**部件组行**有多少来自权威清单（Spec `packaging-bom-business-rows-account-panel.md` §C1）：
-  // 材料组那本账由前面两块承担，这里只答部件组这一半 —— 权威清单来的行与几何零件模板展开的行在表格里
-  // 同形，只有这本账能把它们分开（既然决定「该不该去导权威清单」）。行数**只**读 `record.business_rows`
+  // 这一版 BOM 的**部件组行**有多少来自对照表（Spec `packaging-bom-business-rows-account-panel.md` §C1）：
+  // 材料组那本账由前面两块承担，这里只答部件组这一半 —— 对照表来的行与几何零件模板展开的行在表格里
+  // 同形，只有这本账能把它们分开（既然决定「该不该去导对照表」）。行数**只**读 `record.business_rows`
   // （判据在后端那一块账里，前端自己按 `source` 数行就是第二套口径），老载荷（没有这一块）不许与
-  // 「0 行来自权威清单」同形。
+  // 「0 行来自对照表」同形。
   function pbBusinessRowsAccount(record) {
     const root = (record && typeof record === 'object' && !Array.isArray(record)) ? record : {};
     const scope = (root.business_rows && typeof root.business_rows === 'object'
@@ -561,13 +561,13 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     const boxParts = count(scope ? scope.box_part_total : undefined);
     const optionalParts = count(scope ? scope.optional_part_total : undefined);
     const needsInput = count(scope ? scope.needs_input_total : undefined);
-    // 判据顺序（§C1）：不是对象 → 未知档；行数 > 0 → 有权威清单的行；否则这一版一行都没来自权威清单。
+    // 判据顺序（§C1）：不是对象 → 未知档；行数 > 0 → 有对照表的行；否则这一版一行都没来自对照表。
     const state = scope ? (total > 0 ? 'ready' : 'empty') : 'unknown';
     const headlines = {
-      ready: `部件组行：来自权威清单 ${total} 行（盒型件 ${boxParts} 件 · 选配件 ${optionalParts} 件），`
+      ready: `部件组行：来自对照表 ${total} 行（盒型件 ${boxParts} 件 · 选配件 ${optionalParts} 件），`
         + `其中缺输入 ${needsInput} 行。`,
-      empty: '这一版 BOM 的部件组行没有一行来自权威清单（部件组是按几何零件模板展开的）。',
-      unknown: '后端没给部件组行的来源账（老载荷）：说不清这一版 BOM 的部件组行是权威清单还是模板来的。'
+      empty: '这一版 BOM 的部件组行没有一行来自对照表（部件组是按几何零件模板展开的）。',
+      unknown: '后端没给部件组行的来源账（老载荷）：说不清这一版 BOM 的部件组行是对照表还是模板来的。'
     };
     return {
       state: state, total: total, boxParts: boxParts, optionalParts: optionalParts,
@@ -1353,9 +1353,9 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     bom_rebuilt: 'BOM 已重建（尺寸 / 材料 / 行数变了）',
     route_reconfirmed: '工艺路线已重新确认',
     provenance_missing: '这份成本是旧版本算的，没有记下来源（无从判断输入是否变过）',
-    // 权威清单重新导入 = 这份成本照的那一版业务部件清单已经换过（Spec
+    // 对照表重新导入 = 这份成本照的那一版业务部件清单已经换过（Spec
     // `packaging-business-parts-version-pinning.md` §2.4）：不许把码直接甩给用户。
-    business_parts_reimported: '按上一版业务部件清单建的（权威清单重新导入过，请重建 BOM 后重算成本）',
+    business_parts_reimported: '按上一版业务部件清单建的（对照表重新导入过，请重建 BOM 后重算成本）',
   };
   function pcStaleLine(reason) {
     return PC_STALE_REASONS[String(reason || '')] || `输入已变（${reason}）`;

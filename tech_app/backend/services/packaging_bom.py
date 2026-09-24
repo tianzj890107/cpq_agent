@@ -72,15 +72,20 @@ PART_CATEGORIES = ("box_part", "optional_part")
 #: 与 `kb_packaging_part_template`（模板展开）/ `dwg_parts`（几何回填）并列的第三类来源。
 BUSINESS_ROW_SOURCE = "packaging_business_parts_authority"
 
-#: 权威清单出处的 `size_source_json.kind`（Spec `packaging-bom-business-parts-rows.md` §C1）：
-#: 与 `dwg_binding`（几何零件）/ 模板展开并列的第三类尺寸出处。判"这一行是不是权威清单建的"
+#: 对照表出处的 `size_source_json.kind`（Spec `packaging-bom-business-parts-rows.md` §C1）：
+#: 与 `dwg_binding`（几何零件）/ 模板展开并列的第三类尺寸出处。判"这一行是不是对照表建的"
 #: 只认这个值（Spec `packaging-business-parts-version-pinning.md` §2.2 第 4 条）。
+#: 尺寸出处 `kind`（Spec `packaging-customer-workbook-is-a-reference-not-an-input.md` §2.4）：
+#: **新写入**用 `reference_workbook`；老行里的 `authority_workbook` 仍必须被识别（同一件事的两个
+#: 名字，判据收在 `REFERENCE_SIZE_KINDS` 一处）。
 AUTHORITY_SIZE_KIND = "authority_workbook"
+REFERENCE_SIZE_KIND = "reference_workbook"
+REFERENCE_SIZE_KINDS = (REFERENCE_SIZE_KIND, AUTHORITY_SIZE_KIND)
 
 #: 业务部件清单版本漂移的原因闭集（Spec `packaging-business-parts-version-pinning.md` §2.2）。
 BUSINESS_PARTS_STALE_REASONS = ("business_parts_reimported", "binding_without_version")
 
-#: 权威原文里出现这个词的件是**外购件**（真样本 `顶托EVA`「外购，用量1个」、
+#: 清单原文里出现这个词的件是**外购件**（真样本 `顶托EVA`「外购，用量1个」、
 #: `磁铁`「外购，用量8/套」）—— 只看这一个词，不做别的语义推断。
 PURCHASED_KEYWORDS = ("外购",)
 
@@ -502,7 +507,7 @@ def _part_item(entry: dict) -> dict:
 def _positive_number(value: Any) -> Optional[float]:
     """只有**真的数字**且 > 0 才算尺寸（Spec §C1）。
 
-    字符串（含 `"307.07"` 这种"看起来像数"的）一律当"没有"：权威清单的尺寸由导入器
+    字符串（含 `"307.07"` 这种"看起来像数"的）一律当"没有"：对照表的尺寸由导入器
     解析成数字落库，这里再替它 `float()` 一次就是在替上游猜 —— 猜错的那一件没人看得见。
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -516,17 +521,26 @@ def _positive_number(value: Any) -> Optional[float]:
     return number
 
 
-def _authority_size_source(authority: dict, *, business_parts_id: str = "",
+def _reference_block(row: Any) -> dict:
+    """行上的「对照资料」块（Spec `packaging-customer-workbook-is-a-reference-not-an-input.md` §2.4）。
+
+    延迟导入：`packaging_parts` 在模块层 import 本模块，这里不能在模块层反向 import。
+    """
+    from . import packaging_parts
+    return packaging_parts.business_part_reference_block(row)
+
+
+def _reference_size_source(reference: dict, *, business_parts_id: str = "",
                            business_parts_hash: str = "") -> dict:
-    """权威清单的尺寸出处（表 + 行 + **建的当时那一版清单**）；一个出处都拼不出就给 `{}`。
+    """对照表的尺寸出处（表 + 行 + **建的当时那一版清单**）；一个出处都拼不出就给 `{}`。
 
     Spec `packaging-business-parts-version-pinning.md` §2.1：与零件轴把 `parts_id` / `parts_hash`
     写进 `size_source_json.dwg_binding` 是**同一个范式** —— 行上固定它建的时候照的那一版清单，
     读侧才比得出"这份 BOM 是按上一版清单做的"。文档没给版本就写空串（**不许**拿时间 / 行号 /
     当前清单顶一个）；出处本身拼不出（没有表名与行号）时与今天一样给 `{}`，一个键都不加。
     """
-    source = authority.get("source") if isinstance(authority.get("source"), dict) else {}
-    out: dict = {"kind": AUTHORITY_SIZE_KIND}
+    source = reference.get("source") if isinstance(reference.get("source"), dict) else {}
+    out: dict = {"kind": REFERENCE_SIZE_KIND}
     sheet = _text(source.get("sheet"))
     if sheet:
         out["sheet"] = sheet
@@ -551,7 +565,7 @@ def business_part_rows(business_doc: Any) -> list:
     - 尺寸只认权威数字（`> 0`），缺哪个就把哪个写进 `missing_variables`，**绝不反推、绝不编数**；
     - `process_text` 里写「外购」的件归 `optional_part`（采购件），其余是 `box_part`；
     - **不写** `role`（业务角色留给人工映射）、**不写** `material_code`（材料码映射是另一批）、
-      **不写**三个尺寸表达式（权威清单没有表达式）。
+      **不写**三个尺寸表达式（对照表没有表达式）。
     """
     rows = business_doc.get("business_parts") if isinstance(business_doc, dict) else None
     if not isinstance(rows, list):
@@ -569,11 +583,11 @@ def business_part_rows(business_doc: Any) -> list:
         if not code or code in seen:
             continue
         seen.add(code)
-        authority = row.get("authority") if isinstance(row.get("authority"), dict) else {}
-        process_text = _text(authority.get("process_text"))
+        reference = _reference_block(row)
+        process_text = _text(reference.get("process_text"))
         purchased = any(word in process_text for word in PURCHASED_KEYWORDS)
-        length = _positive_number(authority.get("length_mm"))
-        width = _positive_number(authority.get("width_mm"))
+        length = _positive_number(reference.get("length_mm"))
+        width = _positive_number(reference.get("width_mm"))
         missing = [name for name, value in (("length_mm", length), ("width_mm", width))
                    if value is None]
         out.append({
@@ -581,14 +595,14 @@ def business_part_rows(business_doc: Any) -> list:
             "item_key": code,
             "item_name": _text(row.get("name")) or code,
             "part_code": code,
-            "material": _text(authority.get("material_text")) or None,
+            "material": _text(reference.get("material_text")) or None,
             "material_code": "",
-            "quantity": _num(authority.get("quantity")),
+            "quantity": _num(reference.get("quantity")),
             "unit": "件",
             "length_mm": length,
             "width_mm": width,
-            "size_source_json": _json_text(_authority_size_source(
-                authority, business_parts_id=doc_id, business_parts_hash=doc_hash)),
+            "size_source_json": _json_text(_reference_size_source(
+                reference, business_parts_id=doc_id, business_parts_hash=doc_hash)),
             "status": "needs_input" if missing else "computed",
             "missing_variables": missing,
             "is_optional": 1 if purchased else 0,
@@ -599,7 +613,7 @@ def business_part_rows(business_doc: Any) -> list:
 
 def business_material_rows(business_doc: Any, *, materials: Any = None,
                           map_entries: Any = None) -> list:
-    """权威清单的材料原文 → BOM 的**材料组**行（Spec `packaging-bom-business-material-rows.md` §C1）。
+    """对照表的材料原文 → BOM 的**材料组**行（Spec `packaging-bom-business-material-rows.md` §C1）。
 
     纯函数：不读库、不读文件、不联网、不改入参（`materials` 由调用方传进来 ——
     传进来才做材料码解析，不传就留空串，绝不自己去摸知识库）。
@@ -618,8 +632,8 @@ def business_material_rows(business_doc: Any, *, materials: Any = None,
     for row in parts:
         if not isinstance(row, dict):
             continue
-        authority = row.get("authority") if isinstance(row.get("authority"), dict) else {}
-        text = _text(authority.get("material_text"))
+        reference = _reference_block(row)
+        text = _text(reference.get("material_text"))
         if text and text not in texts:
             texts.append(text)
     if not texts:
@@ -644,7 +658,7 @@ def business_material_rows(business_doc: Any, *, materials: Any = None,
 def _business_material_scope(items: list, *, map_entries: Any = None,
                              map_available: bool = True, map_unavailable: Any = None,
                              map_source: str = "", map_fingerprint: str = "") -> dict:
-    """这一版 BOM 的材料组行有多少来自权威清单、其中多少解析到了材料码（Spec §C3）。
+    """这一版 BOM 的材料组行有多少来自对照表、其中多少解析到了材料码（Spec §C3）。
 
     既有四键（`row_total` / `resolved_total` / `unresolved_total` / `keys`）**一字不动**；
     本批新增的是**加法**：`reason_counts`（只放非零档）、`map_hit_total` 与映射表本身的出处
@@ -715,7 +729,7 @@ def _has_result_document(project_id: str, business_parts_doc: Any = None) -> boo
 def _empty_expansion(box_type_code: str) -> dict:
     """模板表缺位但有零件文档时的空展开壳（Spec §2.3）。
 
-    部件组行由零件 / 业务部件文档出（`_assemble()` 的权威清单分支），模板展开一个不参与；
+    部件组行由零件 / 业务部件文档出（`_assemble()` 的对照表分支），模板展开一个不参与；
     这里只给 `_assemble()` 需要的那几个键。
     """
     return {"engine_version": ENGINE_VERSION, "box_type_code": _text(box_type_code),
@@ -763,7 +777,7 @@ def _save_template_gap(project_id: str, requirement_no: str, gap: Any) -> None:
 
 
 def _business_rows_scope(items: list) -> dict:
-    """这一版 BOM 的部件组行有多少来自权威清单（Spec §C3）。判据只认行上的 `source`。"""
+    """这一版 BOM 的部件组行有多少来自对照表（Spec §C3）。判据只认行上的 `source`。"""
     rows = [item for item in items
             if _text(item.get("source")) == BUSINESS_ROW_SOURCE
             and _text(item.get("bom_category")) in PART_CATEGORIES]
@@ -809,7 +823,7 @@ def _assemble(expanded: dict, box: dict, data: dict, requirement_no: str, *,
         "source": "kb_packaging_box_type",
     })
 
-    # 2) 盒型部件 / 可选部件：**有权威清单就用清单**（Spec
+    # 2) 盒型部件 / 可选部件：**有对照表就用清单**（Spec
     #    `packaging-bom-business-parts-rows.md` §C2），否则逐字回到模板展开。
     authority_rows = business_part_rows(business_parts)
     if authority_rows:
@@ -818,7 +832,7 @@ def _assemble(expanded: dict, box: dict, data: dict, requirement_no: str, *,
         for entry in expanded["parts"]:
             items.append(_part_item(entry))
 
-    # 3) 材料：有权威清单就按**清单里的去重原文**收（Spec
+    # 3) 材料：有对照表就按**清单里的去重原文**收（Spec
     #    `packaging-bom-business-material-rows.md` §C2），否则逐字回到模板展开的部件材料。
     materials = _material_index()
     authority_materials = business_material_rows(business_parts, materials=materials,
@@ -837,7 +851,7 @@ def _assemble(expanded: dict, box: dict, data: dict, requirement_no: str, *,
                 "item_key": text,
                 "item_name": text,
                 "material": text,
-                # 模板展开这条分支与权威清单**同口径**（Spec §C2）：映射一样优先。
+                # 模板展开这条分支与对照表**同口径**（Spec §C2）：映射一样优先。
                 "material_code": resolve_material_code(text, materials,
                                                        map_entries=map_entries),
                 "status": "computed",
@@ -1452,7 +1466,7 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
             "parts_id": parts_scope["parts_id"],
             "parts_hash": parts_scope["parts_hash"],
             # 这一版 BOM 是照哪一版**业务部件**清单配的（Spec
-            # `packaging-business-parts-and-cad-plan-view.md` §7）：没有权威清单时给 ""
+            # `packaging-business-parts-and-cad-plan-view.md` §7）：没有对照表时给 ""
             # —— 与零件版本并列，两把尺子分开记。
             "business_parts_id": business_scope["business_parts_id"],
             "business_parts_hash": business_scope["business_parts_hash"],
@@ -1495,7 +1509,7 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
             "gap": dict(business_scope["gap"] or {}),
         },
         # 部件组行的第二把账（Spec `packaging-bom-business-parts-rows.md` §C3）：这一版
-        # BOM 里有多少部件组行来自权威清单（键**必须存在**，没有时全 0 / `[]`）。
+        # BOM 里有多少部件组行来自对照表（键**必须存在**，没有时全 0 / `[]`）。
         "business_rows": _business_rows_scope(items),
         # 材料组的同一把账（Spec `packaging-bom-business-material-rows.md` §C3）：与上面的
         # 部件组**分开**，键同样**必须存在**。
@@ -1698,19 +1712,19 @@ def _parts_binding_scope(project_id: str, items: list) -> dict:
 def _business_parts_stale_rows(items: Any, current_hash: str) -> list:
     """行上固定的清单版本 vs 当前清单（Spec `packaging-business-parts-version-pinning.md` §2.2）。
 
-    判据**只认行上留痕**（`size_source_json.kind == AUTHORITY_SIZE_KIND` 的
-    `business_parts_hash`），不在这里另算一套；没有权威出处的行（模板行 / 人工行）不进列表 ——
+    判据**只认行上留痕**（`size_source_json.kind` 落在 `REFERENCE_SIZE_KINDS` 里的
+    `business_parts_hash`），不在这里另算一套；没有对照出处的行（模板行 / 人工行）不进列表 ——
     它们本来就没有"照哪一版清单建的"这回事。`item_key` 升序，稳定输出。
 
     - 行上有版本、与当前不同 → `business_parts_reimported`；
-    - 行上有权威出处但**没有**版本（本批之前建的历史行）→ `binding_without_version`。
+    - 行上有对照出处但**没有**版本（本批之前建的历史行）→ `binding_without_version`。
     """
     stale: list = []
     for row in (items or []):
         if not isinstance(row, dict):
             continue
         source = _loads(row.get("size_source_json"), {}) if row.get("size_source_json") else {}
-        if not isinstance(source, dict) or _text(source.get("kind")) != AUTHORITY_SIZE_KIND:
+        if not isinstance(source, dict) or _text(source.get("kind")) not in REFERENCE_SIZE_KINDS:
             continue
         bound_hash = _text(source.get("business_parts_hash"))
         if bound_hash and current_hash and bound_hash == current_hash:
@@ -1729,7 +1743,7 @@ def _business_parts_scope(project_id: str, items: Any = None) -> dict:
     `packaging-business-parts-and-cad-plan-view.md` §2 第 1 条 / §7 / §8）。
 
     为什么单列一份：几何零件文档（`packaging_parts`）是**证据**，业务部件才是 BOM / 工艺 /
-    成本该遍历的集合。没有权威清单时不许回退成几百个几何件，也不许静默 —— 所以这里把
+    成本该遍历的集合。没有对照表时不许回退成几百个几何件，也不许静默 —— 所以这里把
     `business_parts_id/hash`、件数与缺口一起披露出来，键**必须存在**。
 
     读不到 / 还没导入 → `available=False` 且 `gap` 给出 `business_parts_missing`（含
@@ -1894,7 +1908,7 @@ def build_bom(project_id: str, requirement_no: str = "", *,
         expanded = expand_parts(box_code, data, overrides=overrides or {})
     else:
         # 模板表缺位但项目里有零件文档：业务表不是判死门槛（Spec §2.3），只作披露，
-        # 部件组行与材料组行一律从零件 / 业务部件文档出（`_assemble()` 的权威清单分支）。
+        # 部件组行与材料组行一律从零件 / 业务部件文档出（`_assemble()` 的对照表分支）。
         template_gap = _template_gap_detail(box_code)
         expanded = _empty_expansion(box_code)
     _save_template_gap(project_id, req_no, template_gap)
