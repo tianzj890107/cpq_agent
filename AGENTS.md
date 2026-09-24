@@ -21,6 +21,16 @@
 - 业务实现由用户安排 DeepSeek 完成。DeepSeek 返回实现后，Codex负责代码审查、运行测试和核对 spec；发现问题时继续给出针对 DeepSeek 的修正提示词，不越过该边界自行补业务实现。
 - 仅限测试脚手架、spec、提示词、仓库配置和用户明确授权 Codex 修改的非业务文件，可由 Codex直接修改。
 
+## 本地测试的临时目录
+
+- 跑测试统一用 `./open-claude/.venv/bin/python -W ignore -m unittest tests.test_xxx`：`tests/__init__.py`
+  会在这次运行下面铺一个 `cpq-testrun-*` 根（`tests/_tmp_guard.py`），`tempfile.tempdir` 与 `TMPDIR`
+  都指过去，退出时整根删掉。直接用 `python tests/test_x.py` 走不到这个闸门。
+- 调试红测要看临时目录：`CPQ_TEST_KEEP_TMP=1 <同一条命令>`（现场留在打印出来的 `cpq-testrun-*` 根里，
+  看完自己删）；不想要那行收尾提示用 `CPQ_TEST_TMP_QUIET=1`。
+- 收历史垃圾与被打断的运行：`python3 scripts/reclaim_test_tmpdirs.py`（默认只报告）→
+  `python3 scripts/reclaim_test_tmpdirs.py --apply`（默认只删 6 小时前、且只删认得名字的家族；`--older-than` 可调）。
+
 ## 提交与推送检查
 
 - 不提交密钥、本地配置、历史会话、数据库运行文件、缓存或 `.DS_Store`。

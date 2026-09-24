@@ -21186,3 +21186,54 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
 
 - 不动右栏图形区 / 3D / 披露句与部件图那几条；不改几何分量行的版式；不改成本 / 几何 / 匹配口径。
 - 未 push / MR / tag / Release / 部署 / 重启服务；未连 PG 写数据。
+
+## 497. 本地测试的临时目录不再往系统 TMPDIR 里堆：一次全量 1371 个目录 → 0，当天回收 116.9 GB（9-24，Codex 实现）
+
+用户原话（2026-09-24）：
+
+> 修改本地测试的临时目录的清理逻辑，现在占了几十G的临时项目，你看一下怎么回事，看一下应该用什么逻辑清理
+
+### 现场（清理前，只读实测）
+
+- 系统 TMPDIR（`/private/var/folders/…/T`）：**335 350 个条目 / 123 GB**，其中无前缀 `tmp########`
+  227 426 个、99.7 GB；最大的单个目录 14.2 MB，绝大多数是 0.5–1 MB 的临时 SQLite 副本。
+- 一次全量（400 个模块）会新建 **1371 个临时目录**，全部留在系统 TMPDIR 里。
+- 根因不是某一条用例忘了删：`tests/` 里 34 处 `tempfile.mkdtemp()`（无前缀）+ 118 处
+  `mkdtemp(prefix=…)`，只有 38 处自己挂了 `addCleanup(shutil.rmtree, …)` —— **整套用例没有统一出口**。
+
+### 改了什么（测试脚手架，`AGENTS.md` 允许直接改）
+
+- 新增 `tests/_tmp_guard.py` + `tests/__init__.py`：每次 `python -m unittest tests.xxx` 先在系统 TMPDIR
+  下铺一个 `cpq-testrun-XXXX` 根，把 `tempfile.tempdir` 与 `TMPDIR` **都**指过去（测试拉起的子进程
+  也落在这个根里），退出时整根删。`rmtree` 在 import 时就抓住，红测里 `mock.patch("shutil.rmtree", boom)`
+  不会把退出清理带崩；`install()` 幂等；`CPQ_TEST_KEEP_TMP=1` 保留现场，`CPQ_TEST_TMP_QUIET=1` 关提示。
+  闸门装不上时只提示一行，不让测试会话起不来。
+- 新增 `scripts/reclaim_test_tmpdirs.py`：收历史垃圾与被打断的运行（默认只报告，`--apply` 才删）。家族清单
+  **从源码的 `mkdtemp(prefix="…")` 字面量派生**（现有 121 个前缀），无前缀 `tmp########` 这一类额外
+  要求"里面有我们的载荷"（临时 SQLite / `real*.dxf` / `pkg*` / store 桶 / gate 输出…）；只动 6 小时前
+  没被动过的（`--older-than` 可调）；根只允许临时目录那种位置 —— 仓库根、home、`/` 及其上级一律拒绝；
+  不跟随符号链接、不删文件、只扫直接子目录。
+- 新增护栏 `tests/test_local_tmp_cleanup_guard.py`（12 条，子进程真跑）：`import tests` 之后
+  `tempfile.gettempdir()` 与 `TMPDIR` 必须都指向 `cpq-testrun-*`，退出后本次建的目录与根都必须不存在，
+  `CPQ_TEST_KEEP_TMP=1` 必须留着；加 janitor 判据：系统条目（`TemporaryItems` 这种）绝不认成自家垃圾、
+  年龄门、载荷证据、symlink / 文件不动、家族必须从源码派生、禁用根必须拒绝。
+- `AGENTS.md` 新增「本地测试的临时目录」一节；`scripts/README.md` 新增第 4 节（怎么跑、怎么收）。
+
+### 实测
+
+- 闸门生效：`tests.test_packaging_cost_engine_red` → `Ran 81 … OK`，系统 TMPDIR 条目 **+0**，
+  闸门自己报「清掉 163 个临时目录」；保护网 11 个模块（DWG 转换 / 质量修复 / 零件提取 / gate /
+  部署自检 / 评估契约 / CAD IR / 视觉模型）→ `Ran 320 … FAILED (failures=2, skipped=2)`（两条都是既有的
+  `test_cpq_eval_ci_contract`），条目 **+0**。
+- 全量 400 个模块：`Ran 6697 tests in 548.8s … FAILED (failures=9, skipped=28)` —— 2 条既有
+  `test_cpq_eval_ci_contract` + 7 条属**并行会话未提交**的件图/工艺分色改动（`drawing-flow.css` /
+  `agent-chat.css` / `cad_ir/parser.py` 等，本批一个都没碰）；这一次运行闸门清掉 1120 个目录。
+- 清收（`--apply`）：**删 220 482 个目录 / 116.9 GB，失败 0**；再 `--include-empty` 收 99 279 个空目录。
+  TMPDIR 从 335 350 个条目 / 123 GB 降到 **15 589 个 / 5.1 GB**；`df` 可用空间从 32 Gi 回到 **150 Gi**。
+  剩下的是 6 小时内新产生的（并行会话正在跑的）与不认得的家族，按设计不动。
+
+### 明确没做
+
+- 没碰并行会话未提交的件图 / 分色 / 任务卡那批文件，也没改任何既有红测的断言；
+- 未 push / MR / tag / Release / 部署 / 重启服务；未连 PG；
+- `tests/test_local_tmp_cleanup_guard.py` 是**护栏**不是红测 —— 本批是测试脚手架，不是业务能力。
