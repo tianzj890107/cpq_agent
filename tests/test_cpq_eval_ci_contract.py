@@ -308,6 +308,15 @@ class CiDependencyCoverageTest(unittest.TestCase):
         self.assertEqual(missing, [],
                          f"生产入口 import 的第三方模块不在 requirements.txt 闭包里：{missing}")
 
+    def test_a_required_dependency_is_never_excused_as_optional(self):
+        """反向对照：真缺的依赖不许被「可选依赖」这条路径放行。
+
+        可选依赖的判定是「挡掉它，生产入口还装得起来」（`## 498`）。挡掉入口硬 import 的
+        包（fastapi），入口必须装不起来 —— 那一步回空集，缺出处的判定照旧生效。
+        """
+        self.assertEqual(ci_contract_mod.modules_the_entry_loads_without([]), set())
+        self.assertEqual(ci_contract_mod.modules_the_entry_loads_without(["fastapi"]), set())
+
     def test_dependency_closure_is_not_trivially_equal_to_declared(self):
         closure = self.closure
         self.assertTrue(self.requirements <= closure,
@@ -325,9 +334,15 @@ class CiDependencyCoverageTest(unittest.TestCase):
             self.skipTest("环境里没有任何可解析安装元数据，无法验证传递依赖展开")
         self.assertTrue(closure - self.requirements,
                         "声明包一个传递依赖都没展开，依赖闭包退化为逐字比对")
-        # 未显式请求 extras 的包不应把 extras 依赖算进来（openai 不装 numpy / pandas）。
+        # 未显式请求 extras 的包不应把 extras 依赖算进来：ezdxf==1.4.4 的 draw / draw5 /
+        # dev extras 里那一串（PySide6 / PyQt5 / matplotlib）一个都没被请求，一个都不该出现；
+        # openai 的可选 datalib extras（pandas）同理。numpy 已不是这条的判据 —— 它现在是
+        # ezdxf 的**硬依赖**（`Requires-Dist: numpy`，无 marker），装了 ezdxf 就有它，与
+        # 「extras 没请求却跟进」无关（`## 498`）。extras 口径本身不许放宽。
         self.assertNotIn("pandas", closure)
-        self.assertNotIn("numpy", closure)
+        self.assertNotIn("matplotlib", closure)
+        self.assertNotIn("pyside6", closure)
+        self.assertNotIn("pyqt5", closure)
         self.assertIn("uvicorn", closure)
 
     def test_third_party_modules_are_not_empty(self):

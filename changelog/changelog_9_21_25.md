@@ -21237,3 +21237,42 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
 - 没碰并行会话未提交的件图 / 分色 / 任务卡那批文件，也没改任何既有红测的断言；
 - 未 push / MR / tag / Release / 部署 / 重启服务；未连 PG；
 - `tests/test_local_tmp_cleanup_guard.py` 是**护栏**不是红测 —— 本批是测试脚手架，不是业务能力。
+
+## 498. 两条 `test_cpq_eval_ci_contract` 假红收口：依赖契约按「干净镜像装不装得起来」判，不看开发机上装了什么（24 OK）（9-24，Codex 实现）
+
+`## 497` 全量里剩下的 2 条非并行会话红。两条都不是「测试数写错」也不是「缺实现」，而是契约把
+**开发机的环境**当成了判据。
+
+### 现场（只读实测）
+
+- `test_every_production_import_has_a_requirement`：判 `cadquery` / `multimethod` / `nlopt` / `typish`
+  「没有出处」。真因是 `requirements.txt:48` 把 `cadquery` **故意注释掉**（重依赖 + 要 OCCT 运行库，
+  缺了只是 `generate-geometry` 返回 503），而 `tech_app/backend/services/geometry.py:22` 是 guard import；
+  开发机装了它，`sys.modules` 里就多出这四个名字 —— 干净镜像（CI）里它们根本不出现，于是**在 CI 绿、
+  在本机红**。
+- `test_dependency_closure_is_not_trivially_equal_to_declared`：断言 `numpy ∉ 闭包`，但
+  `requirements.txt:17` 的 `ezdxf==1.4.4` 元数据里 `Requires-Dist: numpy` 是**无条件硬依赖**
+  （`fonttools` 同）。numpy 从被声明包的基础依赖进来，与「extras 没请求却跟进」无关。
+- 反向实测：把 `cadquery` 一族全挡掉再装生产入口，`prodkit.load()` 照样装载成功（146 个顶层模块）。
+
+### 改了什么（测试脚手架 / CI 契约，`AGENTS.md` 允许直接改）
+
+- `scripts/cpq_eval/ci_contract.py`：`production_third_party_modules()` 改成返回生产入口**必需**的第三方
+  顶层模块；新增 `modules_the_entry_loads_without(candidates)` —— 用一次**真装载**判定可选依赖：先插一层
+  meta_path finder 把这些模块全部挡成 `ImportError`（等价于干净镜像里没装它们），入口还装得起来才算可选、
+  才从清单里剔除；挡掉就装不起来时回空集，缺出处的判定照旧生效（fail-safe）。判定不看名字、不看注释。
+- `tests/test_cpq_eval_ci_contract.py`：extras 那条换成了**更强**的判据 —— 从「不许有 numpy」换成
+  「ezdxf 的 draw / draw5 / dev extras 那一串（PySide6 / PyQt5 / matplotlib）与 openai 的 datalib extras
+  （pandas）一个都不许出现」；extras 口径没放宽。另加反向对照
+  `test_a_required_dependency_is_never_excused_as_optional`：挡掉入口硬 import 的 `fastapi` 必须装不起来。
+- 本批只动了这两个文件：**没有改任何业务实现**，没有改 `requirements.txt`，没有改 CAD 主路径的 import 写法，
+  红测里只动了上面那一处判据（而且是从弱到强）。
+
+### 实测
+
+- `tests.test_cpq_eval_ci_contract`：修前 `Ran 23 … FAILED (failures=2)`；修后
+  `Ran 24 tests in 3.9s … OK`（多出来的一条是反向对照）。
+- 反向对照实跑：`modules_the_entry_loads_without(['fastapi']) == set()`；
+  `modules_the_entry_loads_without(['cadquery','multimethod','nlopt','typish'])` 正好回这四个。
+- 至此「非并行会话红」清零；剩下的 7 条（件图分色 / 视口高度 / 字体声明 / 品牌色字面量）全部属并行会话
+  未提交的 `## 496` 改动，本批一个都没碰。未推送、未部署（`AGENTS.md`：未明确要求不自行推送）。
