@@ -341,3 +341,6 @@ button.oc-file-name{width:100%;padding:0;border:0;background:none;text-align:lef
 .part-item.packaging-business-part .part-name{font-size:12px}
 .part-item.packaging-business-part .part-meta{font-size:11px;line-height:1.45;color:var(--text-secondary)}
 .part-item.packaging-business-part .part-note{font-size:11px}
+/* 材料另起一行（Spec `packaging-2-1-part-row-size-and-material-lines.md` §2.2/§2.5）：
+   与尺寸同一档字号（≤11px），不许比件名大。 */
+.part-item.packaging-business-part .part-material{font-size:11px;line-height:1.45;color:var(--text-secondary)}

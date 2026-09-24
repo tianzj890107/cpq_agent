@@ -146,3 +146,15 @@
 | C6 页面 | `tech_app/frontend/app.js`：`packagingBusinessPartTruthLabel()` / `packagingBusinessTruthLine()` + 业务树两处渲染 | F1–F4 绿（`node` 真跑两条纯函数 + `node --check` 通过） |
 
 复跑（本机 `./open-claude/.venv/bin/python -W ignore -m unittest`）与全量保护网见 changelog `## 476`。
+
+## 附：口径变更（2026-09-24，`## 495`）
+
+用户要求「已在图纸中定位 / 图上识别 这两句直接不要」。本批把 **`observed` 档的标签去掉**：
+
+- `packagingBusinessPartTruthLabel("observed")` 回空串，行上不出现这一行；
+- `inferred`（`规则纠名（推断）`）与 `pending_confirmation`（`结构规则补件（待确认）`）**逐字不变**；
+- 三档计数那一行（`识别 a · 推断 b · 待确认 c`）**不动**；
+- 详见 `docs/specs/packaging-2-1-part-row-size-and-material-lines.md` §2.3 / §2.4。
+
+`tests/test_packaging_business_truth_state_disclosure_red.py` 的 `TRUTH_LABELS["observed"]`
+按本批改成空串（本批唯一允许改动的既有红测断言）。

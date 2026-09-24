@@ -21079,3 +21079,50 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
   本批只改"怎么说"，不改"部件图从哪来"。
 - 不做 2.1 图面 / 版式改动；不提供"自动从图纸生成部件图"（那件事的出路仍然只有导入权威清单）。
 - 未 push / MR / tag / Release / 部署 / 重启服务；未连 PG 写数据。
+
+## 495. 2.1 业务部件行：尺寸只留两位小数、材料另起一行、去掉「已在图纸中定位」「图上识别」（15 OK；红基 8 FAIL；反向对照 8 红）（9-24，Codex 实现）
+
+用户原话（2026-09-24）：
+
+> 218.19700899999998×68.2460000000001 mm 保留两位小数
+> 然后材料这里换行 225G铜版底PET光银 这两个东西之间不需要这个 ·
+> 然后已在图纸中定位 / 图上识别 这两句直接不要
+
+### 改了什么
+
+- **尺寸不再漏浮点原值**：`app.js` 新增纯函数 `packagingMmText()`（四舍五入两位、去尾零），
+  `packagingPartSizeText()` 与 `packagingBusinessPartSizeText()` 都走它（`218.19700899999998` → `218.2`、
+  `68.2460000000001` → `68.25`、`300` → `300`）；后端 `packaging_parts._mm_text()` 同口径（`%.3f` → `%.2f`），
+  因为它会被拼进给用户看的结论句。客户 / 图纸**原文**（`product_size_text`）照旧逐字，不格式化。
+- **材料另起一行**：`renderPackagingBusinessTree()` 把「尺寸 · 材料」同节点拆成 `.part-meta`（只尺寸）+
+  `.part-material`（材料），` · ` 拼接删除；`workbench.css` 给 `.part-material` 一条 11px 规则
+  （`.part-meta` / `.part-note` 既有字号规则一个字没动）。
+- **两句直接不要**：新增纯函数 `packagingBindingStatusText(status)` 作为绑定状态的统一出口
+  （`bound` → 空串，其余三档逐字不变），`PACKAGING_BINDING_COPY` 删掉 `bound` 这一档；行、右栏「定位状态」、
+  坐标兜底三处都走它；`packagingBusinessPartTruthLabel("observed")` 回空串（行上不再出那一行）。
+  三档计数那一行（`识别 a · 推断 b · 待确认 c`）没动。
+- **坐标兜底不许误触发**：那一支显式判 `bindingStatus === "bound"` —— 绑上了却画不出，说的是
+  「这一件在图纸里定位到了，但这一版平面图还没有它的坐标」，不再借 `bound` 没文案就报「这批零件没有坐标」。
+
+### 产物
+
+- Spec：`docs/specs/packaging-2-1-part-row-size-and-material-lines.md`（状态行收口为合法字面量
+  「Spec + 红测（已实现）」+ §5 落地表 / §5.1 反向对照 / §5.2 保护网 / §5.3 一处代理断言的说明）；
+  `docs/specs/packaging-business-truth-state-disclosure.md` §附按本批改了 `observed` 档口径。
+- 红测：`tests/test_packaging_2_1_part_row_size_and_material_lines_red.py`（15 条，E/M/L 三组，
+  `node -e` 抽纯函数真跑 + 源码 / CSS 扫描）；
+  `tests/test_packaging_business_truth_state_disclosure_red.py` 的 `TRUTH_LABELS["observed"]` 按本批改空串
+  （作者侧已改，本批唯一允许改动的既有断言）。
+
+### 实测（本机只读，`./open-claude/.venv/bin/python -W ignore -m unittest`）
+
+- 本批红测：`Ran 15 tests … OK`；红基（`app.js` / `workbench.css` / `packaging_parts.py` 还原到本批之前）
+  ⇒ `Ran 15 … FAILED (failures=8)`（E1–E3 / M1–M2 / M5 / L1–L2），与 Spec 头部记的 8 红逐条对上。
+- 点名保护网 9 个模块 ⇒ `Ran 171 … OK`；包装全族 51 个模块 ⇒ `Ran 805 … OK (skipped=6)`。
+- 全量（400 个模块）⇒ `Ran 6697 … FAILED (failures=4, skipped=28)`：两条既有 `test_cpq_eval_ci_contract`，另两条来自工作区里新出现、还没实现的两份 Spec 的状态行字面量（见 `## 493`）。
+- `node --check tech_app/frontend/app.js` 通过；`git diff --check` 干净。
+
+### 明确没做
+
+- 不动右栏图形区 / 3D / 披露句与部件图那几条；不改几何分量行的版式；不改成本 / 几何 / 匹配口径。
+- 未 push / MR / tag / Release / 部署 / 重启服务；未连 PG 写数据。

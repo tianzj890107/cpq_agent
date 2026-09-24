@@ -46,7 +46,9 @@ WINE = ("47c39dc1ab6738fc48c8",
 
 TRUTH_STATES = ("observed", "inferred", "pending_confirmation")
 #: Spec §2.6 的文案表（逐字）。
-TRUTH_LABELS = {"observed": "图上识别", "inferred": "规则纠名（推断）",
+#: `observed` 的标签按 `## 495` 去掉（用户要求"图上识别"这句直接不要）——
+#: 见 docs/specs/packaging-2-1-part-row-size-and-material-lines.md §2.3/§2.4。
+TRUTH_LABELS = {"observed": "", "inferred": "规则纠名（推断）",
                 "pending_confirmation": "结构规则补件（待确认）"}
 
 EXTRACT_JS = r"""

@@ -4525,11 +4525,15 @@ def business_size_unconfirmed_reason(row: Any) -> str:
 
 
 def _mm_text(value: Any) -> str:
-    """毫米数的人话写法：`300.0` → `300`（去掉多余小数位），取不到 → 空串。"""
+    """毫米数的人话写法：`300.0` → `300`（去掉多余小数位），取不到 → 空串。
+
+    两位小数（Spec `packaging-2-1-part-row-size-and-material-lines.md` §2.1）：这句会被拼进给
+    用户看的结论句，`218.19700899999998` 这种浮点原值不许上屏。
+    """
     number = _num(value)
     if number is None:
         return ""
-    text = ("%.3f" % float(number)).rstrip("0").rstrip(".")
+    text = ("%.2f" % float(number)).rstrip("0").rstrip(".")
     return text or "0"
 
 

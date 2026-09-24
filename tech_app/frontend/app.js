@@ -3340,16 +3340,50 @@ function packagingBusinessPartProcessByAuthority(partCode) {
   return {ok: true, result: {mode: "process", partCode: code}};
 }
 
+// 绑定状态的人话（Spec `packaging-2-1-part-row-size-and-material-lines.md` §2.3）：
+// `bound`（已经定位上了）**不再出任何文字** —— 定位上了是常态，写出来只是噪声；
+// 其余三档逐字不变。纯函数（体内无 DOM / 全局 / 网络调用），可被 node 直接执行；
+// 表里查不到（含 node 单函数直跑时模块常量不可见）回空串，绝不编造档位。
+function packagingBindingStatusText(status) {
+  const code = (status === null || status === undefined) ? "" : String(status).trim();
+  if (!code || code === "bound") return "";
+  const table = (typeof PACKAGING_BINDING_COPY === "object" && PACKAGING_BINDING_COPY) || {};
+  if (table[code]) return table[code];
+  const fallback = {partial: "部分定位", ambiguous: "定位待人工确认", unbound: "尚未在 CAD 图中定位"};
+  return fallback[code] || "";
+}
+
+// 绑上了、这一版平面图却还没有它的坐标时的说明（`## 495` §2.3）：坐标兜底必须**显式**判
+// `bound`，不许因为 `bound` 不再出字就把"绑上了缺坐标"误报成"这批零件没有坐标"。
+const PACKAGING_BOUND_NO_COORDS_NOTE =
+  "这一件在图纸里定位到了，但这一版平面图还没有它的坐标（坐标要等 CAD IR 把折线顶点带进来）。";
+
 const PACKAGING_BINDING_COPY = {
-  bound: "已在图纸中定位", partial: "部分定位", ambiguous: "定位待人工确认", unbound: "尚未在 CAD 图中定位",
+  partial: "部分定位", ambiguous: "定位待人工确认", unbound: "尚未在 CAD 图中定位",
 };
 
+// 毫米数上屏的统一写法（Spec `packaging-2-1-part-row-size-and-material-lines.md` §2.1）：
+// 四舍五入到两位小数、去掉末尾的零（`218.19700899999998` → `218.2`；`300` → `300`，不写 `300.00`）。
+// 纯函数，可被 node 直接执行；取不到就回空串。
+function packagingMmText(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value);
+  return String(Math.round(number * 100) / 100);
+}
+
 function packagingBusinessPartSizeText(row) {
+  // node 单函数直跑看不到兄弟函数（同 `## 492` 的"注入 + 同值兜底"口径）：这里带一份同值兜底。
+  const mm = (typeof packagingMmText === "function") ? packagingMmText : (value => {
+    if (value === null || value === undefined || value === "") return "";
+    const number = Number(value);
+    return Number.isFinite(number) ? String(Math.round(number * 100) / 100) : String(value);
+  });
   const authority = (row && row.authority) || {};
   const text = String(authority.product_size_text || "").trim();
-  if (text) return text;
+  if (text) return text;                       // 客户 / 图纸原文逐字，不许格式化（Spec §2.1）
   const length = authority.length_mm; const width = authority.width_mm;
-  if (length && width) return `${length}×${width} mm`;
+  if (length && width) return `${mm(length)}×${mm(width)} mm`;
   return "";
 }
 
@@ -3364,10 +3398,11 @@ function packagingBusinessPartsSourceLabel(doc) {
 
 /* ---------------- 业务部件的事实档三档（Spec packaging-business-truth-state-disclosure.md §2.6） ----------------
    三档**怎么判**只在解析器里（`packaging_business_part_resolver.TRUTH_STATES`）：页面只照 payload 说，
-   不猜、也绝不把"没给档位"渲染成"图上识别"。两条都是纯函数（体内无 DOM / 全局 / 网络调用）。 */
+   不猜、也绝不把"没给档位"渲染成任何一档。两条都是纯函数（体内无 DOM / 全局 / 网络调用）。
+   `observed`（图纸上识别到的）按 `## 495` §2.3 不再出标签 —— 识到是常态，写出来只是噪声。 */
 function packagingBusinessPartTruthLabel(truthState) {
   const state = (truthState === null || truthState === undefined) ? "" : String(truthState).trim();
-  if (state === "observed") return "图上识别";
+  if (state === "observed") return "";
   if (state === "inferred") return "规则纠名（推断）";
   if (state === "pending_confirmation") return "结构规则补件（待确认）";
   return "";
@@ -3524,6 +3559,8 @@ function renderPackagingBusinessTree(tree, rows) {
     // `truth_state` 决定；空串 / 缺键的行**不**加属性、也不加这一行。
     const truthState = String(row.truth_state || "").trim();
     const truthLabel = packagingBusinessPartTruthLabel(truthState);
+    // 尺寸 / 材料 / 状态各一行（Spec §2.2/§2.3）：状态走后纯函数，`bound` 不出字就不渲染这一行。
+    const bindingText = packagingBindingStatusText(status);
     if (truthLabel) line.setAttribute("data-qq-truth-state", truthState);
     // 版式（Spec `packaging-2-1-parts-row-layout-and-shape-viewport.md` §2.1）：标题一行、
     // 尺寸另起一行、状态一行 —— 三行文字装进一个 `.part-body` 文本容器（对照视觉 IR 那条
@@ -3533,8 +3570,9 @@ function renderPackagingBusinessTree(tree, rows) {
     line.innerHTML = `<div class="part-icon part-icon-box" aria-hidden="true"></div>`
       + `<div class="part-body" title="${esc(rowTitle).replace(/"/g, "&quot;")}">`
       + `<div class="part-name">${esc(code)} ${esc(partName)}</div>`
-      + `<div class="part-meta">${esc(size)}${material ? " · " + esc(material) : ""}</div>`
-      + `<div class="part-note">${esc(PACKAGING_BINDING_COPY[status] || status)}</div>`
+      + `<div class="part-meta">${esc(size)}</div>`
+      + (material ? `<div class="part-material">${esc(material)}</div>` : "")
+      + (bindingText ? `<div class="part-note">${esc(bindingText)}</div>` : "")
       + (truthLabel ? `<div class="part-note packaging-truth-label">${esc(truthLabel)}</div>` : "")
       + `</div>`;
     // 点开一件就能看到它的构成（Spec §2.1c）：那两百多个几何分量按件归属。
@@ -3647,7 +3685,7 @@ function openPackagingBusinessPart(code) {
       pkgPartFactRow("排版", authority.layout_text),
       pkgPartFactRow("工艺", authority.process_text),
       pkgPartFactRow("备注", authority.note),
-      pkgPartFactRow("定位状态", PACKAGING_BINDING_COPY[String(binding.status || "")] || ""),
+      pkgPartFactRow("定位状态", packagingBindingStatusText(String(binding.status || ""))),
       pkgPartFactRow("绑定分量", (binding.component_ids || []).join(" / ")),
       pkgPartFactRow("同组提示", authority.merged_from
         ? "材料/排版/工艺与上一行同组（合并单元格）" : ""),
@@ -3686,8 +3724,15 @@ function openPackagingBusinessPart(code) {
     } else {
       figureHost.setAttribute("data-qq-part-shape", "unavailable");
       pendingPackagingShapePartCode = "";
+      // 未绑定 / 画不出来时给原因，不给空图（Spec §C7）：三档文案统一走 `packagingBindingStatusText()`，
+      // 表 `PACKAGING_BINDING_COPY` 是同一份值（`bound` 已按 `## 495` §2.3 从表里删掉，所以这里
+      // **显式**判 `bound` —— 绑上了却画不出，缺的是坐标，不是"这批零件没有坐标"）。
+      const bindingStatus = String(binding.status || "");
+      const noFigureNote = bindingStatus === "bound"
+        ? PACKAGING_BOUND_NO_COORDS_NOTE
+        : (packagingBindingStatusText(bindingStatus) || PACKAGING_CAD_PLAN_NO_COORDS);
       figureHost.innerHTML = `<div class="view-3d-placeholder">`
-        + `${esc(PACKAGING_BINDING_COPY[String(binding.status || "")] || PACKAGING_CAD_PLAN_NO_COORDS)}`
+        + `${esc(noFigureNote)}`
         + `</div>`;
     }
   }
@@ -5236,10 +5281,14 @@ const PACKAGING_FILTER_REASON_LABELS = {
 
 // 一件零件的尺寸文案（展开长×宽，单位未确认时明说"待确认"）。
 function packagingPartSizeText(part) {
-  const length = (part.unfolded_length_mm === null || part.unfolded_length_mm === undefined)
-    ? "" : String(part.unfolded_length_mm);
-  const width = (part.unfolded_width_mm === null || part.unfolded_width_mm === undefined)
-    ? "" : String(part.unfolded_width_mm);
+  // node 单函数直跑看不到兄弟函数（同 `## 492` 的"注入 + 同值兜底"口径）：这里带一份同值兜底。
+  const mm = (typeof packagingMmText === "function") ? packagingMmText : (value => {
+    if (value === null || value === undefined || value === "") return "";
+    const number = Number(value);
+    return Number.isFinite(number) ? String(Math.round(number * 100) / 100) : String(value);
+  });
+  const length = mm(part && part.unfolded_length_mm);
+  const width = mm(part && part.unfolded_width_mm);
   return (length || width) ? `展开 ${length}×${width} mm` : "展开尺寸待确认";
 }
 
