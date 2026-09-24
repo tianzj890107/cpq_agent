@@ -21303,3 +21303,24 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
 实测：`tests.test_doc_path_and_root_consistency_red` + `tests.test_repo_leftovers_red` +
 `tests.test_local_tmp_cleanup_guard` → `Ran 28 tests in 0.9s … OK`。行为零改动：只动了 AGENTS.md
 的一句话与一个脚本的两处注释（闸门的逻辑、判据、家族清单一个字没动）。
+
+## 501. 补 `## 499` 撞出来的字体守卫假红：`chatcss:207` → `209`（`font-family` 声明逐字未变，只是被上面两行版面改动顶了行号）（9-24，Codex 实现）
+
+`b0e8a19`（`## 499`）里夹带了一处聊天卡版面改动（`.oc-amsg` 的 `width: 80%` + `@media (max-width: 600px)`），
+把 `agent-chat.css` 里那条 `font-family` 声明从第 207 行顶到第 209 行。而
+`tests/test_quote_tech_unified_tool_list_conversation_red.py` 的 `FONT_FAMILY_BASELINE` 是
+「文件:行号:声明原文」的指纹，于是 `f42` / `f43` 变红。
+
+证据（`git show` 逐字比对，声明本体没动）：
+
+    b0e8a19^  207:.oc-atxt.rendered code { font-family: "SFMono-Regular", Consolas, monospace; }
+    b0e8a19   209:（同一行，逐字相同）
+
+本批只同步这一个行号（`tests/test_quote_tech_unified_tool_list_conversation_red.py:61`）：
+字体值、断言条数、其它六条形如 `confirm:NN:…` 的指纹一个都没动，`Ran 35 tests … OK`。
+顺带记一笔守卫本身的脆性 —— 把行号写进指纹，等于「任何在它上面的 CSS 增删都会报字体被改」；
+本批只做最小同步，没有改判据。
+
+同批未动的两条：`test_global_brand_color_red`（`app.js` 的 `#2563eb` 半穿蓝撞上品牌禁用蓝）与
+`test_packaging_task_file_dwg_opens_the_whole_plan_red.test_a6`（整图 cut 用角色表的红、
+旧 §C2 期望表里的蓝）—— 两条都要先有人定配色，不属本批。

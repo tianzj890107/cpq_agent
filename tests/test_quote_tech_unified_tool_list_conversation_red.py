@@ -58,7 +58,7 @@ FONT_FAMILY_BASELINE = (
     "confirm:476:inherit",
     "confirm:498:inherit",
     "confirm:693:inherit",
-    "chatcss:207:\"SFMono-Regular\", Consolas, monospace",
+    "chatcss:209:\"SFMono-Regular\", Consolas, monospace",
 )
 
 # 归一化状态词表（写进 root 的 data-status）。
