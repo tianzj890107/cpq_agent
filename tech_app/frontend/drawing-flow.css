@@ -60,14 +60,12 @@
   background: #fafafb;
   border-radius: 6px;
 }
-/* 右栏零件形状的缩放视口（Spec
-   `packaging-2-1-parts-row-layout-and-shape-viewport.md` §2.2 / §2.3）：高度是**上限**、
-   不吃剩余栏高（`flex` 那几条已在 workbench.css 的 `[data-qq-fill]` 里撤掉），裁剪 +
-   `touch-action:none`；缩放 / 平移只改 svg 的 `transform`，`viewBox` 仍由后端坐标范围产出。 */
+/* 零件图使用与栏宽相同的高度；缩放 / 平移只改 SVG transform。 */
 .packaging-part-shape-viewport {
   position: relative;
-  /* 高度是**上限**（不吃满整栏）；2026-09-24 按用户口径翻倍：min(46vh,420px) → min(92vh,840px)。 */
-  height: min(92vh, 840px);
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  height: auto;
   overflow: hidden;
   touch-action: none;
   background: #fafafb;
@@ -94,6 +92,22 @@
 }
 .packaging-part-shape-viewport[data-qq-shape-dragging] {
   cursor: grabbing;
+}
+.packaging-cad-rule-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 8px 2px;
+  color: var(--text-muted, #6b7280);
+  font-size: 11px;
+}
+.packaging-cad-rule-legend span::before {
+  content: "";
+  display: inline-block;
+  width: 14px;
+  margin-right: 4px;
+  border-top: 2px solid var(--rule-colour);
+  vertical-align: middle;
 }
 .packaging-part-polygon {
   fill: rgba(16, 185, 129, 0.12);
@@ -274,7 +288,7 @@
 /* 预览里的 DWG 图复用同一套缩放视口（Spec `packaging-2-1-part-figure-fidelity.md` §C1）：
    视口自己给高度，svg 交给视口撑满（否则 `.file-preview-drawing .packaging-cad-plan-svg`
    的 max-height 会把图裁在视口中间）。 */
-.file-preview-drawing .packaging-part-shape-viewport { height: min(60vh, 460px); }
+.file-preview-drawing .packaging-part-shape-viewport { height: min(60vh, 460px); aspect-ratio: auto; }
 .file-preview-drawing .packaging-part-shape-viewport svg { max-height: none; }
 
 .packaging-cad-plan-entity.is-dimmed {

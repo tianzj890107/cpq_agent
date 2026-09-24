@@ -1912,14 +1912,18 @@ function packagingCadPlanEmptyText(doc) {
 // 画的是**绑定分量**的形状，业务尺寸仍以对照资料为准 —— 两者不许混为一谈。
 const PACKAGING_BOUND_OUTLINE_NOTE = "这是绑定分量的形状；业务尺寸以对照资料为准。";
 const PACKAGING_CAD_LAYER_COLORS = {
-  cut: "#1f6feb", half_cut: "#2ea043", crease: "#d29922", v_groove: "#a371f7",
-  glue_flap: "#0a3069", print: "#57606a", bleed: "#8b949e", frame: "#6e7781",
+  cut: "#dc2626", half_cut: "#2563eb", crease: "#16a34a", v_groove: "#ec4899",
+  glue_flap: "#f59e0b", print: "#57606a", bleed: "#eab308", frame: "#eab308",
   hole: "#cf222e", unknown: "#8b949e",
 };
+const PACKAGING_CAD_RULE_LEGEND = `<div class="packaging-cad-rule-legend" aria-label="图纸线型图例">`
+  + `<span style="--rule-colour:#dc2626">刀线 Cut</span>`
+  + `<span style="--rule-colour:#16a34a">压痕 Crease</span>`
+  + `<span style="--rule-colour:#2563eb">半穿 Partial cut</span>`
+  + `<span style="--rule-colour:#ec4899">V 槽 Vslot</span>`
+  + `<span style="--rule-colour:#eab308">参考线 Reference</span></div>`;
 
-//: 图层配色的第二档（Spec `packaging-2-1-part-figure-fidelity.md` §C2）：真图上绝大多数图层名
-//: 不在角色闭集里（`role="unknown"`），照角色画就是一片同色。认得出角色的仍用角色色（口径不变）；
-//: 认不出的按**图层名**给一个稳定、互不相同的颜色 —— 一张图上"有哪几层"看得见。纯函数，node 可直接跑。
+// 无法辨认业务角色且 DWG 未给实体色/图层色时的最后兜底；有 CAD 原色则优先用 CAD 原色。
 const PACKAGING_CAD_LAYER_PALETTE = [
   "#1f6feb", "#2ea043", "#d29922", "#a371f7", "#0a3069",
   "#cf222e", "#0969da", "#8250df", "#1a7f37", "#bc4c00",
@@ -1934,17 +1938,30 @@ function packagingCadLayerPaletteIndex(layer) {
   return hash % PACKAGING_CAD_LAYER_PALETTE.length;
 }
 
-function packagingCadLayerColour(layer, role) {
+function packagingCadLayerColour(layer, role, aciColor, layerAciColor) {
   const table = (typeof PACKAGING_CAD_LAYER_COLORS !== "undefined" && PACKAGING_CAD_LAYER_COLORS)
-    || {cut: "#1f6feb", half_cut: "#2ea043", crease: "#d29922", v_groove: "#a371f7",
-       glue_flap: "#0a3069", print: "#57606a", bleed: "#8b949e", frame: "#6e7781",
+    || {cut: "#dc2626", half_cut: "#2563eb", crease: "#16a34a", v_groove: "#ec4899",
+       glue_flap: "#f59e0b", print: "#57606a", bleed: "#eab308", frame: "#eab308",
        hole: "#cf222e", unknown: "#8b949e"};
   const key = String(role == null ? "" : role);
   if (key && key !== "unknown" && table[key]) return table[key];
+  const name = String(layer == null ? "" : layer).toLowerCase();
+  if (/v[\s_-]?(slot|groove)|v槽|v型槽/.test(name)) return table.v_groove;
+  if (/partial[\s_-]?cut|half[\s_-]?cut|半穿|半切/.test(name)) return table.half_cut;
+  if (/crease|压线|折线/.test(name)) return table.crease;
+  if (/cutter|(^|[\s_-])cut($|[\s_-])|刀线|全穿/.test(name)) return table.cut;
+  if (/reference|参考|辅助|sample|图框/.test(name)) return "#eab308";
+  // 很多客户 DWG 的所有图层颜色都是 BYLAYER/默认 7，实际工艺颜色在实体 ACI 上。
+  // 图例：1 刀、3 压线、6 半穿；业务指定的 V 槽粉色优先由角色/图层识别。
+  const aci = Number(aciColor);
+  const layerAci = Number(layerAciColor);
+  const code = (Number.isInteger(aci) && aci > 0 && aci < 256) ? aci : layerAci;
+  const drawingColors = {1: "#dc2626", 2: "#eab308", 3: "#16a34a",
+                         4: "#06b6d4", 5: "#2563eb", 6: "#2563eb", 7: "#6b7280"};
+  if (drawingColors[code]) return drawingColors[code];
   const palette = (typeof PACKAGING_CAD_LAYER_PALETTE !== "undefined" && PACKAGING_CAD_LAYER_PALETTE)
     || ["#1f6feb", "#2ea043", "#d29922", "#a371f7", "#0a3069",
         "#cf222e", "#0969da", "#8250df", "#1a7f37", "#bc4c00"];
-  const name = String(layer == null ? "" : layer);
   let hash = 5381;
   for (let index = 0; index < name.length; index++) {
     hash = (((hash << 5) + hash) ^ name.charCodeAt(index)) >>> 0;
@@ -2072,6 +2089,16 @@ function packagingPartSceneEntities(binding, doc) {
   });
   const ids = {};
   (Array.isArray(row.entity_ids) ? row.entity_ids : []).forEach(id => { ids[String(id || "")] = true; });
+  const box = Array.isArray(row.bbox) && row.bbox.length >= 4
+    ? row.bbox.slice(0, 4).map(Number) : null;
+  const hasBox = box && box.every(Number.isFinite) && box[2] > box[0] && box[3] > box[1];
+  const foreign = {};
+  (Array.isArray(doc && doc.business_parts) ? doc.business_parts : []).forEach(part => {
+    const other = (part && part.geometry_binding) || {};
+    if (other === binding || (row.business_part_code
+        && String(other.business_part_code || "") === String(row.business_part_code))) return;
+    (Array.isArray(other.entity_ids) ? other.entity_ids : []).forEach(id => { foreign[String(id)] = true; });
+  });
   const annotations = {};
   (Array.isArray(evidence.components) ? evidence.components : []).forEach(raw => {
     const component = (raw && typeof raw === "object") ? raw : {};
@@ -2089,7 +2116,10 @@ function packagingPartSceneEntities(binding, doc) {
   const rows = [];
   (Array.isArray(scene.entities) ? scene.entities : []).forEach(raw => {
     const id = String(((raw && raw.cad_entity_id) || ""));
-    if (!id || !ids[id] || annotations[id] || seen[id]) return;
+    const own = Array.isArray(raw && raw.bbox) ? raw.bbox.slice(0, 4).map(Number) : null;
+    const inside = hasBox && own && own.length === 4 && own.every(Number.isFinite)
+      && own[0] >= box[0] && own[1] >= box[1] && own[2] <= box[2] && own[3] <= box[3];
+    if (!id || (!ids[id] && !(inside && !foreign[id])) || annotations[id] || seen[id]) return;
     seen[id] = true;
     rows.push(raw);
   });
@@ -2135,8 +2165,8 @@ function packagingPartSceneSvg(binding, doc, options) {
   const opts = (options && typeof options === "object") ? options : {};
   const colours = opts.colours
     || ((typeof PACKAGING_CAD_LAYER_COLORS !== "undefined" && PACKAGING_CAD_LAYER_COLORS)
-      || {cut: "#1f6feb", half_cut: "#2ea043", crease: "#d29922", v_groove: "#a371f7",
-         glue_flap: "#0a3069", print: "#57606a", bleed: "#8b949e", frame: "#6e7781",
+      || {cut: "#dc2626", half_cut: "#2563eb", crease: "#16a34a", v_groove: "#ec4899",
+         glue_flap: "#f59e0b", print: "#57606a", bleed: "#eab308", frame: "#eab308",
          hole: "#cf222e", unknown: "#8b949e"});
   const plain = (typeof esc === "function")
     ? esc
@@ -2153,6 +2183,16 @@ function packagingPartSceneSvg(binding, doc, options) {
     list(bind.component_ids).forEach(id => { bound[String(id || "")] = true; });
     const ids = {};
     list(bind.entity_ids).forEach(id => { ids[String(id || "")] = true; });
+    const box = list(bind.bbox).slice(0, 4).map(Number);
+    const hasBox = box.length === 4 && box.every(Number.isFinite)
+      && box[2] > box[0] && box[3] > box[1];
+    const foreign = {};
+    list(doc && doc.business_parts).forEach(part => {
+      const other = (part && part.geometry_binding) || {};
+      if (other === binding || (bind.business_part_code
+          && String(other.business_part_code || "") === String(bind.business_part_code))) return;
+      list(other.entity_ids).forEach(id => { foreign[String(id)] = true; });
+    });
     const annotations = {};
     list(evidence.components).forEach(raw => {
       const component = (raw && typeof raw === "object") ? raw : {};
@@ -2167,7 +2207,10 @@ function packagingPartSceneSvg(binding, doc, options) {
     const rows = [];
     list(scene.entities).forEach(raw => {
       const id = String(((raw || {}).cad_entity_id) || "");
-      if (!id || !ids[id] || annotations[id] || seen[id]) return;
+      const own = list((raw || {}).bbox).slice(0, 4).map(Number);
+      const inside = hasBox && own.length === 4 && own.every(Number.isFinite)
+        && own[0] >= box[0] && own[1] >= box[1] && own[2] <= box[2] && own[3] <= box[3];
+      if (!id || (!ids[id] && !(inside && !foreign[id])) || annotations[id] || seen[id]) return;
       seen[id] = true;
       rows.push(raw);
     });
@@ -2221,7 +2264,7 @@ function packagingPartSceneSvg(binding, doc, options) {
     const layer = String(row.layer || "");
     if (visibility && visibility[layer] === false) return "";
     const colour = (typeof packagingCadLayerColour === "function")
-      ? packagingCadLayerColour(layer, row.role)
+      ? packagingCadLayerColour(layer, row.role, row.aci_color, row.layer_aci_color)
       : (colours[row.role] || colours.unknown);
     const mark = (row.annotation === true) ? " is-annotation" : "";
     const bbox = Array.isArray(row.bbox) && row.bbox.length >= 4 ? row.bbox.slice(0, 4).join(",") : "";
@@ -2409,7 +2452,7 @@ function packagingCadSceneEntitySvg(entity, visibility) {
   if (visibility && visibility[layer] === false) return "";
   const bbox = Array.isArray(row.bbox) && row.bbox.length >= 4 ? row.bbox.slice(0, 4).join(",") : "";
   const color = (typeof packagingCadLayerColour === "function")
-    ? packagingCadLayerColour(layer, row.role)
+    ? packagingCadLayerColour(layer, row.role, row.aci_color, row.layer_aci_color)
     : (PACKAGING_CAD_LAYER_COLORS[row.role] || PACKAGING_CAD_LAYER_COLORS.unknown);
   // 图纸上被判成标注的图元，在"这一件的图"里补画时戴一个标记（虚线 + 淡一点，Spec §C4）。
   const mark = (row.annotation === true) ? " is-annotation" : "";
@@ -2474,6 +2517,7 @@ function renderPackagingCadScene(host, doc, scene) {
   const total = Number(scene.entity_total || entities.length) || entities.length;
   host.innerHTML = `<div class="packaging-cad-plan-hint">${esc(PACKAGING_CAD_PLAN_LABEL)}`
     + ` · 完整场景 ${esc(String(entities.length))}/${esc(String(total))} 个图元</div>`
+    + PACKAGING_CAD_RULE_LEGEND
     + (toggles ? `<div class="packaging-cad-layer-bar">图层：${toggles}</div>` : "")
     + `<svg class="packaging-cad-plan-svg" role="img" aria-label="${esc(PACKAGING_CAD_PLAN_LABEL)}"`
     + ` viewBox="${esc(packagingCadPlanViewBox(range))}"`
@@ -3737,7 +3781,7 @@ function openPackagingBusinessPart(code) {
         + `<span class="packaging-part-shape-zoom" data-qq-shape-zoom-label="1">100%</span>`
         + `<button id="packagingPartReset" class="part-row-action" type="button">适应窗口</button>`
         + `</div>`
-        + `</div>`;
+        + `</div>` + PACKAGING_CAD_RULE_LEGEND;
       bindPackagingPartShapeInteractions(figureHost);
     } else if (!currentPackagingCadPlan) {
       figureHost.setAttribute("data-qq-part-shape", "loading");
@@ -6432,8 +6476,11 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
   let parseDrawingBusy = false;
   // 终态事件带 code / message / action / retryable：父壳据此区分"被阻断"与"真失败"，
   // 不用猜文案（Spec C3）。
-  function parseDrawingSettle(event, signal) {
-    const payload = { action: "parseDrawing" };
+  function parseDrawingSettle(event, signal, taskId) {
+    const payload = { action: "parseDrawing", label: "一键解析图纸", taskId: String(taskId || "") };
+    if (event === "task-completed") {
+      payload.progress = "图纸解析完成，结果已更新到右侧看板。";
+    }
     if (signal && typeof signal === "object") {
       payload.code = String(signal.code || "");
       payload.message = String(signal.message || "");
@@ -6447,7 +6494,7 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
   }
   // 后台链路放在注册表外：动作条目只负责启动它并秒级回执（deferred），
   // 真正的完成 / 被阻断 / 失败由这里按链路终态推给父壳（Spec C2）。
-  async function parseDrawingInBackground() {
+  async function parseDrawingInBackground(taskId) {
     try {
       const result = await parseDrawing();
       if (currentDrawingEntry === "drawing_flow") {
@@ -6456,16 +6503,16 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
         const state = (result && typeof result === "object") ? result.drawing_flow : null;
         const flowState = (state && typeof state === "object" && state.flow) ? state.flow : state;
         const signal = drawingFlowTerminalSignal(flowState, parseDrawingError);
-        parseDrawingSettle(signal.event, signal);
+        parseDrawingSettle(signal.event, signal, taskId);
       } else if (result) {
-        parseDrawingSettle("task-completed");
+        parseDrawingSettle("task-completed", null, taskId);
       } else {
         parseDrawingSettle("task-failed", { message: parseDrawingError || "图纸解析失败。",
-                                            retryable: true });
+                                            retryable: true }, taskId);
       }
     } catch (error) {
       parseDrawingSettle("task-failed", { message: (error && error.message) || "图纸解析失败。",
-                                          retryable: true });
+                                          retryable: true }, taskId);
     } finally {
       parseDrawingBusy = false;
       window.TechBoardRuntime.updateActionState("parseDrawing", { busy: false });
@@ -6474,13 +6521,15 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
   window.TechBoardRuntime.registerActions({
     parseDrawing: {
       label: "一键解析图纸",
+      startMessage: "已开始解析图纸，正在读取图纸并提取零件；结果会显示在右侧看板。",
+      taskIdPerRun: true,
       // 解析完成前它是本页唯一主按钮；有解析结果之后让位给「确认解析结果」。
       role: "aux",
       order: 10,
       deferred: true,
       // 这一步会真的跑起来：给左侧一条用户口吻的回声（文案属执行方，是每次调用的入参）。
       prompt:"帮我解析这张图纸。",
-      run: () => {
+      run: (_payload, invocation) => {
         const button = $("btnParse");
         // 「还在加载 / 项目打不开 / 3D 导入项目」三种处境必须说得出各自的原因：
         // 判定只有 `parseActionReadiness()` 这一处（Spec C2），灰按钮的理由就是它的 `title`。
@@ -6500,7 +6549,7 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
         // 先告诉父壳 busy，后台链路无论成功失败都恢复；这里不等解析结果。
         parseDrawingBusy = true;
         window.TechBoardRuntime.updateActionState("parseDrawing", { busy: true });
-        parseDrawingInBackground();
+        parseDrawingInBackground(invocation && invocation.taskId);
         return { ok: true };
       },
       getState: () => {
@@ -6800,8 +6849,8 @@ function fileDrawingPreviewHtml(doc) {
   const rows = Array.isArray(scene.entities) ? scene.entities.slice() : [];
   if (!rows.length) return "";
   const colours = (typeof PACKAGING_CAD_LAYER_COLORS !== "undefined" && PACKAGING_CAD_LAYER_COLORS)
-    || {cut: "#1f6feb", half_cut: "#2ea043", crease: "#d29922", v_groove: "#a371f7",
-       glue_flap: "#0a3069", print: "#57606a", bleed: "#8b949e", frame: "#6e7781",
+    || {cut: "#dc2626", half_cut: "#2563eb", crease: "#16a34a", v_groove: "#ec4899",
+        glue_flap: "#f59e0b", print: "#57606a", bleed: "#eab308", frame: "#eab308",
        hole: "#cf222e", unknown: "#8b949e"};
   const plain = (typeof esc === "function")
     ? esc
@@ -6813,7 +6862,7 @@ function fileDrawingPreviewHtml(doc) {
     const layer = String(row.layer || "");
     if (visibility && visibility[layer] === false) return "";
     const colour = (typeof packagingCadLayerColour === "function")
-      ? packagingCadLayerColour(layer, row.role)
+      ? packagingCadLayerColour(layer, row.role, row.aci_color, row.layer_aci_color)
       : (colours[row.role] || colours.unknown);
     const mark = (row.annotation === true) ? " is-annotation" : "";
     const bbox = Array.isArray(row.bbox) && row.bbox.length >= 4 ? row.bbox.slice(0, 4).join(",") : "";

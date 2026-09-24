@@ -166,9 +166,11 @@
 /* 助手回复里唯一带边框 + 白底的容器（与报价 .message-ai 逐项同值）。
    身份靠下面那行蓝色 .oc-alabel，不再有头像。 */
 .oc-amsg {
-  display: flex; gap: 11px; background: #ffffff;
+  display: flex; width: 80%; max-width: 100%; align-self: flex-start;
+  box-sizing: border-box; gap: 11px; background: #ffffff;
   border: 1px solid var(--oc-border-3); border-radius: 14px; padding: 11px 14px;
 }
+@media (max-width: 600px) { .oc-amsg { width: 100%; } }
 .oc-abody { min-width: 0; flex: 1; }
 .oc-alabel {
   display: flex; align-items: center; gap: 6px; margin-bottom: 4px;
@@ -542,9 +544,20 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
   padding: 11px 14px; border: 1px solid var(--oc-border-3); border-radius: 14px;
   background: #ffffff;
 }
+/* 身份与状态在首行，业务动作名及执行说明分别另起一行。 */
+.oc-task-card .oc-alabel {
+  display: grid; grid-template-columns: 6px minmax(0, 1fr) auto; align-items: center;
+}
+.oc-task-card .oc-alabel::before { grid-column: 1; grid-row: 1; }
+.oc-task-card .oc-alabel [data-agent-role="identity"] { grid-column: 2; grid-row: 1; }
+.oc-task-card .oc-alabel-sub {
+  grid-column: 1 / -1; grid-row: 2; min-width: 0; overflow-wrap: anywhere;
+  color: var(--oc-text-1); font-size: 13px; font-weight: 600;
+}
+.oc-task-card .oc-task-note { white-space: pre-wrap; line-height: 1.6; }
 /* 任务卡头行改用与助手回复同款的蓝色身份行：身份 + 任务中文名 + 右侧状态 chip。
    .oc-alabel 是行内 flex，chip 靠右由这一条保证（合并进本轮助手卡时同样生效）。 */
-.oc-task-card .oc-task-state { margin-left: auto; }
+.oc-task-card .oc-task-state { grid-column: 3; grid-row: 1; margin-left: auto; }
 .oc-task-head { display: flex; align-items: center; gap: 8px; }
 .oc-task-title { min-width: 0; flex: 1; color: var(--oc-text-1); font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oc-task-state {

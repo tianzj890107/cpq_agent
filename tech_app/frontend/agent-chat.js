@@ -1508,7 +1508,7 @@
       turn.state.classList.add("oc-task-state");
       turn.body.append(steps);
       scrollDown();
-      const merged = { key, label, box: turn.wrap, wrapper: turn.wrap, steps,
+      const merged = { key, label, box: turn.wrap, wrapper: turn.wrap, body: turn.body, steps,
                        state: turn.state, cursor: 0, status: "queued", done: false, turn };
       taskProgressCards.set(key, merged);
       return merged;
@@ -1540,7 +1540,7 @@
     scrollDown();
     // cursor：已渲染到 progress_log 的第几条。用下标而不是文本去重 ——
     // 同一句进度（比如两个零件都"库内无同类件"）本来就该出现两次。
-    const card = { key, label, box, wrapper, steps, state, cursor: 0, status: "queued",
+    const card = { key, label, box, wrapper, body, steps, state, cursor: 0, status: "queued",
                    done: false, turn: null };
     taskProgressCards.set(key, card);
     return card;
@@ -1803,7 +1803,7 @@
         })
         .finally(() => { button.disabled = false; });
     };
-    card.box.append(button);
+    card.body.append(button);
     card.retryButton = button;
     scrollDown();
   }
@@ -1906,7 +1906,7 @@
       const message = failureReason || "任务失败";
       if (!card.errorNode) {
         card.errorNode = el("div", "oc-task-error", message);
-        card.box.append(card.errorNode);
+        card.body.append(card.errorNode);
       } else {
         card.errorNode.textContent = message;
       }
@@ -1920,7 +1920,7 @@
       const text = action && action !== diagnose ? diagnose + "\n" + action : diagnose;
       if (!card.noteNode) {
         card.noteNode = el("div", "oc-task-note", text);
-        card.box.append(card.noteNode);
+        card.body.append(card.noteNode);
       } else {
         card.noteNode.textContent = text;
       }
@@ -1931,7 +1931,7 @@
       const message = interruptedReason || "任务已中断";
       if (!card.noteNode) {
         card.noteNode = el("div", "oc-task-note", message);
-        card.box.append(card.noteNode);
+        card.body.append(card.noteNode);
       } else {
         card.noteNode.textContent = message;
       }

@@ -161,8 +161,8 @@ PART_ENTITIES = [
 ANNOTATION = _entity("e:5", "全穿刀", "cut", [[0, -30], [0, 0]])
 NEIGHBOUR = _entity("e:9", "全穿刀", "cut", [[900, 900], [999, 999]])
 
-COLOR_CUT = "#1f6feb"
-COLOR_CREASE = "#d29922"
+COLOR_CUT = "#dc2626"
+COLOR_CREASE = "#16a34a"
 
 
 def scene_doc():

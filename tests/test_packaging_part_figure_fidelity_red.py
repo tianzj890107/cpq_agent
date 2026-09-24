@@ -138,9 +138,29 @@ def scene_doc():
 # A 组：纯函数（node 真跑）
 # --------------------------------------------------------------------------- #
 class APureFunctions(unittest.TestCase):
+    def test_current_rule_colours_use_entity_aci_and_vslot_role(self):
+        self.assertEqual("#dc2626", call(COLOUR_FN, "DESIGN", "unknown", 1, 7))
+        self.assertEqual("#16a34a", call(COLOUR_FN, "DESIGN", "unknown", 3, 7))
+        self.assertEqual("#2563eb", call(COLOUR_FN, "0", "unknown", 6, 7))
+        self.assertEqual("#ec4899", call(COLOUR_FN, "Vslot", "v_groove", 6, 7))
+        self.assertEqual("#eab308", call(COLOUR_FN, "参考线", "unknown", 256, 7))
+
+    def test_part_view_adds_internal_lines_without_neighbour(self):
+        doc = scene_doc()
+        doc["cad_scene"]["entities"].append({
+            "cad_entity_id": "e:internal", "layer": "DESIGN", "role": "unknown",
+            "kind": "line", "points": [[2, 2], [8, 2]], "bbox": [2, 2, 8, 2],
+        })
+        binding = dict(bound_binding(), bbox=[0, 0, 10, 20])
+        got = call(ENTITIES_FN, binding, doc)
+        ids = {item["cad_entity_id"] for item in got}
+        self.assertIn("e:internal", ids)
+        self.assertNotIn("e:9", ids)
+        self.assertNotIn("e:5", ids)
+
     def test_a1_known_role_keeps_its_colour_unknown_takes_a_layer_colour(self):
-        self.assertEqual("#1f6feb", call(COLOUR_FN, "任意层", "cut"),
-                         "认得出角色就还是角色色（Spec §C2：既有口径逐字不变）")
+        self.assertEqual("#dc2626", call(COLOUR_FN, "任意层", "cut"),
+                         "刀线按当前业务图例显示为红色")
         first = call(COLOUR_FN, "全穿刀", "unknown")
         second = call(COLOUR_FN, "全穿刀", "unknown")
         self.assertEqual(first, second, "同一个图层名必须永远同一个颜色（Spec §C2）")
@@ -220,10 +240,10 @@ class CCssNumbers(unittest.TestCase):
         at = self.css.index(selector)
         return self.css[at:self.css.index("}", at) + 1]
 
-    def test_c1_shape_viewport_is_twice_as_tall(self):
+    def test_c1_shape_viewport_is_square(self):
         block = self._block(".packaging-part-shape-viewport {")
-        self.assertIn("min(92vh, 840px)", block,
-                      "视口高度翻倍（Spec §C3：46vh/420px → 92vh/840px）：%r" % block)
+        self.assertIn("aspect-ratio: 1 / 1", block,
+                      "件图视口必须随栏宽保持正方形：%r" % block)
 
     def test_c2_plan_svg_min_height_is_twice(self):
         block = self._block(".packaging-cad-plan-svg {")

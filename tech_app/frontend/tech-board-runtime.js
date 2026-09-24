@@ -352,15 +352,17 @@
     // 「这一次执行」的唯一标识：同一次执行只出一次回声，两次执行各自再出一次。
     // 父壳据此去重，绝不按项目 / 动作名去重（否则第二次执行就静默了）。
     var runId = nextRequestId('run');
+    var progressTaskId = entry.taskIdPerRun === true ? runId : (context.taskId || '');
     publishTaskCard(EVENT.TASK_PROGRESS, { action: name, phase: 'start',
-      label: entryState(name).label, taskId: context.taskId || '',
-      runId: runId, prompt: resolveActionPrompt(entry, payload) });
+      label: entryState(name).label, taskId: progressTaskId,
+      runId: runId, prompt: resolveActionPrompt(entry, payload),
+      progress: entry.startMessage == null ? '' : String(entry.startMessage) });
     var outcome;
     try {
-      outcome = entry.run(payload || {});
+      outcome = entry.run(payload || {}, { runId: runId, taskId: progressTaskId });
     } catch (error) {
       publishTaskCard(EVENT.TASK_FAILED, { action: name,
-        label: entryState(name).label, taskId: context.taskId || '',
+        label: entryState(name).label, taskId: progressTaskId,
         code: String((error && error.code) || 'action-failed'),
         message: String((error && error.message) || error) });
       return Promise.resolve(failure('action-failed', String((error && error.message) || error)));
@@ -370,7 +372,7 @@
       if (result && typeof result === 'object' && result.ok === false) {
         var reason = (result.error && result.error.message) || ('动作执行失败：' + name);
         publishTaskCard(EVENT.TASK_FAILED, { action: name,
-          label: entryState(name).label, taskId: context.taskId || '',
+          label: entryState(name).label, taskId: progressTaskId,
           // 只转发失败码，不在运行时判定「要不要出卡」：父壳据 code 跳过预期内失败。
           code: String((result.error && result.error.code) || 'action-failed'),
           message: reason });
@@ -383,11 +385,11 @@
       // 由本页在任务结束时自己经 publishTaskCard 上报（silent 条目照旧不出卡）。
       if (entry.deferred === true) return ok(name, result);
       publishTaskCard(EVENT.TASK_COMPLETED, { action: name,
-        label: entryState(name).label, taskId: context.taskId || '' });
+        label: entryState(name).label, taskId: progressTaskId });
       return ok(name, result);
     }, function (error) {
       publishTaskCard(EVENT.TASK_FAILED, { action: name,
-        label: entryState(name).label, taskId: context.taskId || '',
+        label: entryState(name).label, taskId: progressTaskId,
         code: String((error && error.code) || 'action-failed'),
         message: String((error && error.message) || error) });
       return failure('action-failed', String((error && error.message) || error));

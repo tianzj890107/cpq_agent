@@ -17,6 +17,8 @@ import re
 import threading
 import time
 import uuid
+from functools import lru_cache
+from pathlib import Path
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -7274,7 +7276,7 @@ def _cad_scene_curve_points(kind: str, attrs: Dict[str, Any]) -> List[List[float
 
 
 def _cad_scene_points(row: Dict[str, Any]) -> List[List[float]]:
-    """IR 一行 → 场景折线点（只搬已有坐标；都没有时退到包围盒四角，仍不猜）。"""
+    """IR 一行 → 真实几何点；包围盒只是定位信息，不能冒充零件轮廓。"""
     attrs = row.get("attributes") or {}
     kind = str(row.get("kind") or "")
     points = _cad_scene_pairs(attrs.get("points")) or _cad_scene_pairs(attrs.get("fit_points"))
@@ -7282,11 +7284,6 @@ def _cad_scene_points(row: Dict[str, Any]) -> List[List[float]]:
         points = _cad_scene_pairs([attrs.get("start"), attrs.get("end")])
     if not points:
         points = _cad_scene_curve_points(kind, attrs)
-    if len(points) < 2:
-        box = [_cad_scene_number(value) for value in list(row.get("bbox") or [])[:4]]
-        if len(box) == 4 and all(value is not None for value in box):
-            x0, y0, x1, y1 = box
-            points = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
     return points
 
 
@@ -7303,10 +7300,37 @@ def _packaging_cad_layer_roles(pid: str) -> Dict[str, str]:
     return out
 
 
+@lru_cache(maxsize=8)
+def _packaging_cad_legacy_aci(path: str, modified_ns: int) -> Dict[str, int]:
+    """旧 CAD IR 没保存实体色时，从原转换产物只读补色，不改任何业务文档。"""
+    try:
+        import ezdxf
+        drawing = ezdxf.readfile(path)
+        return {str(entity.dxf.get("handle") or ""): int(entity.dxf.get("color", 256) or 256)
+                for entity in drawing.modelspace() if entity.dxf.get("handle")}
+    except Exception:  # noqa: BLE001 - 颜色缺失不能阻断几何预览
+        return {}
+
+
 def _packaging_cad_scene(pid: str) -> Dict[str, Any]:
     """由 CAD IR 派生的**完整**二维场景（Spec §5）：几何/标注图元 + 必要文字 + 图层 + 范围。"""
     ir = cad_ir.load_ir(pid) or {}
     roles = _packaging_cad_layer_roles(pid)
+    legacy_aci: Dict[str, int] = {}
+    source = ir.get("source") or {}
+    if source.get("conversion_id") and any(
+            isinstance(row, dict) and row.get("aci_color") is None
+            for row in (ir.get("entities") or [])):
+        filename = str(source.get("dxf_artifact") or "")
+        if filename and Path(filename).name == filename:
+            path = (cad_converter.persistence.artifact_dir(
+                pid, str(source["conversion_id"])) / filename)
+            try:
+                legacy_aci = _packaging_cad_legacy_aci(str(path), path.stat().st_mtime_ns)
+            except OSError:
+                pass
+    layer_colors = {str(row.get("name") or ""): row.get("color")
+                    for row in (ir.get("layers") or []) if isinstance(row, dict)}
     rows: List[Dict[str, Any]] = []
     for row in (ir.get("entities") or []):
         if not isinstance(row, dict):
@@ -7315,6 +7339,8 @@ def _packaging_cad_scene(pid: str) -> Dict[str, Any]:
         rows.append({"cad_entity_id": str(row.get("entity_id") or ""),
                      "kind": str(row.get("kind") or ""), "layer": layer,
                      "role": roles.get(layer, "unknown"),
+                     "aci_color": row.get("aci_color", legacy_aci.get(str(row.get("handle") or ""))),
+                     "layer_aci_color": layer_colors.get(layer),
                      "closed": bool(row.get("closed")),
                      "points": _cad_scene_points(row), "bbox": row.get("bbox")})
     for row in (ir.get("texts") or []):
@@ -7328,6 +7354,8 @@ def _packaging_cad_scene(pid: str) -> Dict[str, Any]:
         x, y = position[0]
         rows.append({"cad_entity_id": str(row.get("entity_id") or ""), "kind": "text",
                      "layer": layer, "role": roles.get(layer, "unknown"),
+                     "aci_color": row.get("aci_color", legacy_aci.get(str(row.get("handle") or ""))),
+                     "layer_aci_color": layer_colors.get(layer),
                      "closed": False, "points": [], "bbox": [x, y, x, y],
                      "text": text, "x": x, "y": y,
                      "height": _cad_scene_number(row.get("height")) or 0.0})

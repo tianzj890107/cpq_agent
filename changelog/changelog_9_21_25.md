@@ -21276,3 +21276,13 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
   `modules_the_entry_loads_without(['cadquery','multimethod','nlopt','typish'])` 正好回这四个。
 - 至此「非并行会话红」清零；剩下的 7 条（件图分色 / 视口高度 / 字体声明 / 品牌色字面量）全部属并行会话
   未提交的 `## 496` 改动，本批一个都没碰。未推送、未部署（`AGENTS.md`：未明确要求不自行推送）。
+
+## 499. 包装 DWG 件图改为正方形、完整线条与工艺分色（9-24）
+
+> 编号说明：并行会话写这份条目时用的是 `## 496`（其缓冲区早于 `## 497`/`## 498`）；本仓库 `497`/`498` 已存在，故本轮按顺序落为 `## 499`，内容与工作区实现一致。
+
+- 右栏选中零件的图纸视口按栏宽保持 1:1；整图与单件图增加刀线、压痕、半穿、V 槽、参考线图例。
+- CAD IR 保留每条实体及文字的原始 ACI 色号；旧 IR 从既有转换 DXF 只读补色，无需重传图纸。显示口径：刀线红、半穿蓝、V 槽粉、参考线黄、压痕绿；未知图层先按实体色，不再随机映射成紫色。
+- 单件图补画绑定包围内的内部线条，排除明确归属其他零件的图元；没有实际点坐标的实体不再拿 bbox 伪造矩形轮廓。
+- 回归（本轮提交前复跑）：`tests.test_packaging_part_figure_fidelity_red` 20 OK、`tests.test_packaging_2_1_right_pane_single_part_figure_red` 31 OK、`tests.test_packaging_cad_scene_entity_colours` 3 OK，共 54 条通过。
+- 状态：随本轮提交推送（GitLab + GitHub `ytbz`）与 34 部署一并上线。
