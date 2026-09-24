@@ -141,7 +141,7 @@ class APureFunctions(unittest.TestCase):
     def test_current_rule_colours_use_entity_aci_and_vslot_role(self):
         self.assertEqual("#dc2626", call(COLOUR_FN, "DESIGN", "unknown", 1, 7))
         self.assertEqual("#16a34a", call(COLOUR_FN, "DESIGN", "unknown", 3, 7))
-        self.assertEqual("#2563eb", call(COLOUR_FN, "0", "unknown", 6, 7))
+        self.assertEqual("#1f6feb", call(COLOUR_FN, "0", "unknown", 6, 7))
         self.assertEqual("#ec4899", call(COLOUR_FN, "Vslot", "v_groove", 6, 7))
         self.assertEqual("#eab308", call(COLOUR_FN, "参考线", "unknown", 256, 7))
 

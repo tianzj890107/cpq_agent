@@ -42,8 +42,22 @@ OPEN_FN = "openFilePreview"
 
 NO_PARSE_COPY = "这份图纸还没有解析结果，请先到 2.1 跑一次图纸解析。"
 
-COLOR_CUT = "#1f6feb"
-COLOR_CREASE = "#d29922"
+# Spec §C2：`stroke` 取 `PACKAGING_CAD_LAYER_COLORS[role]`。期望值直接读 app.js 那张表，
+# 不再抄一份字面量 —— `## 499` 换过表里的值，抄本就跟丢了（`## 502`）。
+LAYER_COLORS_RE = re.compile(r"const PACKAGING_CAD_LAYER_COLORS\s*=\s*\{(.*?)\};", re.S)
+COLOR_ENTRY_RE = re.compile(r'([A-Za-z_]\w*)\s*:\s*"(#[0-9a-fA-F]{6})"')
+
+
+def layer_colours() -> dict:
+    """整图那张角色配色表（Spec §C2 点名的唯一来源）。"""
+    block = LAYER_COLORS_RE.search(read_text(APP_JS))
+    if not block:
+        raise AssertionError("app.js 缺少 PACKAGING_CAD_LAYER_COLORS（Spec §C2）")
+    table = {name: value for name, value in COLOR_ENTRY_RE.findall(block.group(1))}
+    for key in ("cut", "crease"):
+        if key not in table:
+            raise AssertionError("配色表缺少 %r（Spec §C2）" % key)
+    return table
 
 EXTRACT_JS = r"""
 const fs = require("fs");
@@ -176,10 +190,11 @@ class ADrawingKind(unittest.TestCase):
                          "整张图有几条图元就画几条（Spec §C2）")
 
     def test_a6_colours_are_the_same_table(self):
+        table = layer_colours()
         svg = call(HTML_FN, [scene_doc()])
         strokes = re.findall(r'stroke="([^"]*)"', svg)
-        self.assertIn(COLOR_CUT, strokes, "cut 用那张表的颜色（Spec §C2）")
-        self.assertIn(COLOR_CREASE, strokes, "crease 用那张表的颜色（Spec §C2）")
+        self.assertIn(table["cut"], strokes, "cut 用那张表的颜色（Spec §C2）")
+        self.assertIn(table["crease"], strokes, "crease 用那张表的颜色（Spec §C2）")
 
     def test_a7_no_selection_state_in_the_preview(self):
         svg = call(HTML_FN, [scene_doc()])

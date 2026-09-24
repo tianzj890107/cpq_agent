@@ -21324,3 +21324,34 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
 同批未动的两条：`test_global_brand_color_red`（`app.js` 的 `#2563eb` 半穿蓝撞上品牌禁用蓝）与
 `test_packaging_task_file_dwg_opens_the_whole_plan_red.test_a6`（整图 cut 用角色表的红、
 旧 §C2 期望表里的蓝）—— 两条都要先有人定配色，不属本批。
+
+## 502. 收掉最后两条红：`## 499` 的半穿蓝 `#2563eb` 撞品牌守卫、整图配色表的抄本过期（9-24，Codex 实现）
+
+两条都不是缺口，是新旧两份「配色事实」没对齐。
+
+### 一、品牌禁用蓝 vs `## 499` 的半穿蓝
+
+- 现象：`app.js` 七处 `#2563eb`（角色表 `half_cut`、`PACKAGING_CAD_RULE_LEGEND` 的半穿图例、
+  函数内同值兜底 ×3 行、ACI 5/6 的图纸色）命中 `test_global_brand_color_red` 的禁用表 ——
+  `#2563eb` 是历史竞争蓝之一。这一批新加的半穿蓝正好用了它。
+- 改法：这七处换成同一张表里既有的 CAD 蓝 `#1f6feb`（不在禁用表里，语义不变：半穿仍是蓝、
+  ACI 5/6 仍是蓝），并同步 `tests/test_packaging_part_figure_fidelity_red.py:144` 钉住的 ACI-6
+  期望值。没有放宽品牌守卫，也没有引入新颜色。
+
+### 二、整图那张表的抄本过期
+
+- 现象：`test_packaging_task_file_dwg_opens_the_whole_plan_red.test_a6` 的 `COLOR_CUT = "#1f6feb"`、
+  `COLOR_CREASE = "#d29922"` 是 `PACKAGING_CAD_LAYER_COLORS` 的**字面量抄本**；`## 499` 把表改成
+  刀线红 / 压痕绿后抄本就跟丢了（同一批里 `test_packaging_2_1_right_pane_single_part_figure_red`
+  的同类常量已经同步成 `#dc2626` / `#16a34a`，这一处漏了）。
+- 改法：Spec §C2 原文就是「`stroke` 取 `PACKAGING_CAD_LAYER_COLORS[role]`」，所以 a6 改成
+  **直接从 app.js 读那张表**再比对（`layer_colours()`），以后换表值不会再漂。
+
+### 实测
+
+- `tests.test_global_brand_color_red` + `…packaging_part_figure_fidelity_red` → `Ran 25 … OK`；
+  `…packaging_task_file_dwg_opens_the_whole_plan_red` → `Ran 20 … OK`。
+- 图纸 / 配色守卫集 13 个模块（两张整图、右栏件图、真轮廓、折线、图纸坐标、读失败、预览归属、
+  跳转、场景实体色）→ `Ran 196 tests in 21.9s … OK`。
+- `app.js` 这次只把我这一处放进索引（`show HEAD:…` + 替换 → blob），并行会话在同一文件里未提交的
+  改动原样留在工作区：没有被提交，也没有被覆盖。

@@ -1912,14 +1912,14 @@ function packagingCadPlanEmptyText(doc) {
 // 画的是**绑定分量**的形状，业务尺寸仍以对照资料为准 —— 两者不许混为一谈。
 const PACKAGING_BOUND_OUTLINE_NOTE = "这是绑定分量的形状；业务尺寸以对照资料为准。";
 const PACKAGING_CAD_LAYER_COLORS = {
-  cut: "#dc2626", half_cut: "#2563eb", crease: "#16a34a", v_groove: "#ec4899",
+  cut: "#dc2626", half_cut: "#1f6feb", crease: "#16a34a", v_groove: "#ec4899",
   glue_flap: "#f59e0b", print: "#57606a", bleed: "#eab308", frame: "#eab308",
   hole: "#cf222e", unknown: "#8b949e",
 };
 const PACKAGING_CAD_RULE_LEGEND = `<div class="packaging-cad-rule-legend" aria-label="图纸线型图例">`
   + `<span style="--rule-colour:#dc2626">刀线 Cut</span>`
   + `<span style="--rule-colour:#16a34a">压痕 Crease</span>`
-  + `<span style="--rule-colour:#2563eb">半穿 Partial cut</span>`
+  + `<span style="--rule-colour:#1f6feb">半穿 Partial cut</span>`
   + `<span style="--rule-colour:#ec4899">V 槽 Vslot</span>`
   + `<span style="--rule-colour:#eab308">参考线 Reference</span></div>`;
 
@@ -1940,7 +1940,7 @@ function packagingCadLayerPaletteIndex(layer) {
 
 function packagingCadLayerColour(layer, role, aciColor, layerAciColor) {
   const table = (typeof PACKAGING_CAD_LAYER_COLORS !== "undefined" && PACKAGING_CAD_LAYER_COLORS)
-    || {cut: "#dc2626", half_cut: "#2563eb", crease: "#16a34a", v_groove: "#ec4899",
+    || {cut: "#dc2626", half_cut: "#1f6feb", crease: "#16a34a", v_groove: "#ec4899",
        glue_flap: "#f59e0b", print: "#57606a", bleed: "#eab308", frame: "#eab308",
        hole: "#cf222e", unknown: "#8b949e"};
   const key = String(role == null ? "" : role);
@@ -1957,7 +1957,7 @@ function packagingCadLayerColour(layer, role, aciColor, layerAciColor) {
   const layerAci = Number(layerAciColor);
   const code = (Number.isInteger(aci) && aci > 0 && aci < 256) ? aci : layerAci;
   const drawingColors = {1: "#dc2626", 2: "#eab308", 3: "#16a34a",
-                         4: "#06b6d4", 5: "#2563eb", 6: "#2563eb", 7: "#6b7280"};
+                         4: "#06b6d4", 5: "#1f6feb", 6: "#1f6feb", 7: "#6b7280"};
   if (drawingColors[code]) return drawingColors[code];
   const palette = (typeof PACKAGING_CAD_LAYER_PALETTE !== "undefined" && PACKAGING_CAD_LAYER_PALETTE)
     || ["#1f6feb", "#2ea043", "#d29922", "#a371f7", "#0a3069",
@@ -2165,7 +2165,7 @@ function packagingPartSceneSvg(binding, doc, options) {
   const opts = (options && typeof options === "object") ? options : {};
   const colours = opts.colours
     || ((typeof PACKAGING_CAD_LAYER_COLORS !== "undefined" && PACKAGING_CAD_LAYER_COLORS)
-      || {cut: "#dc2626", half_cut: "#2563eb", crease: "#16a34a", v_groove: "#ec4899",
+      || {cut: "#dc2626", half_cut: "#1f6feb", crease: "#16a34a", v_groove: "#ec4899",
          glue_flap: "#f59e0b", print: "#57606a", bleed: "#eab308", frame: "#eab308",
          hole: "#cf222e", unknown: "#8b949e"});
   const plain = (typeof esc === "function")
@@ -6849,7 +6849,7 @@ function fileDrawingPreviewHtml(doc) {
   const rows = Array.isArray(scene.entities) ? scene.entities.slice() : [];
   if (!rows.length) return "";
   const colours = (typeof PACKAGING_CAD_LAYER_COLORS !== "undefined" && PACKAGING_CAD_LAYER_COLORS)
-    || {cut: "#dc2626", half_cut: "#2563eb", crease: "#16a34a", v_groove: "#ec4899",
+    || {cut: "#dc2626", half_cut: "#1f6feb", crease: "#16a34a", v_groove: "#ec4899",
         glue_flap: "#f59e0b", print: "#57606a", bleed: "#eab308", frame: "#eab308",
        hole: "#cf222e", unknown: "#8b949e"};
   const plain = (typeof esc === "function")
