@@ -4044,6 +4044,12 @@ def business_parts_document(reference: Any, geometry: Any, *,
             "bound_at": "", "rule_id": BUSINESS_BINDING_RULE_ID,
             "geometry_component_ref": [],
         }
+        reference_block = _business_part_reference(row)
+        if derived_default:
+            size_evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
+            if size_evidence.get("size_quality"):
+                reference_block["size_quality"] = _text(size_evidence["size_quality"])
+                reference_block["size_source"] = _text(size_evidence.get("size_source"))
         business_parts.append({
             "business_part_code": code,
             "name": _text(row.get("name")),
@@ -4054,8 +4060,8 @@ def business_parts_document(reference: Any, geometry: Any, *,
             # 件级对照资料（Spec「读回路径上的两条披露」§C2）：既有 13 键
             # 逐字留，另加导入器早就有、以前被丢掉的 `thumbnail_refs` / `thumbnail_source` /
             # `group_hint`（部件图归属是"按顺序推定"还是"按锚点行"，只有这里说得出来）。
-            REFERENCE_BLOCK_KEY: _business_part_reference(row),
-            LEGACY_REFERENCE_BLOCK_KEY: _business_part_reference(row),
+            REFERENCE_BLOCK_KEY: dict(reference_block),
+            LEGACY_REFERENCE_BLOCK_KEY: dict(reference_block),
             "geometry_binding": binding,
             # 部件图引用（Spec §C4）：图本体在 blob 里，这里只有 ref / sha256 / 类型 / 字节数。
             "thumbnail": _business_part_thumbnail(

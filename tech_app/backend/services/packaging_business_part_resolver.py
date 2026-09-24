@@ -1057,6 +1057,147 @@ def match_authority_parts(authority_parts: Any, anchors: Any, regions: Any,
     }
 
 
+def _upgrade_dimensioned_clusters(parts: List[Dict[str, Any]], anchors: List[Dict[str, Any]],
+                                  regions: List[Dict[str, Any]], rects: List[Dict[str, Any]],
+                                  match: Dict[str, Any]) -> None:
+    """用图上的尺寸标注确认多连通片的整件范围；镜像件须有真实几何对应。
+
+    最近连通分量可能只是一条折边。只有标注矩形被至少三个分量覆盖、两轴覆盖率均
+    达九成且名称锚点在矩形下方时，才覆盖最近碎片的尺寸。无标注的左右对应件仅在
+    至少三个分量能通过镜像坐标逐一配对时继承尺寸，仍标记为未直接确认。
+    """
+    by_anchor = {_text(row.get("entity_id")): row for row in anchors}
+    by_code = {_text(row.get("business_part_code")): row
+               for row in (match.get("bindings") or []) if isinstance(row, dict)}
+    usable = [row for row in regions if isinstance(row, dict) and row.get("substantial")
+              and _bbox_size(row.get("bbox"))]
+
+    def inside(inner: Any, outer: List[float], tolerance: float = 3.0) -> bool:
+        return isinstance(inner, (list, tuple)) and len(inner) >= 4 and all(
+            float(inner[index]) >= outer[index] - tolerance if index < 2
+            else float(inner[index]) <= outer[index] + tolerance for index in range(4))
+
+    def below(point: Any, box: List[float]) -> bool:
+        if point is None:
+            return False
+        margin = min(40.0, max(12.0, (box[2] - box[0]) * .15))
+        gap = box[1] - point[1]
+        return (0 <= gap <= min(160.0, (box[3] - box[1]) * .3)
+                and box[0] - margin <= point[0] <= box[2] + margin)
+
+    def members(box: List[float]) -> List[Dict[str, Any]]:
+        return [row for row in usable if inside(row.get("bbox"), box)]
+
+    def apply(binding: Dict[str, Any], box: List[float], rows: List[Dict[str, Any]],
+              source: str, confirmed: bool) -> None:
+        binding["bbox"] = [round(value, 9) for value in box]
+        binding["component_ids"] = sorted({_text(cid) for row in rows
+                                             for cid in (row.get("component_ids") or []) if _text(cid)})
+        binding["entity_ids"] = sorted({_text(eid) for row in rows
+                                          for eid in (row.get("entity_ids") or []) if _text(eid)})
+        binding["length_mm"] = round(box[2] - box[0], 9)
+        binding["width_mm"] = round(box[3] - box[1], 9)
+        binding["cluster_region_ids"] = sorted({_text(row.get("region_id")) for row in rows
+                                                if _text(row.get("region_id"))})
+        binding["region_id"] = binding["cluster_region_ids"][0]
+        binding["region_layers"] = sorted({_text(layer) for row in rows
+                                            for layer in (row.get("layers") or []) if _text(layer)})
+        binding["size_source"] = source
+        binding["size_confirmed"] = confirmed
+        binding["complete_box"] = True
+        binding["evidence_kinds"] = ["text_anchor", "geometry_region"] + (
+            ["size_dimension"] if confirmed else ["repetition_mirror"])
+
+    sources: List[Tuple[Dict[str, Any], List[float], List[Dict[str, Any]]]] = []
+    for rect in rects:
+        width, height = _num(rect.get("length_mm")), _num(rect.get("width_mm"))
+        center = rect.get("center")
+        if not center or len(center) < 2 or not width or not height:
+            continue
+        cx, cy = float(center[0]), float(center[1])
+        box = [cx - width / 2, cy - height / 2, cx + width / 2, cy + height / 2]
+        support = members(box)
+        if len(support) < 3:
+            continue
+        covered_width = max(row["bbox"][2] for row in support) - min(row["bbox"][0] for row in support)
+        covered_height = max(row["bbox"][3] for row in support) - min(row["bbox"][1] for row in support)
+        if not (.9 <= covered_width / width <= 1.02
+                and .9 <= covered_height / height <= 1.02):
+            continue
+        candidates = []
+        for part in parts:
+            binding = by_code.get(_text(part.get("business_part_code")))
+            point = _part_position(part, by_anchor)
+            if not binding or binding.get("size_confirmed") or not below(point, box):
+                continue
+            old_size = _bbox_size(binding.get("bbox"))
+            if not old_size or old_size[0] * old_size[1] >= width * height * .65:
+                continue
+            candidates.append((round(box[1] - point[1], 6), _text(part.get("business_part_code")),
+                               part, binding))
+        if not candidates:
+            continue
+        _, _, part, binding = min(candidates, key=lambda item: item[:2])
+        # 同一行遇到多个标注组合时，覆盖更完整的那一组优先。
+        if any(source_part is part for source_part, _, _ in sources):
+            continue
+        apply(binding, box, support, "multi_region_dimension", True)
+        sources.append((part, box, support))
+
+    def same_shape(first: Dict[str, Any], second: Dict[str, Any]) -> bool:
+        left, right = _region_size(first), _region_size(second)
+        return None not in left + right and abs(left[0] - right[0]) <= .02 \
+            and abs(left[1] - right[1]) <= .02
+
+    for source_part, source_box, support in sources:
+        source_name = _text(source_part.get("name"))
+        if not source_name.startswith(("左", "右")):
+            continue
+        opposite = ("右" if source_name[0] == "左" else "左") + source_name[1:]
+        target = next((part for part in parts if _text(part.get("name")) == opposite), None)
+        if target is None:
+            continue
+        binding = by_code.get(_text(target.get("business_part_code")))
+        point = _part_position(target, by_anchor)
+        if not binding or binding.get("size_confirmed") or point is None:
+            continue
+        best: Optional[Tuple[int, float, List[float], List[Dict[str, Any]]]] = None
+        for first in support:
+            first_center = _region_center(first)
+            if first_center is None:
+                continue
+            for second in usable:
+                second_center = _region_center(second)
+                if second is first or second_center is None or not same_shape(first, second):
+                    continue
+                axis_sum = first_center[0] + second_center[0]
+                dy = second_center[1] - first_center[1]
+                box = [axis_sum - source_box[2], source_box[1] + dy,
+                       axis_sum - source_box[0], source_box[3] + dy]
+                if not below(point, box):
+                    continue
+                matched: List[Dict[str, Any]] = []
+                for original in support:
+                    center = _region_center(original)
+                    if center is None:
+                        continue
+                    hit = next((row for row in usable if row is not original
+                                and same_shape(original, row)
+                                and (other := _region_center(row)) is not None
+                                and abs(other[0] - (axis_sum - center[0])) <= 1.0
+                                and abs(other[1] - (center[1] + dy)) <= 1.0), None)
+                    if hit is not None:
+                        matched.append(hit)
+                count = len({_text(row.get("region_id")) for row in matched})
+                if count < max(3, (len(support) * 7 + 9) // 10):
+                    continue
+                score = (count, -abs(dy))
+                if best is None or score > (best[0], best[1]):
+                    best = (count, -abs(dy), box, matched)
+        if best is not None:
+            apply(binding, best[2], best[3], "mirrored_multi_region_dimension", False)
+
+
 def _position_token(label: Any) -> str:
     """族键里的**方向词/容器词**（Spec §3.3 第 3 条）：`内盒1灰板` → `内盒1`（序号参与）。"""
     match = _POSITION_TOKEN.match(_text(label))
@@ -1498,6 +1639,7 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
     rects = dimension_rects(ir)
     rows = _derived_rows(anchors)
     match = match_authority_parts(rows, anchors, regions, rects=rects)
+    _upgrade_dimensioned_clusters(rows, anchors, regions, rects, match)
     rows, group_plans = _expand_family_groups(rows, anchors, match.get("bindings") or [])
     # 图纸画不出来的采购件按**通用盒型结构规则**补成 `pending_confirmation` 行（Spec §1.3/§2.1）。
     rows = rows + _structure_rule_rows(rows, anchors, group_plans)
@@ -1533,6 +1675,8 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
         row["width_mm"] = _num(binding.get("width_mm"))
         located = bool(binding.get("region_id"))
         row["evidence"]["component_ids"] = list(binding.get("component_ids") or [])
+        if binding.get("cluster_region_ids"):
+            row["evidence"]["cluster_region_ids"] = list(binding["cluster_region_ids"])
         row["evidence"]["bbox"] = list(binding.get("bbox") or []) or None
         with_size = (row.get("length_mm") is not None and row.get("width_mm") is not None)
         if not located:
@@ -1545,6 +1689,8 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
                 "component_ids": list(binding.get("component_ids") or []),
                 "bbox": list(binding.get("bbox") or []) or None,
                 "region_id": _text(binding.get("region_id")),
+                **({"region_ids": list(binding["cluster_region_ids"])}
+                   if binding.get("cluster_region_ids") else {}),
             }
             row["status"] = "derived" if with_size else "partial"
             row["reasons"] = [] if row["status"] == "derived" else list(
@@ -1610,6 +1756,9 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
     labeled_regions = {_text((row.get("evidence") or {}).get("drawing_ref", {}).get("region_id"))
                        for row in rows if _text((row.get("evidence") or {})
                                                 .get("drawing_ref", {}).get("region_id"))}
+    for row in rows:
+        labeled_regions.update(_text(region_id) for region_id in
+                               ((row.get("evidence") or {}).get("cluster_region_ids") or []))
     unlabeled_outline_total = len([region for region in regions
                                    if region.get("substantial")
                                    and _text(region.get("region_id")) not in labeled_regions])

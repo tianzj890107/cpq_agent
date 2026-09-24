@@ -330,6 +330,7 @@ button.oc-file-name{width:100%;padding:0;border:0;background:none;text-align:lef
 #packagingShapeIdle[hidden]{display:none}
 .drawing-model-column[data-qq-fill]{overflow-y:auto;overflow-x:hidden}
 .drawing-model-column[data-qq-fill] #modelPanes{overflow-y:visible}
+.drawing-model-column[data-qq-fill] #packagingCadPlanViewer{flex:0 0 auto}
 
 /* 2.1 左栏业务部件行（Spec `packaging-2-1-parts-row-layout-and-shape-viewport.md` §2.1）：
    `.part-item` 是单行 flex（`align-items:center`），四个块平铺就会挤在一行、长的那串尺寸

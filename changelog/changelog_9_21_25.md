@@ -21355,3 +21355,11 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
   跳转、场景实体色）→ `Ran 196 tests in 21.9s … OK`。
 - `app.js` 这次只把我这一处放进索引（`show HEAD:…` + 替换 → blob），并行会话在同一文件里未提交的
   改动原样留在工作区：没有被提交，也没有被覆盖。
+
+## 503. 酒盒左右盖面纸由碎片尺寸改为整块尺寸，件图视口不再被 flex 压扁（9-24）
+
+- 离线复现：左盖误绑 3 图元的 218.2×68.25，右盖误绑 3 图元的 113.04×384.67；不是四舍五入或 BOM 输入问题，而是最近连通分量算法把局部线条当整件。
+- 新增 DWG 证据规则：正交标注矩形内部至少三组有效分量且两轴覆盖率达 90% 才确认整块；对应左右件还需至少三组分量逐一满足镜像坐标及尺寸，才能继承整块尺寸，且仍记作未直接标注确认。酒盒实测两件均为 307.07×528.89；圆盘盒没有误触发。对照 BOM 仍仅用于离线验收，不参与运行时解析。
+- 右栏正方形视口及外层容器均禁止纵向 flex 收缩；整件范围内的嵌套实际线条可见。图纸派生件的尺寸质量不再在文档组装时丢失，列表和详情展示尺寸依据；右件的镜像推断仍须确认后才能进成本/工艺。
+- 新增 Spec：`docs/specs/packaging-composite-part-dimension-and-square.md`；新增红测 `tests/test_packaging_composite_dimension_and_square_red.py`（4 OK），本轮提交前复跑 `test_packaging_2_1_right_pane_single_part_figure_red` 31 OK、`test_packaging_part_figure_fidelity_red` 20 OK、`test_packaging_2_1_part_row_size_and_material_lines_red` 15 OK、`test_packaging_customer_workbook_is_a_reference_not_an_input_red` 21 OK。
+- 状态：随本轮提交推送（GitLab + GitHub `ytbz`）与 34 部署一并上线。

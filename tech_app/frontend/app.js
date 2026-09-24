@@ -2119,7 +2119,8 @@ function packagingPartSceneEntities(binding, doc) {
     const own = Array.isArray(raw && raw.bbox) ? raw.bbox.slice(0, 4).map(Number) : null;
     const inside = hasBox && own && own.length === 4 && own.every(Number.isFinite)
       && own[0] >= box[0] && own[1] >= box[1] && own[2] <= box[2] && own[3] <= box[3];
-    if (!id || (!ids[id] && !(inside && !foreign[id])) || annotations[id] || seen[id]) return;
+    if (!id || (!ids[id] && !(inside && (row.complete_box || !foreign[id])))
+        || annotations[id] || seen[id]) return;
     seen[id] = true;
     rows.push(raw);
   });
@@ -2210,7 +2211,8 @@ function packagingPartSceneSvg(binding, doc, options) {
       const own = list((raw || {}).bbox).slice(0, 4).map(Number);
       const inside = hasBox && own.length === 4 && own.every(Number.isFinite)
         && own[0] >= box[0] && own[1] >= box[1] && own[2] <= box[2] && own[3] <= box[3];
-      if (!id || (!ids[id] && !(inside && !foreign[id])) || annotations[id] || seen[id]) return;
+      if (!id || (!ids[id] && !(inside && (bind.complete_box || !foreign[id])))
+          || annotations[id] || seen[id]) return;
       seen[id] = true;
       rows.push(raw);
     });
@@ -3447,6 +3449,16 @@ function packagingBusinessPartSizeText(row) {
   return "";
 }
 
+function packagingBusinessPartSizeBasis(row) {
+  const binding = (row && row.geometry_binding) || {};
+  const reference = (row && (row.reference || row["author" + "ity"])) || {};
+  const source = String(binding.size_source || reference.size_source || "");
+  if (source === "multi_region_dimension") return "DWG 标注与整块几何确认";
+  if (source === "mirrored_multi_region_dimension") return "镜像几何推算，尺寸待确认";
+  if (String(reference.size_quality || "") === "bbox_only") return "仅几何包围估算，尺寸待确认";
+  return "";
+}
+
 // 业务部件清单的来源标签（Spec `packaging-parts-must-be-derived-from-the-drawing.md` §2.6 第 2 条）：
 // 从图纸推导出来的清单要说成"从图纸推导（待人工确认）"，不许用"对照表 / 已审核 BOM"描述它。
 function packagingBusinessPartsSourceLabel(doc) {
@@ -3617,6 +3629,7 @@ function renderPackagingBusinessTree(tree, rows) {
     const rawName = String(row.name === null || row.name === undefined ? "" : row.name).trim();
     if (!rawName) line.setAttribute("data-qq-name-missing", "1");
     const size = packagingBusinessPartSizeText(row);
+    const sizeBasis = packagingBusinessPartSizeBasis(row);
     // 行上的对照资料块（Spec §2.4）：新键 `reference` 优先，老文档的旧键用拼接还原。
     const rowBlock = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
     const material = String(((rowBlock(row.reference) || rowBlock(row["author" + "ity"]) || {})
@@ -3637,6 +3650,7 @@ function renderPackagingBusinessTree(tree, rows) {
       + `<div class="part-body" title="${esc(rowTitle).replace(/"/g, "&quot;")}">`
       + `<div class="part-name">${esc(code)} ${esc(partName)}</div>`
       + `<div class="part-meta">${esc(size)}</div>`
+      + (sizeBasis ? `<div class="part-note">${esc(sizeBasis)}</div>` : "")
       + (material ? `<div class="part-material">${esc(material)}</div>` : "")
       + (bindingText ? `<div class="part-note">${esc(bindingText)}</div>` : "")
       + (truthLabel ? `<div class="part-note packaging-truth-label">${esc(truthLabel)}</div>` : "")
@@ -3744,6 +3758,7 @@ function openPackagingBusinessPart(code) {
   if (facts) {
     facts.innerHTML = [
       pkgPartFactRow("清单尺寸", packagingBusinessPartSizeText(row)),
+      pkgPartFactRow("尺寸依据", packagingBusinessPartSizeBasis(row)),
       pkgPartFactRow("部件图", reference.thumbnail_ref
         ? "已配到（" + (String(reference.thumbnail_source || "") === "order"
           ? "归属按顺序推定" : "归属按锚点行") + "）" : ""),
