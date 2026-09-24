@@ -7639,6 +7639,10 @@ PACKAGING_THUMBNAIL_REASON_COPY = {
     "image_bytes_unreadable": "工作簿里的部件图读不出来（导入时就没读到字节）",
     "thumbnail_not_saved": "这件有部件图引用，但字节还没入库：重新导入一次权威清单即可",
     "thumbnail_bytes_missing": "部件图字节在存储里找不到了（可能被清理过）",
+    # 图纸推导的清单整版没有部件图这一栏（Spec
+    # `packaging-part-thumbnail-absence-must-name-its-source.md` §2.2）：与前端同码同句、逐字。
+    "thumbnail_source_has_none":
+        "这一版清单来自图纸推导，图纸本身不带部件图；要按行看部件图，需先导入权威清单。",
 }
 
 

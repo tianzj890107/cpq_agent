@@ -3885,7 +3885,11 @@ THUMBNAIL_PREFIX = "packaging-authority/images"
 THUMBNAIL_EXTENSIONS = {"image/png": "png", "image/jpeg": "jpeg"}
 
 #: 件级 `thumbnail.reason` 闭集（Spec §C4）：没图 / 字节读不到 / 这次没入库。
-THUMBNAIL_REASONS = ("thumbnail_missing", "image_bytes_unreadable", "thumbnail_not_saved")
+THUMBNAIL_REASONS = ("thumbnail_missing", "image_bytes_unreadable", "thumbnail_not_saved",
+                     # 图纸推导的清单整版没有部件图这一栏（Spec
+                     # `packaging-part-thumbnail-absence-must-name-its-source.md` §2.1）：
+                     # 这是"来源里就没有"，不是"这一件自己缺图"。
+                     "thumbnail_source_has_none")
 
 
 def save_authority_thumbnails(project_id: str, authority: Any) -> Dict[str, Any]:
@@ -3940,14 +3944,22 @@ def save_authority_thumbnails(project_id: str, authority: Any) -> Dict[str, Any]
     return result
 
 
-def _business_part_thumbnail(row: Any, by_ref: Dict[str, Any]) -> Dict[str, Any]:
-    """件级 `thumbnail` 引用块（Spec §C4）：只有引用与指纹，没有字节。"""
+def _business_part_thumbnail(row: Any, by_ref: Dict[str, Any], *,
+                             derived_from_drawing: bool = False) -> Dict[str, Any]:
+    """件级 `thumbnail` 引用块（Spec §C4）：只有引用与指纹，没有字节。
+
+    没有引用时要分两个世界（Spec `packaging-part-thumbnail-absence-must-name-its-source.md` §2.1）：
+    图纸推导的清单**整版**就没有部件图这一栏 ⇒ `thumbnail_source_has_none`（"来源里就没有"）；
+    工作簿来源才是 `thumbnail_missing`（"这一件没有配到"）。工作簿那三态逐字不变。
+    """
     source = row if isinstance(row, dict) else {}
     ref = _text(source.get("thumbnail_ref"))
     block = {"ref": ref, "available": False, "sha256": "", "media_type": "", "bytes": 0,
              "key": "", "source": _text(source.get("thumbnail_source")),
              "reason": "thumbnail_missing"}
     if not ref:
+        if derived_from_drawing:
+            block["reason"] = "thumbnail_source_has_none"
         return block
     saved = by_ref.get(ref) if isinstance(by_ref, dict) else None
     if not isinstance(saved, dict):
@@ -4025,7 +4037,9 @@ def business_parts_document(authority: Any, geometry: Any, *,
             "authority": _business_part_authority(row),
             "geometry_binding": binding,
             # 部件图引用（Spec §C4）：图本体在 blob 里，这里只有 ref / sha256 / 类型 / 字节数。
-            "thumbnail": _business_part_thumbnail(row, thumb_by_ref),
+            "thumbnail": _business_part_thumbnail(
+                row, thumb_by_ref,
+                derived_from_drawing=bool(authority_doc.get("derived_from_drawing"))),
         })
     stats = business_parts_stats(business_parts)
     geometry_doc = geometry if isinstance(geometry, dict) else {}

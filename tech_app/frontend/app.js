@@ -3061,10 +3061,20 @@ function packagingAuthorityDisclosureLines(doc) {
   const total = Number(stats.part_total) || 0;
   const bound = Number(thumb.bound_total) || 0;
   const boundBy = String(thumb.bound_by || "");
+  // 这一版清单是从哪来的（Spec `packaging-part-thumbnail-absence-must-name-its-source.md` §2.5）：
+  // 图纸推导出来的清单整版没有部件图这一栏，披露要**点名来源**并给**出路**，
+  // 不许只说"这一版清单的图没有归属"（那是工作簿世界的说法，逐字保留）。
+  const derivedFromDrawing = payload.derived_from_drawing === true
+    || (payload.authority && payload.authority.derived_from_drawing === true);
   const lines = [];
   if (total > 0) {
     if (!bound) {
-      lines.push(`部件图：${total} 件都没配到部件图（这一版清单的图没有归属）。`);
+      if (derivedFromDrawing) {
+        lines.push(`部件图：${total} 件都没配到部件图 —— 这一版清单来自图纸推导，`
+          + `图纸本身不带部件图；要按行看部件图，需先导入权威清单。`);
+      } else {
+        lines.push(`部件图：${total} 件都没配到部件图（这一版清单的图没有归属）。`);
+      }
     } else if (boundBy === "anchor_row") {
       lines.push(`部件图：${bound}/${total} 件配到了图，归属按锚点行。`);
     } else if (boundBy === "mixed") {
@@ -3561,6 +3571,12 @@ function packagingBusinessThumbnailReasonText(reason) {
   if (!code) return "";
   if (code === "image_bytes_unreadable") return "工作簿里的部件图读不出来（导入时就没读到字节）";
   if (code === "thumbnail_missing") return "这份清单里这一件没有配到部件图";
+  // 图纸推导的清单**整版**没有部件图这一栏：不是"这一件自己缺图"，是"来源里就没有"
+  // （Spec `packaging-part-thumbnail-absence-must-name-its-source.md` §2.2，
+  // 与 `main.py PACKAGING_THUMBNAIL_REASON_COPY` 同码同句、逐字）。
+  if (code === "thumbnail_source_has_none") {
+    return "这一版清单来自图纸推导，图纸本身不带部件图；要按行看部件图，需先导入权威清单。";
+  }
   if (code === "thumbnail_not_saved") {
     return "这件有部件图引用，但字节还没入库：重新导入一次权威清单即可";
   }

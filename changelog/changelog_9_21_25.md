@@ -21014,3 +21014,68 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
   涉及 `## 484` §C7 与面板守卫，撤 / 留需要点名确认，记在 Spec §5.3）；
 - 不做图层角色的扩充（哪些真图层名算"全穿刀 / 压线"是业务口径）；
 - 不抢裸滚轮（仍归整栏滚动，缩放是 Ctrl/⌘ + 滚轮，`## 484` 口径不动）；不动后端 / 接口 / 几何 / 成本。
+
+## 493. 件级「没有部件图」分世界：图纸推导的清单不再逐件谎报「这一件没配到」（20 OK；红基 9 FAIL；反向对照 9 红）（9-24，Codex 实现）
+
+用户原话（2026-09-24）：
+
+> 为什么每个部件都显示 这份清单里这一件没有配到部件图
+
+### 为什么（代码级实测，不是推断）
+
+- `packaging_business_part_resolver.py:1571` 出的权威产物写死 `"derived_from_drawing": True`，它的行
+  （`:1361-1385`）只给 `business_part_code` / `name` / 尺寸 / 文本证据，**从来没有 `thumbnail_ref` 这个键**；
+- `packaging_parts.py:3943-3949 _business_part_thumbnail()` 只要 `thumbnail_ref` 为空就写死
+  `"reason": "thumbnail_missing"` —— 那是**工作簿世界**的码（原文「这份权威清单里这一件没有配到部件图」）；
+- 于是图纸推导的 28 行**每行**都拿到 `thumbnail_missing`，右栏点谁都同一句；真因是
+  「**这一版清单的来源（图纸）里根本没有部件图这一栏**」，不是「这一件自己缺图」。
+- 前端清单级那行（`app.js:3067`）说的是「28 件都没配到部件图（这一版清单的图没有归属）。」——
+  已经点出"这一版清单"，但没说**为什么**、也没给**出路**。
+- 一句话：**码和文案都只有"工作簿世界"一套，图纸推导的清单被硬塞进了那套话术。**
+
+### 改了什么
+
+- **`tech_app/backend/services/packaging_parts.py`**：`THUMBNAIL_REASONS` 扩容稳定码
+  `thumbnail_source_has_none`；`_business_part_thumbnail(row, by_ref, *, derived_from_drawing=False)`
+  在无 `thumbnail_ref` 时按来源分岔（图纸推导 → 新码；工作簿 → `thumbnail_missing` 逐字不变）；
+  调用点（`business_parts_document()`）传
+  `derived_from_drawing=bool(authority_doc.get("derived_from_drawing"))`。
+  工作簿三态（无引用 / 有引用没字节 / 有引用有字节）与 blob 归属算法**一个字没动**。
+- **`tech_app/backend/main.py`**：`PACKAGING_THUMBNAIL_REASON_COPY` 加新码，逐字
+  「这一版清单来自图纸推导，图纸本身不带部件图；要按行看部件图，需先导入权威清单。」；
+  既有三码 + 表外码兜底不动。读端点 `authority_thumbnail_of()` 复用件级块 ⇒ 同码、`found=False`、不抛异常。
+- **`tech_app/frontend/app.js`**：
+  - `packagingBusinessThumbnailReasonText()` 新增新码分支，与服务端**同码同句、逐字**；
+  - `packagingAuthorityDisclosureLines()` 在 `derived_from_drawing=true` 且一件都没配到图时改说
+    「图纸推导 + 需先导入权威清单」；工作簿句式（`…（这一版清单的图没有归属）。`）逐字不变；
+  - `这份清单里这一件没有配到部件图` 在 `app.js` 里**仍然只出现一次**（只在 `thumbnail_missing` 分支），
+    面板取不到图走纯函数 `packagingBusinessThumbnailReasonText()`，没有第二份抄写。
+
+### 产物
+
+- Spec：新增 `docs/specs/packaging-part-thumbnail-absence-must-name-its-source.md`
+  （§1 代码级实测 + §2.1–§2.6 六条契约 + §3 红测矩阵 + §5 落地表 / §5.1 反向对照 / §5.2 保护网 /
+  §5.3 已知缺口），状态行收口为合法字面量「Spec + 红测（已实现）」。
+- 红测：新增 `tests/test_packaging_part_thumbnail_absence_must_name_its_source_red.py`
+  （20 条：A 后端件级码 8 / B 服务端文案 3 / C 前端纯函数 5 / D 接线 4；C 组用 `node -e` 抽函数真跑，
+  不起服务、不发 HTTP、不连 PG / SQLite、不写业务数据）。
+
+### 实测（本机只读，`./open-claude/.venv/bin/python -W ignore -m unittest`）
+
+- 本批红测：`Ran 20 tests … OK`（20/20）。
+- 红基（`app.js` / `packaging_parts.py` / `main.py` 三个文件还原到 `HEAD` = `## 492`）
+  ⇒ `Ran 20 tests … FAILED (failures=9)`，与 Spec 头部记的 9 红逐条对上（a1/a2/a3/a7、b1/b2、c1/c5、d3）；
+  放回实现后复绿（三个文件逐字节还原，`md5` 一致）。
+- 保护网（51 个模块：`authority_thumbnail_*` / `business_part*` / `packaging_parts_*` /
+  `bom_business_parts*` / `card_step6`…）⇒ `Ran 805 tests … OK (skipped=6)`。
+- `tests.test_spec_status_truth_red` ⇒ `Ran 7 tests … OK`（本批 Spec 状态行按合法字面量收口）。
+- 全量（400 个模块）⇒ `Ran 6697 tests … FAILED (failures=4, skipped=28)`：两条既有 `test_cpq_eval_ci_contract`（环境 / 待裁决），另两条来自**工作区里新出现、还没实现的两份 Spec**（`packaging-2-1-part-row-size-and-material-lines.md`、`packaging-customer-workbook-is-a-reference-not-an-input.md`，作者侧未跟踪）的状态行字面量 —— 它们各是一条独立的待实现批次，落地并按合法字面量收口后即绿。
+- `node --check tech_app/frontend/app.js` 通过；`git diff --check` 干净。
+
+### 明确没做
+
+- 不改几何 / 语义 / 匹配 / 成本 / BOM 的既有口径；不改 blob 归属算法（按锚点行 / 按顺序推定的判定一个字不动）。
+- 不把客户工作簿当**解析输入**：它只能作对答案的资料（`packaging-business-tables-are-answer-keys-only.md`）；
+  本批只改"怎么说"，不改"部件图从哪来"。
+- 不做 2.1 图面 / 版式改动；不提供"自动从图纸生成部件图"（那件事的出路仍然只有导入权威清单）。
+- 未 push / MR / tag / Release / 部署 / 重启服务；未连 PG 写数据。
