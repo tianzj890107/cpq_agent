@@ -1916,6 +1916,42 @@ const PACKAGING_CAD_LAYER_COLORS = {
   glue_flap: "#0a3069", print: "#57606a", bleed: "#8b949e", frame: "#6e7781",
   hole: "#cf222e", unknown: "#8b949e",
 };
+
+//: 图层配色的第二档（Spec `packaging-2-1-part-figure-fidelity.md` §C2）：真图上绝大多数图层名
+//: 不在角色闭集里（`role="unknown"`），照角色画就是一片同色。认得出角色的仍用角色色（口径不变）；
+//: 认不出的按**图层名**给一个稳定、互不相同的颜色 —— 一张图上"有哪几层"看得见。纯函数，node 可直接跑。
+const PACKAGING_CAD_LAYER_PALETTE = [
+  "#1f6feb", "#2ea043", "#d29922", "#a371f7", "#0a3069",
+  "#cf222e", "#0969da", "#8250df", "#1a7f37", "#bc4c00",
+];
+
+function packagingCadLayerPaletteIndex(layer) {
+  const name = String(layer == null ? "" : layer);
+  let hash = 5381;
+  for (let index = 0; index < name.length; index++) {
+    hash = (((hash << 5) + hash) ^ name.charCodeAt(index)) >>> 0;
+  }
+  return hash % PACKAGING_CAD_LAYER_PALETTE.length;
+}
+
+function packagingCadLayerColour(layer, role) {
+  const table = (typeof PACKAGING_CAD_LAYER_COLORS !== "undefined" && PACKAGING_CAD_LAYER_COLORS)
+    || {cut: "#1f6feb", half_cut: "#2ea043", crease: "#d29922", v_groove: "#a371f7",
+       glue_flap: "#0a3069", print: "#57606a", bleed: "#8b949e", frame: "#6e7781",
+       hole: "#cf222e", unknown: "#8b949e"};
+  const key = String(role == null ? "" : role);
+  if (key && key !== "unknown" && table[key]) return table[key];
+  const palette = (typeof PACKAGING_CAD_LAYER_PALETTE !== "undefined" && PACKAGING_CAD_LAYER_PALETTE)
+    || ["#1f6feb", "#2ea043", "#d29922", "#a371f7", "#0a3069",
+        "#cf222e", "#0969da", "#8250df", "#1a7f37", "#bc4c00"];
+  const name = String(layer == null ? "" : layer);
+  let hash = 5381;
+  for (let index = 0; index < name.length; index++) {
+    hash = (((hash << 5) + hash) ^ name.charCodeAt(index)) >>> 0;
+  }
+  return palette[hash % palette.length];
+}
+
 let currentPackagingCadPlan = null;
 let currentPackagingCadPlanBox = null;
 let currentPackagingBusinessPartCode = "";
@@ -2060,6 +2096,41 @@ function packagingPartSceneEntities(binding, doc) {
   return rows;
 }
 
+// 这一件在图纸上**被判成标注**的图元（Spec §C4）：形状口径把它们摘掉（上一批的口径不动），
+// 但"图纸上这一件长什么样"要看得到 —— 只在 `includeAnnotations` 时由件图补画，且画成标注。
+// 只收这一件绑定的分量里的标注，别件的一条都不进来；顺序仍按场景顺序、同 id 只回一条。
+function packagingPartAnnotationEntities(binding, doc) {
+  const row = (binding && typeof binding === "object") ? binding : {};
+  const scene = (doc && doc.cad_scene && typeof doc.cad_scene === "object") ? doc.cad_scene : {};
+  const evidence = (doc && doc.geometry_evidence && typeof doc.geometry_evidence === "object")
+    ? doc.geometry_evidence : {};
+  const bound = {};
+  (Array.isArray(row.component_ids) ? row.component_ids : []).forEach(id => {
+    bound[String(id || "")] = true;
+  });
+  // 只认**绑定分量**里被判成标注的那些：`binding.entity_ids` 是"这一件的形状成员"，
+  // 把它的成员也当成标注就会把形状自己人补画一遍（本批第一版就是这么错的）。
+  const marks = {};
+  (Array.isArray(evidence.components) ? evidence.components : []).forEach(raw => {
+    const component = (raw && typeof raw === "object") ? raw : {};
+    if (!bound[String(component.component_id || "")]) return;
+    (Array.isArray(component.annotation_filtered) ? component.annotation_filtered : []).forEach(raw2 => {
+      const entry = (raw2 && typeof raw2 === "object") ? raw2 : {};
+      const marked = String(entry.entity_id || "");
+      if (marked) marks[marked] = true;
+    });
+  });
+  const seen = {};
+  const rows = [];
+  (Array.isArray(scene.entities) ? scene.entities : []).forEach(raw => {
+    const id = String(((raw && raw.cad_entity_id) || ""));
+    if (!id || !marks[id] || seen[id]) return;
+    seen[id] = true;
+    rows.push(raw);
+  });
+  return rows;
+}
+
 function packagingPartSceneSvg(binding, doc, options) {
   const opts = (options && typeof options === "object") ? options : {};
   const colours = opts.colours
@@ -2105,13 +2176,54 @@ function packagingPartSceneSvg(binding, doc, options) {
   const rows = (typeof packagingPartSceneEntities === "function")
     ? packagingPartSceneEntities(binding, doc)
     : sceneRows();
-  if (!rows.length) return "";
+  // 图纸原样（Spec §C4）：默认只画形状口径的行（标注已被摘掉）；`includeAnnotations` 时才把
+  // **这一件**被判成标注的图元补画回去（画成标注：虚线 + 淡一点）。别件的一条都不进来。
+  // 兜底的"这一件的标注"口径（与 `packagingPartAnnotationEntities()` 逐字同一条）：
+  // node 单函数抽跑（只 eval 本函数）时看不到兄弟函数，走同值兜底 —— 既有依赖注入口径。
+  function annotationRows() {
+    const bind = (binding && typeof binding === "object") ? binding : {};
+    const scene = (doc && doc.cad_scene && typeof doc.cad_scene === "object") ? doc.cad_scene : {};
+    const evidence = (doc && doc.geometry_evidence && typeof doc.geometry_evidence === "object")
+      ? doc.geometry_evidence : {};
+    const bound = {};
+    const list = value => (Array.isArray(value) ? value : []);
+    list(bind.component_ids).forEach(id => { bound[String(id || "")] = true; });
+    const marks = {};
+    const picked = [];
+    list(evidence.components).forEach(raw => {
+      const component = (raw && typeof raw === "object") ? raw : {};
+      if (!bound[String(component.component_id || "")]) return;
+      list(component.annotation_filtered).forEach(raw2 => {
+        const marked = String(((raw2 || {}).entity_id) || "");
+        if (marked) marks[marked] = true;
+      });
+    });
+    const seen = {};
+    list(scene.entities).forEach(raw => {
+      const id = String(((raw || {}).cad_entity_id) || "");
+      if (!id || !marks[id] || seen[id]) return;
+      seen[id] = true;
+      picked.push(raw);
+    });
+    return picked;
+  }
+  const annotationRows_ = (opts.includeAnnotations === true)
+    ? ((typeof packagingPartAnnotationEntities === "function")
+      ? packagingPartAnnotationEntities(binding, doc) : annotationRows())
+    : [];
+  const figureRows = annotationRows_.length
+    ? rows.concat(annotationRows_.map(row => Object.assign({}, row, {annotation: true})))
+    : rows;
+  if (!figureRows.length) return "";
   // 兜底的单件画法（与 `packagingCadSceneEntitySvg()` 同一条口径）：只在没有全局时生效。
   function sceneEntitySvg(entity, visibility) {
     const row = (entity && typeof entity === "object") ? entity : {};
     const layer = String(row.layer || "");
     if (visibility && visibility[layer] === false) return "";
-    const colour = colours[row.role] || colours.unknown;
+    const colour = (typeof packagingCadLayerColour === "function")
+      ? packagingCadLayerColour(layer, row.role)
+      : (colours[row.role] || colours.unknown);
+    const mark = (row.annotation === true) ? " is-annotation" : "";
     const bbox = Array.isArray(row.bbox) && row.bbox.length >= 4 ? row.bbox.slice(0, 4).join(",") : "";
     const data = ` data-cad-entity-id="${plain(String(row.cad_entity_id || ""))}"`
       + ` data-layer="${plain(layer)}" data-bbox="${plain(bbox)}"`
@@ -2122,7 +2234,7 @@ function packagingPartSceneSvg(binding, doc, options) {
       const y = Number(row.y);
       if (!text || !Number.isFinite(x) || !Number.isFinite(y)) return "";
       const size = Number(row.height) > 0 ? Number(row.height) : 2.5;
-      return `<text class="packaging-cad-scene-text"${data} fill="${plain(colour)}"`
+      return `<text class="packaging-cad-scene-text${mark}"${data} fill="${plain(colour)}"`
         + ` x="${plain(String(x))}" y="${plain(String(-y))}"`
         + ` font-size="${plain(String(size))}">${plain(text)}</text>`;
     }
@@ -2135,21 +2247,21 @@ function packagingPartSceneSvg(binding, doc, options) {
     if (points.length < 2) return "";
     const attributes = data + ` fill="none" stroke="${plain(colour)}" stroke-width="1"`;
     if (row.closed === true && points.length >= 3) {
-      return `<polygon class="packaging-cad-scene-entity" points="${plain(points.join(" "))}"`
+      return `<polygon class="packaging-cad-scene-entity${mark}" points="${plain(points.join(" "))}"`
         + `${attributes}></polygon>`;
     }
-    return `<polyline class="packaging-cad-scene-entity" points="${plain(points.join(" "))}"`
+    return `<polyline class="packaging-cad-scene-entity${mark}" points="${plain(points.join(" "))}"`
       + `${attributes}></polyline>`;
   }
   const scene = (doc && doc.cad_scene && typeof doc.cad_scene === "object") ? doc.cad_scene : {};
   const visibility = (scene.layer_visibility && typeof scene.layer_visibility === "object")
     ? scene.layer_visibility : {};
   const draw = (typeof packagingCadSceneEntitySvg === "function") ? packagingCadSceneEntitySvg : sceneEntitySvg;
-  const drawn = rows.map(row => draw(row, visibility)).filter(Boolean).join("");
+  const drawn = figureRows.map(row => draw(row, visibility)).filter(Boolean).join("");
   if (!drawn) return "";
   // 取框与 viewBox 与整图同一条口径（`packagingCadPlanRange()` + `packagingCadPlanViewBox()`：
   // 命中图元的 bbox 并集、2% 留白、y 轴翻一次）。
-  const boxes = rows.map(row => ((row || {}).bbox)).filter(Boolean);
+  const boxes = figureRows.map(row => ((row || {}).bbox)).filter(Boolean);
   let box = null;
   boxes.forEach(raw => {
     if (!Array.isArray(raw) || raw.length < 4) return;
@@ -2296,7 +2408,11 @@ function packagingCadSceneEntitySvg(entity, visibility) {
   const layer = String(row.layer || "");
   if (visibility && visibility[layer] === false) return "";
   const bbox = Array.isArray(row.bbox) && row.bbox.length >= 4 ? row.bbox.slice(0, 4).join(",") : "";
-  const color = PACKAGING_CAD_LAYER_COLORS[row.role] || PACKAGING_CAD_LAYER_COLORS.unknown;
+  const color = (typeof packagingCadLayerColour === "function")
+    ? packagingCadLayerColour(layer, row.role)
+    : (PACKAGING_CAD_LAYER_COLORS[row.role] || PACKAGING_CAD_LAYER_COLORS.unknown);
+  // 图纸上被判成标注的图元，在"这一件的图"里补画时戴一个标记（虚线 + 淡一点，Spec §C4）。
+  const mark = (row.annotation === true) ? " is-annotation" : "";
   const data = ` data-cad-entity-id="${esc(String(row.cad_entity_id || ""))}"`
     + ` data-layer="${esc(layer)}" data-bbox="${esc(bbox)}"`
     + ` data-business-part="${esc(String(row.business_part_code || ""))}"`;
@@ -2307,7 +2423,7 @@ function packagingCadSceneEntitySvg(entity, visibility) {
     const y = Number(row.y);
     if (!text || !Number.isFinite(x) || !Number.isFinite(y)) return "";
     const size = Number(row.height) > 0 ? Number(row.height) : 2.5;
-    return `<text class="packaging-cad-scene-text"${data} fill="${esc(color)}"`
+    return `<text class="packaging-cad-scene-text${mark}"${data} fill="${esc(color)}"`
       + ` x="${esc(String(x))}" y="${esc(String(-y))}"`
       + ` font-size="${esc(String(size))}">${esc(text)}</text>`;
   }
@@ -2320,9 +2436,9 @@ function packagingCadSceneEntitySvg(entity, visibility) {
   if (points.length < 2) return "";
   const attributes = data + ` fill="none" stroke="${esc(color)}" stroke-width="1"`;
   if (row.closed === true && points.length >= 3) {
-    return `<polygon class="packaging-cad-scene-entity" points="${esc(points.join(" "))}"${attributes}></polygon>`;
+    return `<polygon class="packaging-cad-scene-entity${mark}" points="${esc(points.join(" "))}"${attributes}></polygon>`;
   }
-  return `<polyline class="packaging-cad-scene-entity" points="${esc(points.join(" "))}"${attributes}></polyline>`;
+  return `<polyline class="packaging-cad-scene-entity${mark}" points="${esc(points.join(" "))}"${attributes}></polyline>`;
 }
 
 // 完整 CAD 场景 → 右栏（Spec §5）：图元全部来自服务端的 CAD IR 派生场景，前端只画与显隐。
@@ -3528,7 +3644,9 @@ function openPackagingBusinessPart(code) {
   const figureHost = packagingCadPlanViewer();
   if (figureHost) {
     figureHost.hidden = false;
-    const figureHtml = packagingPartSceneSvg(binding, currentPackagingCadPlan);
+    // 图纸上这一件的样子（Spec §C4）：连它的标注一起画；标注只当标注画，不参与形状口径。
+    const figureHtml = packagingPartSceneSvg(binding, currentPackagingCadPlan,
+                                             {includeAnnotations: true});
     if (figureHtml) {
       // 三态与首点竞态跟着这块图走（Spec §C7）：`ready` 出视口 + 缩放控件（§C5：高度是**上限**，
       // 不吃满整栏）；坐标还没到（首点竞态）给 `loading` 并把这一件记进
@@ -6606,7 +6724,10 @@ function fileDrawingPreviewHtml(doc) {
     const row = (entity && typeof entity === "object") ? entity : {};
     const layer = String(row.layer || "");
     if (visibility && visibility[layer] === false) return "";
-    const colour = colours[row.role] || colours.unknown;
+    const colour = (typeof packagingCadLayerColour === "function")
+      ? packagingCadLayerColour(layer, row.role)
+      : (colours[row.role] || colours.unknown);
+    const mark = (row.annotation === true) ? " is-annotation" : "";
     const bbox = Array.isArray(row.bbox) && row.bbox.length >= 4 ? row.bbox.slice(0, 4).join(",") : "";
     const data = ` data-cad-entity-id="${plain(String(row.cad_entity_id || ""))}"`
       + ` data-layer="${plain(layer)}" data-bbox="${plain(bbox)}"`
@@ -6617,7 +6738,7 @@ function fileDrawingPreviewHtml(doc) {
       const y = Number(row.y);
       if (!text || !Number.isFinite(x) || !Number.isFinite(y)) return "";
       const size = Number(row.height) > 0 ? Number(row.height) : 2.5;
-      return `<text class="packaging-cad-scene-text"${data} fill="${plain(colour)}"`
+      return `<text class="packaging-cad-scene-text${mark}"${data} fill="${plain(colour)}"`
         + ` x="${plain(String(x))}" y="${plain(String(-y))}"`
         + ` font-size="${plain(String(size))}">${plain(text)}</text>`;
     }
@@ -6630,10 +6751,10 @@ function fileDrawingPreviewHtml(doc) {
     if (points.length < 2) return "";
     const attributes = data + ` fill="none" stroke="${plain(colour)}" stroke-width="1"`;
     if (row.closed === true && points.length >= 3) {
-      return `<polygon class="packaging-cad-scene-entity" points="${plain(points.join(" "))}"`
+      return `<polygon class="packaging-cad-scene-entity${mark}" points="${plain(points.join(" "))}"`
         + `${attributes}></polygon>`;
     }
-    return `<polyline class="packaging-cad-scene-entity" points="${plain(points.join(" "))}"`
+    return `<polyline class="packaging-cad-scene-entity${mark}" points="${plain(points.join(" "))}"`
       + `${attributes}></polyline>`;
   }
   const visibility = (scene.layer_visibility && typeof scene.layer_visibility === "object")
@@ -6710,7 +6831,10 @@ async function openFilePreview(file, container, onBack) {
     }
     const figureHtml = payload ? fileDrawingPreviewHtml(payload) : "";
     if (figureHtml) {
-      figure.innerHTML = figureHtml;
+      // 这张图与 2.1 的件图共用同一套视口（Spec §C1）：滚轮 / Ctrl(⌘)+滚轮缩放、按住拖拽平移、
+      // 「适应窗口」复位 —— 复用 2.1 那套纯函数与类名，不在预览里新写第二套交互。
+      figure.innerHTML = packagingShapeViewportMarkup(figureHtml);
+      bindPackagingPartShapeInteractions(figure);
       // 响应里若带名字就用它（当前没有）；否则用打开项目时留档的那一份
       // （Spec `packaging-drawing-preview-ownership-note-source.md` §C3）。
       const payloadName = String((payload && (payload.source_filename
@@ -7264,6 +7388,21 @@ function packagingPartShapeNumberText(value) {
   const rounded = Math.round(number * 100) / 100;
   const printed = rounded.toFixed(2).replace(/\.?0+$/, "");
   return (printed === "" || printed === "-" || printed === "-0") ? "0" : printed;
+}
+
+//: 可缩放 / 可拖拽的图形视口（Spec §C1）：预览与 2.1 件图共用**同一套**类名与复位按钮 id
+//: （两处从不同屏，id 重复无碍）；bar 里的百分比标签由 `bindPackagingPartShapeInteractions()` 刷。
+function packagingShapeViewportMarkup(innerHtml) {
+  const viewportClass = (typeof PACKAGING_PART_SHAPE_VIEWPORT_CLASS !== "undefined")
+    ? PACKAGING_PART_SHAPE_VIEWPORT_CLASS : "packaging-part-shape-viewport";
+  const resetId = (typeof PACKAGING_PART_SHAPE_RESET_ID !== "undefined")
+    ? PACKAGING_PART_SHAPE_RESET_ID : "packagingPartReset";
+  return `<div class="${viewportClass}" data-qq-shape-viewport="1">`
+    + String(innerHtml == null ? "" : innerHtml)
+    + `<div class="packaging-part-shape-bar">`
+    + `<span class="packaging-part-shape-zoom" data-qq-shape-zoom-label="1">100%</span>`
+    + `<button id="${resetId}" class="part-row-action" type="button">适应窗口</button>`
+    + `</div></div>`;
 }
 
 // 视口接线（Spec §2.2）：`pointerdown` / `pointermove` / `pointerup` / `pointercancel`

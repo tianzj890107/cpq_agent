@@ -20955,3 +20955,62 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
 - 零代码改动（`git diff --stat` 只有那 1 份 Spec）；`grep -n` 逐条复核行号见上，全部只读。
 - 保护网：`Ran 6659 tests … FAILED (failures=2, skipped=28)`（`## 490` 那次的读数，本批没动代码，
   两条失败仍是既有 `test_cpq_eval_ci_contract` 环境 / 待裁决项）；`test_spec_status_truth_red` 7 OK。
+
+## 492. 2.1 看图那块：预览的 DWG 图接上缩放拖拽、图层分色、高度翻倍、件图改成「图纸上这一件的样子」（18 OK；红基 12 FAIL；反向对照 12 红）（9-24，Codex 实现）
+
+用户原话（2026-09-24）：
+
+> 任务文件里的预览 dwg 和 3D 视图的看零件能不能做成可以缩放和拖拽的，能不能做成有颜色区分的？
+> 然后另外，现在的 3D 视图里看零件的地方太矮了，应该高度是现在两倍，另外想要的是之前这里的东西
+> 而不是之前下面的只有外轮廓的东西，想要的是图纸上整个零件的样子而且是这个零件的全部在图纸上的
+> 样子还原出来而且还没有别的零件
+
+### 改了什么（只动 `tech_app/frontend/app.js` 与 `tech_app/frontend/drawing-flow.css`）
+
+- **预览的 DWG 图不再是死图**：`openFilePreview()` 的 drawing 分支把图套进
+  `packagingShapeViewportMarkup()`（`.packaging-part-shape-viewport` + 百分比标签 + 「适应窗口」，
+  类名与复位 id 取 `PACKAGING_PART_SHAPE_VIEWPORT_CLASS` / `PACKAGING_PART_SHAPE_RESET_ID` 两个既有常量），
+  再调 `bindPackagingPartShapeInteractions()` —— 与 2.1 件图**同一套**缩放 / 拖拽 / 复位，没有第二套交互。
+  （2.1 件图的缩放拖拽 `## 484` 就有了；这次是让预览也长一样。）
+- **配色从"按角色"改成"认得出角色用角色色、认不出按图层名分色"**：新增纯函数
+  `packagingCadLayerColour(layer, role)` + `PACKAGING_CAD_LAYER_PALETTE`（djb2 取模，同层永远同色）；
+  整图 / 件图 / 预览三处渲染全部改走它。真图（酒盒）实测 `role` 分布 `{unknown: 6388, cut: 308}`
+  ⇒ 以前满屏一个灰，现在"有哪几层"看得出来。
+- **高度翻倍**：`.packaging-part-shape-viewport` 的 `min(46vh,420px)` → `min(92vh,840px)`；
+  未选中态整图 `.packaging-cad-plan-svg` 的 `min-height 220px` → `440px`；预览里的视口另给
+  `min(60vh,460px)`（预览是小窗，不跟着长到 92vh）。
+- **件图改成"图纸上这一件的样子"**：新增纯函数 `packagingPartAnnotationEntities(binding, doc)`
+  （只取这一件绑定分量里 `annotation_filtered` 的图元）；`packagingPartSceneSvg(binding, doc, {includeAnnotations:true})`
+  把它补画回去并标 `is-annotation`（虚线 + 淡），viewBox 一并算上。2.1 件图的调用点显式打开它。
+  **形状口径一个字没改**：`packagingPartSceneEntities()` 仍然摘标注（`## 485` 的红测原样绿），
+  标注只是"画出来"，不参与轮廓 / 尺寸 / 成本；别件的图元（含别件的标注）一条都不进来。
+
+### 产物
+
+- Spec：新增 `docs/specs/packaging-2-1-part-figure-fidelity.md`（§C1 缩放拖拽一套实现 / §C2 分色 /
+  §C3 高度翻倍 / §C4 图纸原样且只有这一件 / §C5 不许做的事 + §5 落地表 + §5.1 读数与反向对照 +
+  §5.2 与既有 Spec 的关系 + §5.3 已知缺口）。
+- 红测：新增 `tests/test_packaging_part_figure_fidelity_red.py`（18 条：A 纯函数 6 / B 接线 4 /
+  C CSS 数值 4 / D 护栏 4），A 组用 `node -e` 抽函数真跑。
+
+### 实测（本机只读，`./open-claude/.venv/bin/python -W ignore -m unittest`）
+
+- 本批红测 `Ran 18 … OK`；红基（`app.js` / `drawing-flow.css` 还原到本批之前）⇒ `Ran 18 … FAILED (failures=12)`
+  （A1–A4 / A6 / B1–B3 / C1–C4；6 条绿护栏：A5、B4、D1–D4）。反向对照后逐字节还原（`md5` 一致）。
+- 实现过程中被自己的红测抓到一处真错：第一版 `packagingPartAnnotationEntities()` 把
+  `binding.entity_ids`（= 这一件的**形状**成员）也当成标注，于是 `packagingPartSceneSvg()` 会把形状
+  自己人补画一遍（A3 立刻红）；改成只认绑定分量的 `annotation_filtered` 后转绿。另修一处：
+  `node` 单函数抽跑看不到兄弟函数，按既有"注入 + 同值兜底"口径补了内联兜底（A6 转绿）。
+- 点名保护网（58 个模块：`## 484` 视口 / `## 485`·`## 486` 标注 / `## 487` 单件图 / CAD 平面图 /
+  预览 / 两笔账 / 零件面板…）⇒ `Ran 918 … OK (skipped=6)`。
+- 全量（399 个模块）⇒ `Ran 6677 … FAILED (failures=3, skipped=28)`：两条既有
+  `test_cpq_eval_ci_contract`（环境 / 待裁决），第三条是本批 **Spec 状态行**（红测已绿却还写「未实现」，
+  被 `test_spec_status_truth_red` 抓到）—— 收口改成「已实现」后该条即绿。
+- `node --check tech_app/frontend/app.js` 通过；`git diff --check` 干净。
+
+### 明确没做
+
+- 不撤 `#packagingPartOutline` 那块只画外圈的图（用户那句里的"不是之前下面的只有外轮廓的东西"
+  涉及 `## 484` §C7 与面板守卫，撤 / 留需要点名确认，记在 Spec §5.3）；
+- 不做图层角色的扩充（哪些真图层名算"全穿刀 / 压线"是业务口径）；
+- 不抢裸滚轮（仍归整栏滚动，缩放是 Ctrl/⌘ + 滚轮，`## 484` 口径不动）；不动后端 / 接口 / 几何 / 成本。
