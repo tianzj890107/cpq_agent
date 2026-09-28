@@ -1448,7 +1448,8 @@ function applyPackagingShapeOnlyPanes() {
     column.dataset.qqFill = "1";
   }
   // 未选中零件：右栏摆一句引导，而不是空白（Spec §2.4）。
-  if (!currentSelectedPanelPart && !currentPackagingBusinessPartCode) showPackagingShapeIdle(true);
+  if (!currentSelectedPanelPart && !currentPackagingBusinessPartCode
+      && !currentPackagingUnassignedCandidateId) showPackagingShapeIdle(true);
 }
 
 // 未选中零件时右栏那一句引导的开 / 关（Spec 2.1-result §2.4）：只在包装 2.1 这条巷子里出现，
@@ -1972,6 +1973,7 @@ function packagingCadLayerColour(layer, role, aciColor, layerAciColor) {
 let currentPackagingCadPlan = null;
 let currentPackagingCadPlanBox = null;
 let currentPackagingBusinessPartCode = "";
+let currentPackagingUnassignedCandidateId = "";
 // 点在证据之前的这一件（Spec `packaging-2-1-result-parts-and-shape-only-pane.md` §2.2）：
 // 坐标还没读回来时先把件号记下来，`renderPackagingCadPlan()` 拿到几何后重画**同一件** ——
 // 不再"画一次空的就结束"（真图上这个竞态就是右栏一片空白）。
@@ -2619,6 +2621,9 @@ function renderPackagingCadPlan(doc) {
 function repaintSelectedPackagingShape(pending) {
   const code = String(pending || currentPackagingBusinessPartCode || "");
   pendingPackagingShapePartCode = "";
+  if (!code && currentPackagingUnassignedCandidateId) {
+    return Boolean(openPackagingUnassignedCandidate(currentPackagingUnassignedCandidateId));
+  }
   if (!code) return false;
   openPackagingBusinessPart(code);
   return true;
@@ -3096,6 +3101,11 @@ function packagingBusinessPartThumbnailUrl(projectId, code) {
   return `${API}/api/projects/${pid}/requirement/packaging-business-parts/${part}/thumbnail`;
 }
 
+function packagingGeometryBindingUrl(code) {
+  return `${API}/api/projects/${currentProject}/requirement/packaging-business-parts/`
+    + `${encodeURIComponent(String(code || ""))}/geometry-binding`;
+}
+
 // 对照表的两条披露（Spec 「读回路径上的两条披露」 §C4）：部件图归属是
 // "按顺序推定"还是"逐行核对"，以及哪些行被导入器跳过（含客户原文）—— 纯函数，可被 node 直接执行。
 // 位置与 `packagingPartEvidenceRowsHtml()` 同一段：这里离 panels 远，不挤那两个源码窗口护栏。
@@ -3224,6 +3234,10 @@ function packagingBusinessPartDownstreamTarget(row, partsDoc) {
   }
   const binding = (part.geometry_binding && typeof part.geometry_binding === "object")
     ? part.geometry_binding : {};
+  if (String(binding.status || "") === "partial" && binding.candidate_id) {
+    return {ok: false, part_code: "", code: "raw_candidate_size_unconfirmed",
+            message: "CAD 候选已人工关联，但仍有未纳入几何件的原始图元；先确认轮廓与尺寸，不能直接按候选包围盒算。"};
+  }
   const wanted = new Set();
   const add = value => {
     const text = String(value === undefined || value === null ? "" : value).trim();
@@ -3685,6 +3699,109 @@ function renderPackagingBusinessTree(tree, rows) {
     tree.appendChild(line);
     tree.appendChild(components);
   });
+  const unassigned = (currentPackagingBusinessParts
+    && Array.isArray(currentPackagingBusinessParts.unassigned_candidates))
+    ? currentPackagingBusinessParts.unassigned_candidates : [];
+  if (unassigned.length) {
+    const group = document.createElement("details");
+    group.className = "packaging-part-components";
+    group.setAttribute("data-qq-unassigned-candidates", "1");
+    const summary = document.createElement("summary");
+    summary.textContent = `待核对 CAD 整件候选 ${unassigned.length} 组（不计入业务部件）`;
+    group.appendChild(summary);
+    unassigned.forEach((candidate, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "part-row-action";
+      button.textContent = `候选 ${index + 1} · ${Number(candidate.entity_total) || 0} 条图元`;
+      button.setAttribute("data-qq-unassigned-candidate", String(candidate.candidate_id || ""));
+      button.addEventListener("click", () => openPackagingUnassignedCandidate(candidate.candidate_id));
+      group.appendChild(button);
+    });
+    tree.appendChild(group);
+  }
+}
+
+// 无件名的 CAD 候选只供看图核对：不创造业务件，也没有下游或直接确权按钮。
+function openPackagingUnassignedCandidate(candidateId) {
+  const rows = (currentPackagingBusinessParts
+    && Array.isArray(currentPackagingBusinessParts.unassigned_candidates))
+    ? currentPackagingBusinessParts.unassigned_candidates : [];
+  const candidate = rows.find(row => String((row || {}).candidate_id || "") === String(candidateId || ""));
+  if (!candidate) return null;
+  currentPackagingUnassignedCandidateId = String(candidate.candidate_id || "");
+  currentPackagingBusinessPartCode = "";
+  currentSelectedPanelPart = null;
+  setRightPane("model");
+  showPackagingPartPane();
+  markSelection("");
+  const title = $("packagingPartTitle");
+  if (title) title.textContent = "待核对 CAD 图形候选";
+  const facts = $("packagingPartFacts");
+  if (facts) facts.innerHTML = [
+    pkgPartFactRow("状态", "仅是图形候选；尚无可靠件名或业务归属"),
+    pkgPartFactRow("构成分量", (candidate.component_ids || []).join(" / ")),
+    pkgPartFactRow("原始分量", (candidate.raw_component_ids || []).join(" / ")),
+    pkgPartFactRow("形成依据", (candidate.evidence_reasons || []).join("、")),
+    pkgPartFactRow("图框", candidate.frame_id || "图框未确定"),
+    pkgPartFactRow("尺寸", "未确认；不得用于工艺或成本"),
+  ].join("");
+  const host = packagingCadPlanViewer();
+  if (host) {
+    host.hidden = false;
+    // Explicit entity IDs only: bbox inclusion would accidentally show neighbours.
+    const exact = Object.assign({}, candidate, {bbox: null});
+    const figure = currentPackagingCadPlan
+      ? packagingPartSceneSvg(exact, currentPackagingCadPlan, {includeAnnotations: true}) : "";
+    host.innerHTML = figure
+      ? `<div class="packaging-part-shape-viewport" data-qq-shape-viewport="1">`
+        + `<div class="packaging-part-note" data-qq-candidate-warning="1">`
+        + `图形候选，尚未确认件名、归属或尺寸。</div>` + figure + `</div>`
+        + PACKAGING_CAD_RULE_LEGEND
+      : `<div class="view-3d-placeholder">候选图形暂不可查看；请核对 CAD 场景。</div>`;
+    host.setAttribute("data-qq-part-shape", figure ? "ready" : "unavailable");
+    if (figure) bindPackagingPartShapeInteractions(host);
+  }
+  const outline = $("packagingPartOutline");
+  if (outline) outline.textContent = "候选只供核对；可选择现有业务部件确认归属，尺寸须另行核对。";
+  const actions = $("packagingPartActions");
+  if (actions) {
+    const canConfirm = !authEnabled || ["process_manager", "process_director", "admin"]
+      .includes(String((currentUser || {}).role || ""));
+    const businessRows = packagingBusinessPartRows(currentPackagingBusinessParts);
+    actions.innerHTML = `<div class="packaging-part-note">候选不能直接发起工艺推荐或成本测算。</div>`
+      + (canConfirm && businessRows.length
+        ? `<label class="packaging-part-note" for="packagingCandidateBusinessPart">关联到业务零件</label>`
+          + `<select id="packagingCandidateBusinessPart">`
+          + businessRows.map(row => `<option value="${esc(String(row.business_part_code || ""))}">`
+            + `${esc(String(row.business_part_code || ""))} ${esc(String(row.name || ""))}</option>`).join("")
+          + `</select>`
+          + `<button id="packagingConfirmUnassignedCandidate" class="part-row-action" type="button">确认候选归属</button>`
+        : "");
+    const confirm = $("packagingConfirmUnassignedCandidate");
+    if (confirm) confirm.addEventListener("click", async () => {
+      const chosen = $("packagingCandidateBusinessPart");
+      const partCode = String(chosen && chosen.value || "");
+      if (!partCode) return;
+      confirm.disabled = true;
+      try {
+        const res = await fetch(packagingGeometryBindingUrl(partCode), {
+          method: "PUT", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({candidate_id: String(candidate.candidate_id || ""),
+                                component_ids: [], reason: "人工核对 CAD 整件候选归属"}),
+        });
+        if (!res.ok) throw new Error(`确认失败（HTTP ${res.status}）`);
+        currentPackagingBusinessParts = await res.json();
+        renderTree(currentIR || {});
+        openPackagingBusinessPart(partCode);
+        status("候选图形归属已记录；尺寸仍须核对图纸标注。", true);
+      } catch (error) {
+        confirm.disabled = false;
+        status(String(error && error.message || "确认失败"), false);
+      }
+    });
+  }
+  return candidate;
 }
 
 // 点业务部件：右栏给对照资料 + 绑定状态，并在 CAD 平面图里高亮它绑定的图元
@@ -3753,6 +3870,7 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
   const rows = packagingBusinessPartRows(currentPackagingBusinessParts);
   const row = rows.find(item => String(item.business_part_code || "") === wanted);
   if (!row) return null;
+  currentPackagingUnassignedCandidateId = "";
   currentSelectedPanelPart = null;
   setRightPane("model");
   showPackagingPartPane();
@@ -3767,12 +3885,21 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
     && requestedCandidateIndex < candidates.length ? requestedCandidateIndex
     : (suggestedIndex >= 0 ? suggestedIndex : 0);
   const candidate = candidates[candidateIndex] || null;
+  const candidateEntityIds = candidate && Array.isArray(candidate.entity_ids)
+    ? candidate.entity_ids : [];
   const candidateBinding = candidate ? {
     component_ids: Array.isArray(candidate.component_ids) ? candidate.component_ids : [],
-    entity_ids: [], bbox: candidate.bbox || null,
+    // Raw CAD candidates may contain arcs/short lines absent from the filtered
+    // geometry list. Draw exactly their verified entity IDs, not every neighbour
+    // merely lying inside the candidate bbox.
+    entity_ids: candidateEntityIds,
+    bbox: candidateEntityIds.length ? null : (candidate.bbox || null),
   } : null;
-  const figureBinding = String(binding.status || "") === "bound"
-    ? binding : (candidateBinding || binding);
+  const figureBinding = (String(binding.status || "") === "bound"
+    || (String(binding.status || "") === "partial" && binding.candidate_id
+        && Array.isArray(binding.entity_ids) && binding.entity_ids.length))
+    ? (binding.candidate_id ? Object.assign({}, binding, {bbox: null, component_ids: []}) : binding)
+    : (candidateBinding || binding);
   const block = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
   const reference = block(row.reference) || block(row["author" + "ity"]) || {};
   const disclosures = packagingAuthorityDisclosureLines(currentPackagingBusinessParts || {});
@@ -3935,7 +4062,8 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
            : "");
     const canConfirmCandidate = !authEnabled || ["process_manager", "process_director", "admin"]
       .includes(String((currentUser || {}).role || ""));
-    const candidateAction = candidate && candidateBinding && candidateBinding.component_ids.length
+    const candidateAction = candidate && candidateBinding
+      && (candidateBinding.component_ids.length || candidateBinding.entity_ids.length)
       && canConfirmCandidate
       ? `<div class="packaging-part-note">确认前请核对图形、名称和图纸标注；确认归属不等于确认尺寸。</div>`
         + `<button id="packagingConfirmCandidate" class="part-row-action" type="button">确认当前候选归属</button>`
@@ -3945,10 +4073,10 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
     if (confirmCandidate) confirmCandidate.addEventListener("click", async () => {
       confirmCandidate.disabled = true;
       try {
-        const res = await fetch(`${API}/api/projects/${currentProject}/requirement/`
-          + `packaging-business-parts/${encodeURIComponent(wanted)}/geometry-binding`, {
+        const res = await fetch(packagingGeometryBindingUrl(wanted), {
           method: "PUT", headers: {"Content-Type": "application/json"},
           body: JSON.stringify({component_ids: candidateBinding.component_ids,
+                                candidate_id: String(candidate.id || candidate.candidate_id || ""),
                                 reason: `人工核对候选 ${String(candidate.id || "")}`}),
         });
         if (!res.ok) throw new Error(`确认失败（HTTP ${res.status}）`);

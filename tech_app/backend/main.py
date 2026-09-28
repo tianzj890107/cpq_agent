@@ -7399,6 +7399,7 @@ class PackagingGeometryBindingAction(BaseModel):
     """人工确认/修改「业务部件 ↔ 几何分量」映射的入参（Spec §5）。"""
 
     component_ids: List[str] = Field(default_factory=list)
+    candidate_id: str = ""
     reason: str = ""
 
 
@@ -7413,6 +7414,7 @@ def _business_parts_body(pid: str, doc: Any = None) -> dict:
         geometry = packaging_parts.geometry_evidence_of(packaging_parts.load_parts(pid) or {})
         return {"built": False, "engine_version": packaging_parts.BUSINESS_ENGINE_VERSION,
                 "business_parts_id": "", "business_parts_hash": "", "business_parts": [],
+                "unassigned_candidates": [], "layout_frame_total": 0,
                 "geometry_evidence": geometry,
                 "gap": packaging_parts.business_parts_gap(geometry),
                 "summary": packaging_parts.summarize_business_parts({}),
@@ -7434,6 +7436,9 @@ def _business_parts_body(pid: str, doc: Any = None) -> dict:
             "business_parts_id": record.get("business_parts_id") or "",
             "business_parts_hash": record.get("business_parts_hash") or "",
             "business_parts": list(record.get("business_parts") or []),
+            "unassigned_candidates": [dict(item) for item in (record.get("unassigned_candidates") or [])
+                                      if isinstance(item, dict)],
+            "layout_frame_total": int(record.get("layout_frame_total") or 0),
             "geometry_evidence": record.get("geometry_evidence")
                                   or packaging_parts.geometry_evidence_of({}),
             "gap": packaging_parts.business_parts_gap_of(record),
@@ -7650,12 +7655,20 @@ def update_packaging_geometry_binding(
     doc = packaging_parts.load_business_parts(pid)
     if not isinstance(doc, dict) or not (doc.get("business_parts") or []):
         raise HTTPException(409, "项目里还没有业务部件清单，请先导入对照资料或人工建立业务部件")
-    updated = packaging_parts.set_geometry_binding(doc, part_code, body.component_ids,
-                                                   bound_by="manual", reason=body.reason)
+    try:
+        updated = packaging_parts.set_geometry_binding(
+            doc, part_code, body.component_ids, bound_by="manual", reason=body.reason,
+            candidate_id=body.candidate_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     saved = packaging_parts.save_business_parts(pid, updated)
     store.audit(pid, "workflow:packaging_binding_updated", {
         "business_part_code": str(part_code or ""),
         "component_ids": [str(item) for item in (body.component_ids or [])],
+        "candidate_id": str(body.candidate_id or ""),
+        "confirmed_entity_total": len(next((row.get("geometry_binding", {}).get("entity_ids") or []
+                                            for row in (saved.get("business_parts") or [])
+                                            if row.get("business_part_code") == part_code), [])),
         "business_parts_id": saved.get("business_parts_id"),
         "by": str(user.get("username") or ""),
     })

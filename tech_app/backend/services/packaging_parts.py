@@ -4083,6 +4083,11 @@ def business_parts_document(reference: Any, geometry: Any, *,
         "stats": stats,
         "unavailable": [] if business_parts else [business_parts_gap(evidence)],
         "bindings_shared": list(plan.get("shared") or []),
+        # CAD proposals without a confirmed business name remain a separate
+        # review queue; they are never counted as business parts or confirmed facts.
+        "unassigned_candidates": [dict(item) for item in (plan.get("unassigned_candidates") or [])
+                                  if isinstance(item, dict)],
+        "layout_frame_total": _int_or(plan.get("layout_frame_total"), 0),
         "legacy_parts_id": _text(legacy_parts_id) or _text(geometry_doc.get("parts_id")),
         "source": {
             "ir_id": _text(geometry_source.get("ir_id")),
@@ -4393,7 +4398,8 @@ def reference_thumbnail_of(project_id: str, doc: Any, code: Any) -> Dict[str, An
 
 
 def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
-                         bound_by: str = "manual", reason: str = "") -> Dict[str, Any]:
+                         bound_by: str = "manual", reason: str = "",
+                         candidate_id: str = "") -> Dict[str, Any]:
     """人工确认/修改一件业务部件的几何绑定（Spec §5 的写接口用）。
 
     只改这一件的 `geometry_binding`，并**留痕**（`bound_by` / `bound_at` / `reasons`）；
@@ -4401,11 +4407,35 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
     """
     record = copy.deepcopy(doc) if isinstance(doc, dict) else {}
     wanted = _text(code)
+    if not any(isinstance(item, dict) and _text(item.get("business_part_code")) == wanted
+               for item in (record.get("business_parts") or [])):
+        raise ValueError("business_part_code_not_found")
     ids = [_text(item) for item in (component_ids or []) if _text(item)]
     source = bound_by if bound_by in BUSINESS_BINDING_BY else BUSINESS_BINDING_BY[1]
     evidence = record.get("geometry_evidence") if isinstance(record.get("geometry_evidence"), dict) else {}
     components = {_text(item.get("component_id")): item
                  for item in (evidence.get("components") or []) if isinstance(item, dict)}
+    selected: Dict[str, Any] = {}
+    selected_id = _text(candidate_id)
+    if selected_id:
+        stored = list(record.get("unassigned_candidates") or [])
+        for item in record.get("business_parts") or []:
+            if isinstance(item, dict) and _text(item.get("business_part_code")) == wanted:
+                stored.extend((item.get("geometry_binding") or {}).get("candidates") or [])
+        selected = next((item for item in stored if isinstance(item, dict)
+                         and _text(item.get("candidate_id") or item.get("id")) == selected_id), {})
+        if not selected or not selected.get("entity_ids"):
+            raise ValueError("candidate_id_not_in_project_review_queue")
+        already_assigned = {str(eid) for item in (record.get("business_parts") or [])
+                            if isinstance(item, dict)
+                            and _text(item.get("business_part_code")) != wanted
+                            and (item.get("geometry_binding") or {}).get("status") in ("bound", "partial")
+                            for eid in ((item.get("geometry_binding") or {}).get("entity_ids") or [])}
+        if already_assigned.intersection(str(eid) for eid in (selected.get("entity_ids") or [])):
+            raise ValueError("candidate_entities_already_assigned_to_another_part")
+        # Never accept client-supplied entity membership. The reviewed server
+        # candidate is the only source of raw CAD IDs and its known components.
+        ids = [_text(item) for item in (selected.get("component_ids") or []) if _text(item)]
     for row in (record.get("business_parts") or []):
         if not isinstance(row, dict) or _text(row.get("business_part_code")) != wanted:
             continue
@@ -4414,7 +4444,17 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
         states = sorted({_text(components[item].get("status")) for item in known}) or []
         # A human may confirm a whole business part made of several disconnected
         # CAD components. Multiple components are not ambiguity by themselves.
-        status = "bound" if known else "unbound"
+        confirmed_entities = [_text(eid) for eid in (selected.get("entity_ids") or [])
+                              if _text(eid)] if selected_id else [
+                                  _text(eid) for item in known
+                                  for eid in (components[item].get("entity_ids") or []) if _text(eid)]
+        known_entities = {str(eid) for item in known
+                          for eid in (components[item].get("entity_ids") or [])}
+        raw_extra = sorted(set(confirmed_entities) - known_entities)
+        candidate_mismatch = bool(selected_id) and (not known or
+                                                    set(confirmed_entities) != known_entities)
+        status = ("partial" if candidate_mismatch else
+                  "bound" if known else "unbound")
         boxes = []
         for item in known:
             raw = part_outline_rect(components[item])
@@ -4426,20 +4466,44 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
         union_box = ([min(box[0] for box in boxes), min(box[1] for box in boxes),
                       max(box[2] for box in boxes), max(box[3] for box in boxes)]
                      if boxes else None)
+        if selected_id and isinstance(selected.get("bbox"), (list, tuple)):
+            union_box = list(selected["bbox"][:4])
         reasons = [reason] if reason else []
         reasons.extend("unknown_component:%s" % item for item in unknown)
         reasons.extend(item for item in states if item)
+        if raw_extra:
+            reasons.append("raw_cad_entities_not_in_kept_geometry")
+        if candidate_mismatch and not raw_extra:
+            reasons.append("candidate_entity_set_differs_from_kept_components")
         row["geometry_binding"] = {
             "status": status, "component_ids": known,
-            "entity_ids": [eid for item in known for eid in (components[item].get("entity_ids") or [])],
+            "entity_ids": confirmed_entities,
             "bbox": union_box,
-            "confidence": 1.0 if known and source == "manual" else 0.0,
+            "confidence": 1.0 if status == "bound" and source == "manual" else 0.0,
             "reasons": reasons, "bound_by": source, "bound_at": _stamp(),
             "rule_id": BUSINESS_BINDING_RULE_ID, "geometry_component_ref": known,
-            "attribution": {"status": "human_confirmed" if known and source == "manual"
-                            else "review_needed", "reasons": reasons},
+            "candidate_id": selected_id, "size_confirmed": False,
+            "size_source": "none" if candidate_mismatch else "geometry_binding",
+            "attribution": {"status": ("human_confirmed_candidate" if candidate_mismatch else
+                                       "human_confirmed" if known and source == "manual"
+                                       else "review_needed"), "reasons": reasons},
         }
         break
+    claimed = {str(cid) for part in (record.get("business_parts") or [])
+               if isinstance(part, dict)
+               and (part.get("geometry_binding") or {}).get("status") == "bound"
+               for cid in ((part.get("geometry_binding") or {}).get("component_ids") or [])}
+    claimed_entities = {str(eid) for part in (record.get("business_parts") or [])
+                        if isinstance(part, dict)
+                        and (part.get("geometry_binding") or {}).get("status") == "bound"
+                        for eid in ((part.get("geometry_binding") or {}).get("entity_ids") or [])}
+    if isinstance(record.get("unassigned_candidates"), list):
+        record["unassigned_candidates"] = [candidate for candidate in record["unassigned_candidates"]
+                                           if isinstance(candidate, dict)
+                                           and _text(candidate.get("candidate_id")) != selected_id
+                                           and (not set(candidate.get("entity_ids") or []) <= claimed_entities
+                                                if "raw_cad_entities" in (candidate.get("evidence_reasons") or [])
+                                                else not set(candidate.get("component_ids") or []) <= claimed)]
     record["stats"] = business_parts_stats(record.get("business_parts") or [])
     record["business_parts_id"], record["business_parts_hash"] = _business_identity(record)
     return record
