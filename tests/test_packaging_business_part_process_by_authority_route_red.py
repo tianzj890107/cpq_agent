@@ -552,10 +552,12 @@ class FGuardrails(unittest.TestCase):
         # **重指**为 4 —— **重指不等于放宽**：多出来的那一条只许是业务部件工艺路由那一处
         # （`## 412` 的 E4 里逐个点名了两颗按钮）。
         # `## 480` 按 Spec `packaging-2-1-result-parts-and-shape-only-pane.md` §2.4b C6 又**重指**
-        # 一次（4 → 5）：多出来的那一条只许是按图纸补推导那一条路由。重指不等于放宽。
+        # 一次（4 → 5）：多出来的那一条只许是按图纸补推导那一条路由。视觉复核另加人工确认
+        # 候选的 geometry-binding PUT，计数精确重指为 6，不是无约束放宽。
         src = _source(APP_JS)
-        self.assertEqual(5, src.count("packaging-business-parts/"),
-                         "前端只许多出那两条声明的业务件请求（工艺 + 补推导；Spec §C4 / 2.1-result §2.4b）")
+        self.assertEqual(6, src.count("packaging-business-parts/"),
+                         "新增的一条只能是人工确认候选的 geometry-binding 写接口")
+        self.assertEqual(1, src.count("/geometry-binding"))
 
     def test_f5_business_cost_route_is_untouched(self):
         src = _source(MAIN_PY)

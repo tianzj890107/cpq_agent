@@ -24,3 +24,5 @@ pypdf>=5.0,<7
 # 成本口径的证据类测试（工作簿读取）用；与根 requirements.txt 的版本保持一致。
 # 生产引擎不得依赖它（packaging_cost.py 不 import openpyxl）。
 openpyxl==3.1.5
+# CAD candidate rasters sent to the configured vision model.
+Pillow>=10.0

@@ -4044,6 +4044,10 @@ def business_parts_document(reference: Any, geometry: Any, *,
             "bound_at": "", "rule_id": BUSINESS_BINDING_RULE_ID,
             "geometry_component_ref": [],
         }
+        row_attribution = (row.get("evidence") or {}).get("attribution") if isinstance(
+            row.get("evidence"), dict) else None
+        if isinstance(row_attribution, dict) and not binding.get("attribution"):
+            binding = dict(binding, attribution=dict(row_attribution))
         reference_block = _business_part_reference(row)
         if derived_default:
             size_evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
@@ -4408,21 +4412,32 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
         known = [item for item in ids if item in components]
         unknown = [item for item in ids if item not in components]
         states = sorted({_text(components[item].get("status")) for item in known}) or []
-        status = "unbound"
-        if known:
-            status = "bound" if len(known) == 1 else "bound"
-            if len(known) > 1:
-                status = "ambiguous"
+        # A human may confirm a whole business part made of several disconnected
+        # CAD components. Multiple components are not ambiguity by themselves.
+        status = "bound" if known else "unbound"
+        boxes = []
+        for item in known:
+            raw = part_outline_rect(components[item])
+            if isinstance(raw, (list, tuple)) and len(raw) >= 4:
+                try:
+                    boxes.append([float(value) for value in raw[:4]])
+                except (TypeError, ValueError):
+                    pass
+        union_box = ([min(box[0] for box in boxes), min(box[1] for box in boxes),
+                      max(box[2] for box in boxes), max(box[3] for box in boxes)]
+                     if boxes else None)
         reasons = [reason] if reason else []
         reasons.extend("unknown_component:%s" % item for item in unknown)
         reasons.extend(item for item in states if item)
         row["geometry_binding"] = {
             "status": status, "component_ids": known,
             "entity_ids": [eid for item in known for eid in (components[item].get("entity_ids") or [])],
-            "bbox": (known and components[known[0]].get("bbox")) or None,
+            "bbox": union_box,
             "confidence": 1.0 if known and source == "manual" else 0.0,
             "reasons": reasons, "bound_by": source, "bound_at": _stamp(),
             "rule_id": BUSINESS_BINDING_RULE_ID, "geometry_component_ref": known,
+            "attribution": {"status": "human_confirmed" if known and source == "manual"
+                            else "review_needed", "reasons": reasons},
         }
         break
     record["stats"] = business_parts_stats(record.get("business_parts") or [])

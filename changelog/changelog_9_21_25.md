@@ -21287,6 +21287,13 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
 - 回归（本轮提交前复跑）：`tests.test_packaging_part_figure_fidelity_red` 20 OK、`tests.test_packaging_2_1_right_pane_single_part_figure_red` 31 OK、`tests.test_packaging_cad_scene_entity_colours` 3 OK，共 54 条通过。
 - 状态：随本轮提交推送（GitLab + GitHub `ytbz`）与 34 部署一并上线。
 
+## 504. 撤销 503 的酒盒样本特化尺寸规则（9-24）
+
+- 用户指出两件面纸对上不能代表整张 DWG 识别正确。503 虽未读 BOM 作运行时输入，但“锚点在下方、三片覆盖九成、左右镜像”等阈值来自单张酒盒图，属于样本特化推断；撤销 `_upgrade_dimensioned_clusters` 及其自动改尺寸、改绑定路径，不再宣称两件已被通用算法识别正确。
+- 保留与样本无关的正方形视口防 flex 压缩、图纸派生件的尺寸质量读回、未确认尺寸披露及下游门禁。当前这两件仍是 `bbox_only`，数值只是待确认的几何候选，不是确认尺寸；不自动改写已保存项目。
+- 移除 503 的过拟合 Spec/测试，改为证据护栏 Spec 与两条测试；相关 11 个测试模块共 216 条通过。BOM 仅作为离线答案集；后续须跨图纸评估全件名称、图元归属、尺寸误差和置信度，再设计通用识别。
+- 状态：本次撤销仅在本地；503 已部署到 34，本次未推送、未部署，线上仍有该样本规则。
+
 ## 500. 补 `## 497` 的两条全量红：AGENTS.md 里那个写错的示例路径 + 新脚本 docstring 里引用了 `tmp_*.py` 的名字（措辞修正，零行为改动）（9-24，Codex 实现）
 
 `## 497` 当时只跑了单模块与 11 个模块的保护网；全量 404 个模块跑出来两条自己踩的守卫，
@@ -21363,3 +21370,52 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
 - 右栏正方形视口及外层容器均禁止纵向 flex 收缩；整件范围内的嵌套实际线条可见。图纸派生件的尺寸质量不再在文档组装时丢失，列表和详情展示尺寸依据；右件的镜像推断仍须确认后才能进成本/工艺。
 - 新增 Spec：`docs/specs/packaging-composite-part-dimension-and-square.md`；新增红测 `tests/test_packaging_composite_dimension_and_square_red.py`（4 OK），本轮提交前复跑 `test_packaging_2_1_right_pane_single_part_figure_red` 31 OK、`test_packaging_part_figure_fidelity_red` 20 OK、`test_packaging_2_1_part_row_size_and_material_lines_red` 15 OK、`test_packaging_customer_workbook_is_a_reference_not_an_input_red` 21 OK。
 - 状态：随本轮提交推送（GitLab + GitHub `ytbz`）与 34 部署一并上线。
+
+## 505. 全件 CAD 归属的模型复核方案与红测（9-24）
+
+- 对整张酒盒图做离线基线：当前推导 28 行，对照资料 28 行，但严格同名仅 17 行，其中两轴 ±2 mm 的尺寸仅 7 行；不能靠贴牌或两件面纸局部调参来代表全图正确。
+- 只读模型试验使用现有全局 Qwen 配置，不给 BOM/金标，也不给图像，仅给“贴牌”附近 10 个 CAD 候选摘要；模型明确回答证据不足、`choice=none`。据此新增全件方案：CAD 视图/候选集、局部栅格视觉复核、服务端证据门禁与逐件待确认；模型不生成尺寸或权威事实。
+- 用户随后明确要求 Codex 直接实现：新增 `packaging_part_visual_review.py`，从 DWG CAD IR 生成局部彩色 PNG 候选图，经全局视觉模型设置复核；全件留痕、有限调用、拒答/超时/越权候选安全降级，缺证据时撤回旧距离绑定。将一键解析与旧项目补推导接入同一路径；前端在原图位显示“候选而非确认零件”、切换候选和有权限的人工确认，确认几何不自动确认尺寸。
+- 真实视觉试验：Qwen3.5 Plus 对贴牌、左盖面纸、底板均拒答；贴牌的原因是缺少文字/引线/视图投影直接关联。这验证了模型接入和安全拒答，**没有验证自动识别率提高**。酒盒当前仍需人工核对，不能宣称 28 件自动认准。
+- 新增 Spec 与 9 条本地测试；最终组合回归 165 条通过（1 跳过），图纸/右栏另一组 105 条通过（1 跳过）；未取得第三张独立留出 DWG，尚未做泛化精度验收。本地未提交、未推送、未部署。
+
+## 506. 整件识别改为“CAD 先组候选、模型只判语义”的 Spec 与红测（9-24）
+
+- 新增 `docs/specs/packaging-whole-part-candidate-geometry-first.md`：连通分量只作底层候选，CAD 先结合图层、文字、标注见证点、版面/视图与块路径形成可追溯整件候选；模型只能引用已有候选 ID 给弱语义建议，不能决定几何或尺寸；歧义需人工确认。BOM/金标仅用于离线整图评估，不进入运行时，也不以“28 件”作通过门槛。
+- 新增 `tests/test_packaging_whole_part_candidate_geometry_first_red.py`：独立合成图测试跨分量成件、相邻件隔离、平移/顺序/改名不变性、同数字远处标注误确认、模型越权与拒答、模型超时后的安全降级。红测故意对当前实现失败；本轮只交付文档和测试，不改业务代码。
+
+## 507. 整件识别落地：CAD 先组候选、模型只判语义、标注见证点才算尺寸证据（9-24，Codex 实现）
+
+- 实现 `docs/specs/packaging-whole-part-candidate-geometry-first.md` §2/§4 的 CAD 确定性层：新增
+  `packaging_part_visual_review.build_part_view_candidates(cad_ir, geometry_parts)`，把连通分量先拼成
+  **可追溯的整件视图候选**（`candidate_id / view_id / component_ids / entity_ids / bbox / boundary_role /
+  name_anchor_ids / dimension_refs / evidence_reasons / geometry_status`）。成件判据只有几何：两片的
+  **悬空端点**相距 ≤ 1.0 mm，**且并起来悬空端点必须变少**（刀线互补）；闭合轮廓没有悬空端点，永远不会被
+  卷进任何组。视图/排版格按矩形间隙 ≤ 50 mm 聚类，编号只由几何位置决定 —— 平移、实体遍历顺序、
+  改名都不改变成员集（红测 A 组用同一张图平移 + 逆序 + 换名对照）。
+- 模型候选表不再是"最近 8 个单片"：`_candidates()` 把"当前绑定所属的那一组"排在第一位，再补单片与其它组
+  （仍只画 8 格，`render_candidate_preview` 上限不变）。模型答复统一过新校验器
+  `validate_model_suggestion(request, suggestion)`：不在候选表里的 ID、跨候选乱并（`candidate_ids`/`action=merge`）、
+  `entity_ids / bbox / length_mm / width_mm / size_confirmed / geometry_binding / status` 等越权字段、
+  无真实图元的候选、图例或材料当件名一律 `rejected`；被接受的也只是
+  `needs_confirmation + evidence_level=WEAK`，**不原地修改请求**，CAD 与已确认字段一个字不动。
+- 尺寸证据收紧（Spec §3）：`dimension_rects()` 现在把每条横/竖标注的**来源图元与两个扩展点/见证点**一起
+  落盘（`horizontal_targets` / `vertical_targets` / `witness_points` / `dimension_ref`）；
+  `_region_is_size_confirmed()` 不再"全图找到同样两个数字"就算确认 —— 尺寸数值相等只是必要条件，见证点
+  必须落在候选矩形上（外扩 `max(10 mm, 短边 × 25%)`），拿不到矩形（`bbox` 为空）的候选一律不确认。
+- 真样本只读重跑（本机）：旧口径按数字相等确认 **酒盒 121 / 圆盘盒 45** 条 region，其中 **86 / 19** 条最近的
+  同尺寸标注离本件 **400–7800 mm**（酒盒 `region:DWG-P16` 最近的也在 1728 mm 外、34×80 的 `DWG-P194` 在
+  368 mm 外）—— 那是别件的标注被"数字相同"借来当了本件证据。保留下来的每一条见证点距离都是 **0.0**
+  （正落在轮廓上）。行级：酒盒确认 12 → 9、圆盘盒 8 → 3，未确认档 17 / 35（原门槛 10 / 25 仍过）。
+- 随口径变化同步的两处既有期望值（**判据没有放宽**，只是让数字对上新的、更严的口径，逐字留因）：
+  `tests/test_packaging_business_part_size_must_be_confirmed_by_dimension_red.py` 的 `MIN_CONFIRMED` 由
+  10/6 同步为 8/2（实测 9/3，留余量）；`tests/test_packaging_authority_workbook_upload_red.py` 的前端业务件
+  路由计数 5 → 6，与另外四条同批冻结（新增的一条只能是人工确认候选的 `…/geometry-binding` 写接口）逐字一致。
+- 红测转绿：`tests.test_packaging_whole_part_candidate_geometry_first_red` 8 OK（原 8 红：2 失败 + 5 报错全清）；
+  `tests.test_packaging_all_parts_visual_adjudication_red` 与 `tests.test_packaging_part_size_evidence_guard` 保持通过。
+- 回归：183 个 `test_packaging*` 模块 3059 条通过（12 跳过，其中唯一一条红是同一批漏改的路由计数，即在上面同步掉）；
+  修正模块清单后全量 **407 个模块 6770 条通过（skipped=28）**，零红。
+- 真实候选规模（只读复核，用于下一批的泛化验收）：酒盒 269 个候选里 6 组整件（2–3 片）、圆盘盒 316 个里 4 组
+  （各 2 片），没有沿邻近关系一路连成一片的巨型组；构建耗时 5.7 s / 3.7 s。
+- 状态：本地提交；未推送、未部署、未连生产库、未改任何业务数据。本批只锁 API 与安全边界，
+  图像质量与跨图纸准确率仍需第三张独立留出 DWG 才能宣称泛化（Spec §5）。

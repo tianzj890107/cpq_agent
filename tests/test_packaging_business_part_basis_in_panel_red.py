@@ -378,9 +378,9 @@ class CTaskResultsCarryTheBasis(unittest.TestCase):
     def test_c6_frontend_route_count_unchanged(self):
         # `## 480` 按 Spec `packaging-2-1-result-parts-and-shape-only-pane.md` §2.4b C6 把这条
         # 批次级冻结**重指**为 5：多出来的那一条是按图纸补推导（`…/packaging-business-parts/derive`）。
-        # 重指不等于放宽：计数仍精确相等，多出来的一条逐个点名。
-        self.assertEqual(5, _source(APP_JS).count("packaging-business-parts/"),
-                         "前端业务件路由引用计数重指为 5（`## 480`：只多出 derive 那一条；Spec §C4）")
+        # 视觉复核新增人工确认候选的 geometry-binding PUT，计数精确重指为 6。
+        self.assertEqual(6, _source(APP_JS).count("packaging-business-parts/"))
+        self.assertEqual(1, _source(APP_JS).count("/geometry-binding"))
 
 
 if __name__ == "__main__":

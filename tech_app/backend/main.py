@@ -7579,7 +7579,8 @@ def derive_packaging_business_parts(pid: str, user: dict = Depends(current_user)
     # 解析器是依赖缝（与一键解析同一条路）：从 services 里现取，不把它绑进本模块的导入图。
     from .services import packaging_business_part_resolver as business_resolver
     ir = cad_ir.load_ir(pid) or {}
-    outcome = business_resolver.resolve_business_parts(pid, ir, geometry, None, None)
+    outcome = business_resolver.resolve_business_parts(
+        pid, ir, geometry, None, None, use_model=True)
     outcome = outcome if isinstance(outcome, dict) else {}
     detail = outcome.get("detail") if isinstance(outcome.get("detail"), dict) else {}
     if str(detail.get("authority_source") or "") != "dwg":

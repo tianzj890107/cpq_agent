@@ -66,6 +66,14 @@ GROUP_MEMBER_MIN_AREA_MM2 = 10000.0
 #: 尺寸标注矩形 ↔ 轮廓的相符容差（与 `packaging_match` 同口径量级）。
 CONFIRM_TOLERANCE_MM = 2.0
 
+#: 标注属于这条轮廓的**空间**容差（Spec `packaging-whole-part-candidate-geometry-first.md` §3）：
+#: 光有"全图能找到同样两个数字"不算证据，标注的扩展点/见证点必须落在这条轮廓的矩形上
+#: （允许外扩 `max(WITNESS_MIN_TOLERANCE_MM, 短边 × WITNESS_TOLERANCE_RATIO)`）。
+#: 真样本酒盒实测：旧口径按数字相等确认了 121 条，其中 35 条的四个见证点正好落在轮廓边上
+#: （真关联），另外 86 条最近的同尺寸标注在两三米以外（正是本条要挡掉的误确认）。
+WITNESS_MIN_TOLERANCE_MM = 10.0
+WITNESS_TOLERANCE_RATIO = 0.25
+
 #: 方向词（Spec §3.3 第 3 条）：**镜像类**方向词才参与父子分组判定（左/右、上/下、前/后）；
 #: `内盒N` 这类序号由 `_position_token()` 与方向词一起构成族键，独立成族。
 MIRROR_DIRECTIONS = ("左盖", "右盖", "左盒", "右盒", "左", "右", "上", "下", "前", "后")
@@ -728,8 +736,10 @@ def dimension_rects(cad_ir: Any) -> List[Dict[str, Any]]:
     `(长, 宽)` 候选 —— 这是"图上标了这个尺寸"的直接证据，与几何轮廓是**两笔独立的账**。
     """
     ir = cad_ir if isinstance(cad_ir, dict) else {}
-    horizontal: List[Tuple[float, float, float]] = []
-    vertical: List[Tuple[float, float, float]] = []
+    # 每条标注都留**来源图元 + 两个扩展点/见证点**：光有"图上写着 120×80"不能定位到哪一件
+    # （Spec `packaging-whole-part-candidate-geometry-first.md` §3）。
+    horizontal: List[Tuple[float, float, float, str, Tuple[float, float], Tuple[float, float]]] = []
+    vertical: List[Tuple[float, float, float, str, Tuple[float, float], Tuple[float, float]]] = []
     for row in (ir.get("dimensions") or []):
         if not isinstance(row, dict) or _text(row.get("dim_type")) != "linear":
             continue
@@ -744,19 +754,25 @@ def dimension_rects(cad_ir: Any) -> List[Dict[str, Any]]:
             value = _num(row.get("declared_value"))
         if value is None or value <= 0:
             continue
+        entity_id = _text(row.get("entity_id"))
         (x1, y1), (x2, y2) = first, second
         if abs(y1 - y2) <= 0.01 and abs(x1 - x2) > 0.01:
-            horizontal.append((min(x1, x2), max(x1, x2), y1))
+            horizontal.append((min(x1, x2), max(x1, x2), y1, entity_id, first, second))
         elif abs(x1 - x2) <= 0.01 and abs(y1 - y2) > 0.01:
-            vertical.append((min(y1, y2), max(y1, y2), x1))
+            vertical.append((min(y1, y2), max(y1, y2), x1, entity_id, first, second))
     rects: List[Dict[str, Any]] = []
-    for hx0, hx1, hy in horizontal:
-        for vy0, vy1, vx in vertical:
+    for hx0, hx1, hy, h_id, h_first, h_second in horizontal:
+        for vy0, vy1, vx, v_id, v_first, v_second in vertical:
             if hx0 - 1.0 <= vx <= hx1 + 1.0 and vy0 - 1.0 <= hy <= vy1 + 1.0:
+                witnesses = _unique_points([h_first, h_second, v_first, v_second])
                 rects.append({
                     "length_mm": abs(hx1 - hx0),
                     "width_mm": abs(vy1 - vy0),
                     "center": [(hx0 + hx1) / 2.0, (vy0 + vy1) / 2.0],
+                    "horizontal_targets": [list(h_first), list(h_second)],
+                    "vertical_targets": [list(v_first), list(v_second)],
+                    "witness_points": [list(point) for point in witnesses],
+                    "dimension_ref": ("dim:%s|%s" % (h_id, v_id)) if (h_id or v_id) else "",
                 })
     return rects
 
@@ -783,10 +799,90 @@ def _size_key(region: Any) -> str:
     return "%.3f:%.3f" % (round(long_side, 3), round(short_side, 3))
 
 
+def _xy(value: Any) -> Optional[Tuple[float, float]]:
+    """`[x, y]` → `(x, y)`（标注见证点/中心的唯一读法，非有限数一律 `None`）。"""
+    if not isinstance(value, (list, tuple)) or len(value) < 2:
+        return None
+    try:
+        point = float(value[0]), float(value[1])
+    except (TypeError, ValueError):
+        return None
+    if point[0] != point[0] or point[1] != point[1]:  # NaN
+        return None
+    if point[0] in (float("inf"), float("-inf")) or point[1] in (float("inf"), float("-inf")):
+        return None
+    return point
+
+
+def _unique_points(values: Any) -> List[Tuple[float, float]]:
+    """去重但**保序**：候选/标注里的见证点顺序要可复现。"""
+    out: List[Tuple[float, float]] = []
+    for value in values or []:
+        point = _xy(value)
+        if point is not None and point not in out:
+            out.append(point)
+    return out
+
+
+def _dimension_witness_points(rect: Dict[str, Any]) -> List[Tuple[float, float]]:
+    """标注的**扩展点/见证点**（Spec §3 第 1 条）。
+
+    `dimension_rects()` 出的是 `witness_points`；上游若只给了横/竖两根标注的两个端点，
+    这里把它们合起来读 —— 两条读法是同一件事，不是两套口径。
+    """
+    points = _unique_points(rect.get("witness_points"))
+    if points:
+        return points
+    return _unique_points(list(rect.get("horizontal_targets") or [])
+                          + list(rect.get("vertical_targets") or []))
+
+
+def _region_box(region: Dict[str, Any]) -> Optional[Tuple[float, float, float, float]]:
+    bbox = region.get("bbox") if isinstance(region, dict) else None
+    if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+        return None
+    values = [_num(item) for item in bbox[:4]]
+    if any(item is None for item in values):
+        return None
+    x0, y0, x1, y1 = values
+    return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+
+
+def _witness_tolerance(box: Tuple[float, float, float, float]) -> float:
+    return max(WITNESS_MIN_TOLERANCE_MM,
+               min(box[2] - box[0], box[3] - box[1]) * WITNESS_TOLERANCE_RATIO)
+
+
+def _witness_within(box: Tuple[float, float, float, float],
+                    point: Tuple[float, float], tolerance: float) -> bool:
+    return (box[0] - tolerance <= point[0] <= box[2] + tolerance
+            and box[1] - tolerance <= point[1] <= box[3] + tolerance)
+
+
 def _region_is_size_confirmed(region: Dict[str, Any], rects: Any) -> bool:
-    """这条轮廓的尺寸有没有**标注证据**（Spec §3.1 的 `size_dimension`）。"""
+    """这条轮廓的尺寸有没有**落在它身上的**标注证据（Spec §3.1 的 `size_dimension`）。
+
+    尺寸数值相等只是**必要条件**：同一个数字在整张图上到处都是（真样本酒盒 107 条矩形标注里
+    大量重复），只有标注的扩展点/见证点也落在这条轮廓的矩形上（允许 §3 的外扩容差）才算
+    这件尺寸被量出来了。没有见证点信息的历史矩形退一步看标注中心，口径更紧而不是更松。
+    """
+    box = _region_box(region)
     for rect in (rects or []):
-        if isinstance(rect, dict) and _sizes_match(rect.get("length_mm"), rect.get("width_mm"), region):
+        if not isinstance(rect, dict):
+            continue
+        if not _sizes_match(rect.get("length_mm"), rect.get("width_mm"), region):
+            continue
+        if box is None:
+            # 连矩形都没有的轮廓没有可核验的空间关系，不许靠数字相等确认（Spec §3 第 4 条）。
+            continue
+        tolerance = _witness_tolerance(box)
+        points = _dimension_witness_points(rect)
+        if points:
+            if all(_witness_within(box, point, tolerance) for point in points):
+                return True
+            continue
+        center = _xy(rect.get("center"))
+        if center is not None and _witness_within(box, center, tolerance):
             return True
     return False
 
@@ -1055,147 +1151,6 @@ def match_authority_parts(authority_parts: Any, anchors: Any, regions: Any,
         "nested_region_upgraded_total": nested_total,
         "nested_region_upgraded": {key: upgraded[key] for key in sorted(upgraded)},
     }
-
-
-def _upgrade_dimensioned_clusters(parts: List[Dict[str, Any]], anchors: List[Dict[str, Any]],
-                                  regions: List[Dict[str, Any]], rects: List[Dict[str, Any]],
-                                  match: Dict[str, Any]) -> None:
-    """用图上的尺寸标注确认多连通片的整件范围；镜像件须有真实几何对应。
-
-    最近连通分量可能只是一条折边。只有标注矩形被至少三个分量覆盖、两轴覆盖率均
-    达九成且名称锚点在矩形下方时，才覆盖最近碎片的尺寸。无标注的左右对应件仅在
-    至少三个分量能通过镜像坐标逐一配对时继承尺寸，仍标记为未直接确认。
-    """
-    by_anchor = {_text(row.get("entity_id")): row for row in anchors}
-    by_code = {_text(row.get("business_part_code")): row
-               for row in (match.get("bindings") or []) if isinstance(row, dict)}
-    usable = [row for row in regions if isinstance(row, dict) and row.get("substantial")
-              and _bbox_size(row.get("bbox"))]
-
-    def inside(inner: Any, outer: List[float], tolerance: float = 3.0) -> bool:
-        return isinstance(inner, (list, tuple)) and len(inner) >= 4 and all(
-            float(inner[index]) >= outer[index] - tolerance if index < 2
-            else float(inner[index]) <= outer[index] + tolerance for index in range(4))
-
-    def below(point: Any, box: List[float]) -> bool:
-        if point is None:
-            return False
-        margin = min(40.0, max(12.0, (box[2] - box[0]) * .15))
-        gap = box[1] - point[1]
-        return (0 <= gap <= min(160.0, (box[3] - box[1]) * .3)
-                and box[0] - margin <= point[0] <= box[2] + margin)
-
-    def members(box: List[float]) -> List[Dict[str, Any]]:
-        return [row for row in usable if inside(row.get("bbox"), box)]
-
-    def apply(binding: Dict[str, Any], box: List[float], rows: List[Dict[str, Any]],
-              source: str, confirmed: bool) -> None:
-        binding["bbox"] = [round(value, 9) for value in box]
-        binding["component_ids"] = sorted({_text(cid) for row in rows
-                                             for cid in (row.get("component_ids") or []) if _text(cid)})
-        binding["entity_ids"] = sorted({_text(eid) for row in rows
-                                          for eid in (row.get("entity_ids") or []) if _text(eid)})
-        binding["length_mm"] = round(box[2] - box[0], 9)
-        binding["width_mm"] = round(box[3] - box[1], 9)
-        binding["cluster_region_ids"] = sorted({_text(row.get("region_id")) for row in rows
-                                                if _text(row.get("region_id"))})
-        binding["region_id"] = binding["cluster_region_ids"][0]
-        binding["region_layers"] = sorted({_text(layer) for row in rows
-                                            for layer in (row.get("layers") or []) if _text(layer)})
-        binding["size_source"] = source
-        binding["size_confirmed"] = confirmed
-        binding["complete_box"] = True
-        binding["evidence_kinds"] = ["text_anchor", "geometry_region"] + (
-            ["size_dimension"] if confirmed else ["repetition_mirror"])
-
-    sources: List[Tuple[Dict[str, Any], List[float], List[Dict[str, Any]]]] = []
-    for rect in rects:
-        width, height = _num(rect.get("length_mm")), _num(rect.get("width_mm"))
-        center = rect.get("center")
-        if not center or len(center) < 2 or not width or not height:
-            continue
-        cx, cy = float(center[0]), float(center[1])
-        box = [cx - width / 2, cy - height / 2, cx + width / 2, cy + height / 2]
-        support = members(box)
-        if len(support) < 3:
-            continue
-        covered_width = max(row["bbox"][2] for row in support) - min(row["bbox"][0] for row in support)
-        covered_height = max(row["bbox"][3] for row in support) - min(row["bbox"][1] for row in support)
-        if not (.9 <= covered_width / width <= 1.02
-                and .9 <= covered_height / height <= 1.02):
-            continue
-        candidates = []
-        for part in parts:
-            binding = by_code.get(_text(part.get("business_part_code")))
-            point = _part_position(part, by_anchor)
-            if not binding or binding.get("size_confirmed") or not below(point, box):
-                continue
-            old_size = _bbox_size(binding.get("bbox"))
-            if not old_size or old_size[0] * old_size[1] >= width * height * .65:
-                continue
-            candidates.append((round(box[1] - point[1], 6), _text(part.get("business_part_code")),
-                               part, binding))
-        if not candidates:
-            continue
-        _, _, part, binding = min(candidates, key=lambda item: item[:2])
-        # 同一行遇到多个标注组合时，覆盖更完整的那一组优先。
-        if any(source_part is part for source_part, _, _ in sources):
-            continue
-        apply(binding, box, support, "multi_region_dimension", True)
-        sources.append((part, box, support))
-
-    def same_shape(first: Dict[str, Any], second: Dict[str, Any]) -> bool:
-        left, right = _region_size(first), _region_size(second)
-        return None not in left + right and abs(left[0] - right[0]) <= .02 \
-            and abs(left[1] - right[1]) <= .02
-
-    for source_part, source_box, support in sources:
-        source_name = _text(source_part.get("name"))
-        if not source_name.startswith(("左", "右")):
-            continue
-        opposite = ("右" if source_name[0] == "左" else "左") + source_name[1:]
-        target = next((part for part in parts if _text(part.get("name")) == opposite), None)
-        if target is None:
-            continue
-        binding = by_code.get(_text(target.get("business_part_code")))
-        point = _part_position(target, by_anchor)
-        if not binding or binding.get("size_confirmed") or point is None:
-            continue
-        best: Optional[Tuple[int, float, List[float], List[Dict[str, Any]]]] = None
-        for first in support:
-            first_center = _region_center(first)
-            if first_center is None:
-                continue
-            for second in usable:
-                second_center = _region_center(second)
-                if second is first or second_center is None or not same_shape(first, second):
-                    continue
-                axis_sum = first_center[0] + second_center[0]
-                dy = second_center[1] - first_center[1]
-                box = [axis_sum - source_box[2], source_box[1] + dy,
-                       axis_sum - source_box[0], source_box[3] + dy]
-                if not below(point, box):
-                    continue
-                matched: List[Dict[str, Any]] = []
-                for original in support:
-                    center = _region_center(original)
-                    if center is None:
-                        continue
-                    hit = next((row for row in usable if row is not original
-                                and same_shape(original, row)
-                                and (other := _region_center(row)) is not None
-                                and abs(other[0] - (axis_sum - center[0])) <= 1.0
-                                and abs(other[1] - (center[1] + dy)) <= 1.0), None)
-                    if hit is not None:
-                        matched.append(hit)
-                count = len({_text(row.get("region_id")) for row in matched})
-                if count < max(3, (len(support) * 7 + 9) // 10):
-                    continue
-                score = (count, -abs(dy))
-                if best is None or score > (best[0], best[1]):
-                    best = (count, -abs(dy), box, matched)
-        if best is not None:
-            apply(binding, best[2], best[3], "mirrored_multi_region_dimension", False)
 
 
 def _position_token(label: Any) -> str:
@@ -1615,7 +1570,11 @@ def _expand_family_groups(rows: List[Dict[str, Any]], anchors: List[Dict[str, An
 def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
                            attachments: Any = None, kb: Any = None,
                            *, seed_path: Any = None,
-                           import_workbook: Callable[..., Any] = None) -> Dict[str, Any]:
+                           import_workbook: Callable[..., Any] = None,
+                           use_model: bool = False,
+                           model_reviewer: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+                           review_progress: Optional[Callable[[int, int, str], None]] = None
+                           ) -> Dict[str, Any]:
     """一次业务部件解析：**只吃 DWG**（Spec §2.1 的闭集 + §2.2 的产出契约 + §2.4 的全局匹配）。
 
     参数里的 `attachments` / `kb` / `seed_path` / `import_workbook` **一律不读、不用**（它们是
@@ -1639,7 +1598,11 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
     rects = dimension_rects(ir)
     rows = _derived_rows(anchors)
     match = match_authority_parts(rows, anchors, regions, rects=rects)
-    _upgrade_dimensioned_clusters(rows, anchors, regions, rects, match)
+    if use_model:
+        from . import packaging_part_visual_review
+        match = packaging_part_visual_review.review_matches(
+            ir, rows, anchors, regions, rects, match, reviewer=model_reviewer,
+            progress=review_progress)
     rows, group_plans = _expand_family_groups(rows, anchors, match.get("bindings") or [])
     # 图纸画不出来的采购件按**通用盒型结构规则**补成 `pending_confirmation` 行（Spec §1.3/§2.1）。
     rows = rows + _structure_rule_rows(rows, anchors, group_plans)
@@ -1663,6 +1626,9 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
             row["evidence"]["size_source"] = "none"
             row["evidence"]["size_confirmed"] = False
             row["evidence"]["size_quality"] = _size_quality_for(False)
+            if use_model:
+                row["evidence"]["attribution"] = {
+                    "status": "review_needed", "reasons": ["structure_rule_not_on_drawing"]}
             row["status"] = "partial"
             row["reasons"] = [REASON_STRUCTURE_RULE]
             row["truth_state"] = "pending_confirmation"
@@ -1675,8 +1641,6 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
         row["width_mm"] = _num(binding.get("width_mm"))
         located = bool(binding.get("region_id"))
         row["evidence"]["component_ids"] = list(binding.get("component_ids") or [])
-        if binding.get("cluster_region_ids"):
-            row["evidence"]["cluster_region_ids"] = list(binding["cluster_region_ids"])
         row["evidence"]["bbox"] = list(binding.get("bbox") or []) or None
         with_size = (row.get("length_mm") is not None and row.get("width_mm") is not None)
         if not located:
@@ -1689,8 +1653,6 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
                 "component_ids": list(binding.get("component_ids") or []),
                 "bbox": list(binding.get("bbox") or []) or None,
                 "region_id": _text(binding.get("region_id")),
-                **({"region_ids": list(binding["cluster_region_ids"])}
-                   if binding.get("cluster_region_ids") else {}),
             }
             row["status"] = "derived" if with_size else "partial"
             row["reasons"] = [] if row["status"] == "derived" else list(
@@ -1704,6 +1666,11 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
             "geometry_region" if located else "none")
         row["evidence"]["size_confirmed"] = bool(binding.get("size_confirmed"))
         row["evidence"]["size_quality"] = _size_quality_for(row["evidence"]["size_confirmed"])
+        if use_model:
+            row["evidence"]["attribution"] = dict(binding.get("attribution") or {
+                "status": "review_needed", "reasons": ["no_reviewable_name_anchor"]})
+            if row["status"] == "unbound" and row.get("truth_state") != "pending_confirmation":
+                row["truth_state"] = "pending_confirmation"
 
     truth_counts = {state: 0 for state in TRUTH_STATES}
     for row in rows:
@@ -1756,9 +1723,6 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
     labeled_regions = {_text((row.get("evidence") or {}).get("drawing_ref", {}).get("region_id"))
                        for row in rows if _text((row.get("evidence") or {})
                                                 .get("drawing_ref", {}).get("region_id"))}
-    for row in rows:
-        labeled_regions.update(_text(region_id) for region_id in
-                               ((row.get("evidence") or {}).get("cluster_region_ids") or []))
     unlabeled_outline_total = len([region for region in regions
                                    if region.get("substantial")
                                    and _text(region.get("region_id")) not in labeled_regions])
@@ -1796,6 +1760,7 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
         "group_plans": group_plans,
         "size_source_counts": _count_by(rows, lambda row: _text(
             (row.get("evidence") or {}).get("size_source") or "none")),
+        "model_review": dict(match.get("model_review") or {"enabled": False, "calls": 0}),
         # 事实档三笔账 + 两条规则的落地量（Spec §2.1 / §2.2）。
         "truth_state_counts": truth_counts,
         "inferred_total": truth_counts.get("inferred", 0),

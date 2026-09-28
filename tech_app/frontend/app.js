@@ -2119,8 +2119,7 @@ function packagingPartSceneEntities(binding, doc) {
     const own = Array.isArray(raw && raw.bbox) ? raw.bbox.slice(0, 4).map(Number) : null;
     const inside = hasBox && own && own.length === 4 && own.every(Number.isFinite)
       && own[0] >= box[0] && own[1] >= box[1] && own[2] <= box[2] && own[3] <= box[3];
-    if (!id || (!ids[id] && !(inside && (row.complete_box || !foreign[id])))
-        || annotations[id] || seen[id]) return;
+    if (!id || (!ids[id] && !(inside && !foreign[id])) || annotations[id] || seen[id]) return;
     seen[id] = true;
     rows.push(raw);
   });
@@ -2211,8 +2210,7 @@ function packagingPartSceneSvg(binding, doc, options) {
       const own = list((raw || {}).bbox).slice(0, 4).map(Number);
       const inside = hasBox && own.length === 4 && own.every(Number.isFinite)
         && own[0] >= box[0] && own[1] >= box[1] && own[2] <= box[2] && own[3] <= box[3];
-      if (!id || (!ids[id] && !(inside && (bind.complete_box || !foreign[id])))
-          || annotations[id] || seen[id]) return;
+      if (!id || (!ids[id] && !(inside && !foreign[id])) || annotations[id] || seen[id]) return;
       seen[id] = true;
       rows.push(raw);
     });
@@ -3450,12 +3448,21 @@ function packagingBusinessPartSizeText(row) {
 }
 
 function packagingBusinessPartSizeBasis(row) {
-  const binding = (row && row.geometry_binding) || {};
   const reference = (row && (row.reference || row["author" + "ity"])) || {};
-  const source = String(binding.size_source || reference.size_source || "");
-  if (source === "multi_region_dimension") return "DWG 标注与整块几何确认";
-  if (source === "mirrored_multi_region_dimension") return "镜像几何推算，尺寸待确认";
   if (String(reference.size_quality || "") === "bbox_only") return "仅几何包围估算，尺寸待确认";
+  if (String(reference.size_quality || "") === "unfolded") return "尺寸有独立图纸证据";
+  return "";
+}
+
+function packagingBusinessPartAttributionText(binding) {
+  const review = (binding && binding.attribution && typeof binding.attribution === "object")
+    ? binding.attribution : {};
+  const kind = String(review.status || "");
+  if (kind === "human_confirmed") return "几何归属已人工确认；尺寸仍须核对图纸标注";
+  if (kind === "verified_by_cad") return "几何归属有图纸空间证据";
+  if (kind === "model_suggested") return "AI 提出了候选图形，尚未经图纸证据或人工确认";
+  if (kind === "model_unavailable") return "模型复核暂不可用；候选图形待人工确认";
+  if (kind === "review_needed") return "候选图形待人工确认，不能当作已识别零件";
   return "";
 }
 
@@ -3640,6 +3647,7 @@ function renderPackagingBusinessTree(tree, rows) {
     const truthLabel = packagingBusinessPartTruthLabel(truthState);
     // 尺寸 / 材料 / 状态各一行（Spec §2.2/§2.3）：状态走后纯函数，`bound` 不出字就不渲染这一行。
     const bindingText = packagingBindingStatusText(status);
+    const attributionText = packagingBusinessPartAttributionText(binding);
     if (truthLabel) line.setAttribute("data-qq-truth-state", truthState);
     // 版式（Spec `packaging-2-1-parts-row-layout-and-shape-viewport.md` §2.1）：标题一行、
     // 尺寸另起一行、状态一行 —— 三行文字装进一个 `.part-body` 文本容器（对照视觉 IR 那条
@@ -3653,6 +3661,7 @@ function renderPackagingBusinessTree(tree, rows) {
       + (sizeBasis ? `<div class="part-note">${esc(sizeBasis)}</div>` : "")
       + (material ? `<div class="part-material">${esc(material)}</div>` : "")
       + (bindingText ? `<div class="part-note">${esc(bindingText)}</div>` : "")
+      + (attributionText ? `<div class="part-note">${esc(attributionText)}</div>` : "")
       + (truthLabel ? `<div class="part-note packaging-truth-label">${esc(truthLabel)}</div>` : "")
       + `</div>`;
     // 点开一件就能看到它的构成（Spec §2.1c）：那两百多个几何分量按件归属。
@@ -3739,7 +3748,7 @@ function packagingPartAnnotationFilteredLine(row, partsDoc) {
   return `已剔除标注线 ${total} 条（尺寸线/尺寸界线/箭头，不是零件几何）`;
 }
 
-function openPackagingBusinessPart(code) {
+function openPackagingBusinessPart(code, requestedCandidateIndex) {
   const wanted = String(code || "");
   const rows = packagingBusinessPartRows(currentPackagingBusinessParts);
   const row = rows.find(item => String(item.business_part_code || "") === wanted);
@@ -3751,6 +3760,19 @@ function openPackagingBusinessPart(code) {
   const title = $("packagingPartTitle");
   if (title) title.textContent = `${wanted} ${String(row.name || "")}`.trim();
   const binding = row.geometry_binding || {};
+  const candidates = Array.isArray(binding.candidates) ? binding.candidates : [];
+  const suggestedId = String(((binding.attribution || {}).selected_candidate_id) || "");
+  const suggestedIndex = candidates.findIndex(item => String((item || {}).id || "") === suggestedId);
+  const candidateIndex = Number.isInteger(requestedCandidateIndex) && requestedCandidateIndex >= 0
+    && requestedCandidateIndex < candidates.length ? requestedCandidateIndex
+    : (suggestedIndex >= 0 ? suggestedIndex : 0);
+  const candidate = candidates[candidateIndex] || null;
+  const candidateBinding = candidate ? {
+    component_ids: Array.isArray(candidate.component_ids) ? candidate.component_ids : [],
+    entity_ids: [], bbox: candidate.bbox || null,
+  } : null;
+  const figureBinding = String(binding.status || "") === "bound"
+    ? binding : (candidateBinding || binding);
   const block = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
   const reference = block(row.reference) || block(row["author" + "ity"]) || {};
   const disclosures = packagingAuthorityDisclosureLines(currentPackagingBusinessParts || {});
@@ -3768,6 +3790,9 @@ function openPackagingBusinessPart(code) {
       pkgPartFactRow("工艺", reference.process_text),
       pkgPartFactRow("备注", reference.note),
       pkgPartFactRow("定位状态", packagingBindingStatusText(String(binding.status || ""))),
+      pkgPartFactRow("归属依据", packagingBusinessPartAttributionText(binding)),
+      pkgPartFactRow("复核说明", String(((binding.attribution || {}).explanation) || "")),
+      pkgPartFactRow("候选图形", candidates.length ? `${candidates.length} 个；当前查看第 ${candidateIndex + 1} 个（仅供核对）` : ""),
       pkgPartFactRow("绑定分量", (binding.component_ids || []).join(" / ")),
       pkgPartFactRow("同组提示", reference.merged_from
         ? "材料/排版/工艺与上一行同组（合并单元格）" : ""),
@@ -3781,7 +3806,7 @@ function openPackagingBusinessPart(code) {
   if (figureHost) {
     figureHost.hidden = false;
     // 图纸上这一件的样子（Spec §C4）：连它的标注一起画；标注只当标注画，不参与形状口径。
-    const figureHtml = packagingPartSceneSvg(binding, currentPackagingCadPlan,
+    const figureHtml = packagingPartSceneSvg(figureBinding, currentPackagingCadPlan,
                                              {includeAnnotations: true});
     if (figureHtml) {
       // 三态与首点竞态跟着这块图走（Spec §C7）：`ready` 出视口 + 缩放控件（§C5：高度是**上限**，
@@ -3791,13 +3816,24 @@ function openPackagingBusinessPart(code) {
       pendingPackagingShapePartCode = "";
       figureHost.innerHTML = `<div class="packaging-part-shape-viewport"`
         + ` data-qq-shape-viewport="1">`
+        + (candidate ? `<div class="packaging-part-note" data-qq-candidate-warning="1">`
+          + `候选图形 ${candidateIndex + 1}/${candidates.length}：仅供核对，尚未确认为这件零件。</div>` : "")
         + figureHtml
         + `<div class="packaging-part-shape-bar">`
         + `<span class="packaging-part-shape-zoom" data-qq-shape-zoom-label="1">100%</span>`
+        + (candidates.length > 1 ? `<select id="packagingPartCandidateSelect"`
+          + ` aria-label="切换候选图形">`
+          + candidates.map((item, index) => `<option value="${index}"${index === candidateIndex ? " selected" : ""}>`
+            + `候选 ${index + 1} · ${esc(String((item || {}).id || ""))}</option>`).join("")
+          + `</select>` : "")
         + `<button id="packagingPartReset" class="part-row-action" type="button">适应窗口</button>`
         + `</div>`
         + `</div>` + PACKAGING_CAD_RULE_LEGEND;
       bindPackagingPartShapeInteractions(figureHost);
+      const selector = $("packagingPartCandidateSelect");
+      if (selector) selector.addEventListener("change", () => {
+        openPackagingBusinessPart(wanted, Number(selector.value));
+      });
     } else if (!currentPackagingCadPlan) {
       figureHost.setAttribute("data-qq-part-shape", "loading");
       pendingPackagingShapePartCode = wanted;
@@ -3897,7 +3933,35 @@ function openPackagingBusinessPart(code) {
              + `<button id="packagingBusinessPartProcessByAuthority" class="part-row-action"`
              + ` type="button">工艺推荐（按对照表）</button>`
            : "");
-    actions.innerHTML = downstream + note;
+    const canConfirmCandidate = !authEnabled || ["process_manager", "process_director", "admin"]
+      .includes(String((currentUser || {}).role || ""));
+    const candidateAction = candidate && candidateBinding && candidateBinding.component_ids.length
+      && canConfirmCandidate
+      ? `<div class="packaging-part-note">确认前请核对图形、名称和图纸标注；确认归属不等于确认尺寸。</div>`
+        + `<button id="packagingConfirmCandidate" class="part-row-action" type="button">确认当前候选归属</button>`
+      : "";
+    actions.innerHTML = downstream + note + candidateAction;
+    const confirmCandidate = $("packagingConfirmCandidate");
+    if (confirmCandidate) confirmCandidate.addEventListener("click", async () => {
+      confirmCandidate.disabled = true;
+      try {
+        const res = await fetch(`${API}/api/projects/${currentProject}/requirement/`
+          + `packaging-business-parts/${encodeURIComponent(wanted)}/geometry-binding`, {
+          method: "PUT", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({component_ids: candidateBinding.component_ids,
+                                reason: `人工核对候选 ${String(candidate.id || "")}`}),
+        });
+        if (!res.ok) throw new Error(`确认失败（HTTP ${res.status}）`);
+        const payload = await res.json();
+        currentPackagingBusinessParts = payload;
+        renderTree(currentIR || {});
+        openPackagingBusinessPart(wanted);
+        status("候选图形归属已记录；尺寸仍须核对图纸标注。", true);
+      } catch (error) {
+        confirmCandidate.disabled = false;
+        status(String(error && error.message || "确认失败"), false);
+      }
+    });
     const run = mode => {
       const button = $(mode === "cost" ? "packagingBusinessPartCost" : "packagingBusinessPartProcess");
       if (button) button.addEventListener("click", () => {

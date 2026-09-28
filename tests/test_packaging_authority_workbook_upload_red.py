@@ -407,8 +407,13 @@ class DWiring(unittest.TestCase):
         # 批次级冻结**重指**为 5：多出来的那一条只许是"按图纸补推导"那一条路由
         # （`packagingBusinessPartsDerivePath()` → `…/packaging-business-parts/derive`）。
         # 重指不等于放宽 —— 计数仍是精确相等，多出来的那一条逐个点名。
-        self.assertEqual(5, self.SOURCE.count("packaging-business-parts/"),
-                         "前端业务件路由引用计数重指为 5（`## 480`：只多出 derive 那一条；Spec §C4）")
+        # 视觉复核另加"人工确认候选几何映射"的 PUT（`…/geometry-binding`），按
+        # Spec `packaging-all-parts-visual-adjudication.md` §3 把计数精确重指为 6，
+        # 与 `test_packaging_business_part_{basis_in_panel,cost_by_authority_size,
+        # process_by_authority_route,process_entry}_red` 的同一冻结逐字一致。
+        self.assertEqual(6, self.SOURCE.count("packaging-business-parts/"),
+                         "新增的一条只能是人工确认候选的 geometry-binding 写接口")
+        self.assertEqual(1, self.SOURCE.count("/geometry-binding"))
 
     def test_d4_pure_functions_have_no_dom_or_fetch(self):
         for name in ("packagingAuthorityFileName", "packagingAuthorityBase64Of",
