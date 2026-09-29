@@ -27,7 +27,7 @@
 ## 511. `## 510` 的提交、双远端推送与 34 部署记录（9-29）
 
 - 提交 `31b92ab`（`## 510 报价文字只填空字段并留证据、CAD 冲突不覆盖、包装成本回传单列动作 ACL，DA 本体主数据同步`），入库 31 个文件：8 个 `cpq_*.py`、5 个 `tech_app` 后端文件、3 个前端脚本、报价首页与 DA 本体主数据（`亿纬锂能DA梳理.md/.xlsx`，运行时读取）、2 份 Spec、`scripts/sync_da_master_data.py`、5 个测试与本 changelog。
-- 不入库的未跟踪项（与本次能力无关）：`拆分程序/`（独立拆分方法说明，运行时无引用）、`.~亿纬锂能DA梳理.xlsx`（Excel 锁文件）。
+- 不入库的未跟踪项（与本次能力无关）：`拆分程序/`（独立拆分程序与酒盒拆分方法说明，仓库运行路径无引用）、`.~亿纬锂能DA梳理.xlsx`（Excel 锁文件）。
 - 双远端：GitLab 与 GitHub 的 `ytbz` 均回读为 `31b92abd53db9819be8e85f8b9b7c07eba29c497`，与本地 HEAD 三方一致。
 - 34 部署：`bash scripts/deploy_34_bare.sh ytbz`，`2973704 → 31b92ab`；8010 `build.commit=31b92abd53db`、`branch=ytbz`、`deployed_at=2026-09-29T17:54:30+0800`，`/suite/health` 与 `/api/health` 均 200。
 - 部署后核对：两份真实样本主转换器（ODA 27.1）直出、`converter_role=primary`、`fallback_used=false`；隔离端到端自检 `verdict=ok`（酒盒 8/8 步、零件 263 件，圆盘盒 8/8 步、零件 312 件）；8010 全部静态页与关键前端脚本（含 `quick-quote-panel.js`）在浏览器口径（路径百分号编码）下均 200；运行目录项目数 68 → 70（部署不删数据，新增来自正常建项）。
