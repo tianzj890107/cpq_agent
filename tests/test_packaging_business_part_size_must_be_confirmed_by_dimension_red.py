@@ -62,8 +62,10 @@ MIN_UNCONFIRMED = {"酒盒": 10, "圆盘盒": 25}
 #: `1` 与 `0PC` 之间）。剥码后它们归并回一件（66 → 65 行），与图纸上其它镜像对的处理一致。
 #: 口径变化由 `docs/specs/packaging-part-name-mtext-codes.md` §5 授权；本行是那次授权下**唯一**
 #: 允许改动的数字，其它组的期望值一字未动。
-DERIVED_TOTAL = {"酒盒": 26, "圆盘盒": 38}
-SIZED_TOTAL = {"酒盒": 26, "圆盘盒": 38}
+# 2026-09-28 全流程修订：通用图纸注释过滤移除了圆盘盒里两条被误当作
+# 已定位业务件的装箱/尺寸说明；授权见 packaging-full-flow-20260928.md §1.4。
+DERIVED_TOTAL = {"酒盒": 26, "圆盘盒": 36}
+SIZED_TOTAL = {"酒盒": 26, "圆盘盒": 36}
 
 
 def _parts_module():

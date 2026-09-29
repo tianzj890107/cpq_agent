@@ -958,6 +958,10 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
             need_handoff = False
             next_role_code = next_role_name = ""
 
+        # 在同一事务中核对真正落进报价卡片的段，不能仅凭待写键名就记录
+        # snapshot_sections 并派任务。大包若被截断，必须整体回滚。
+        verify_handoff_snapshot(quote_session_id, fresh, conn=conn)
+
         # ⑥ 目标任务：create-or-reuse 沿用批次 2 的同类复用规则；payload 带完整技术结果
         payload = {
             "tech_result": result,
@@ -1024,6 +1028,19 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
         card=card, need_handoff=need_handoff, next_role_code=next_role_code,
         next_role_name=next_role_name, target=target,
         business_case_id=resolved_case_id, candidates=candidates, recovery=recovery)
+
+
+def verify_handoff_snapshot(session_id: str, sections: dict, *, conn) -> None:
+    """回传事务内读回快照；缺段或内容仍是旧值都拒绝派发任务。"""
+    if not sections:
+        return
+    saved = cpq_wf._snapshot_dict(cpq_wf.step_snapshot(session_id, TECH_CONFIRM_STEP, conn=conn))
+    missing = [key for key in sections if key not in saved]
+    if missing:
+        raise BridgeError("报价卡片快照写入不完整，未派发任务；缺少：%s" % "、".join(missing))
+    stale = [key for key, value in sections.items() if saved.get(key) != value]
+    if stale:
+        raise BridgeError("报价卡片快照读回与本次交接包不一致，未派发任务；涉及：%s" % "、".join(stale))
 
 
 def _step_name(card) -> str:

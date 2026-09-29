@@ -128,8 +128,10 @@ class RealSamplePartNamesAreCleanRed(unittest.TestCase):
 
     def test_a4_row_count_merges_the_mirror_duplicate(self):
         _require_sample(self, "圆盘盒")
-        self.assertEqual(65, len(_rows("圆盘盒")),
-                         "圆盘盒行数：格式码造的假件归并回镜像后是 65 行（Spec §5；改前 66）")
+        # 2026-09-28 全流程修订：通用图纸注释过滤额外移除 9 条非零件文字。
+        # MTEXT 镜像归并规则本身未变；见 packaging-full-flow-20260928.md §1.4。
+        self.assertEqual(56, len(_rows("圆盘盒")),
+                         "圆盘盒：镜像归并后再剔除图例/装箱/尺寸说明，应是 56 个候选")
 
     def test_a5_the_mirror_pair_is_one_part(self):
         _require_sample(self, "圆盘盒")

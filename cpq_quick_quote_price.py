@@ -22,6 +22,7 @@ import copy
 import datetime as dt
 import hashlib
 import json
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
 
 import cpq_packaging_quote
@@ -57,6 +58,11 @@ TARGET_PRECISE = "precise_quote"
 WRITE_ROLES = cpq_packaging_quote.WRITE_ROLES
 DEFAULT_TAX_RATE = cpq_packaging_quote.DEFAULT_TAX_RATE
 DEFAULT_CURRENCY = qq_case.DEFAULT_CURRENCY
+
+
+def _money(value) -> float:
+    """报价金额的统一边界：保留六位业务精度，去掉二进制浮点尾差。"""
+    return float(Decimal(str(value)).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
 
 #: 尺寸门槛看这三边（Spec §2.3 第 4 行）。
 SIZE_FIELDS = ("inner_length", "inner_width", "inner_height")
@@ -321,19 +327,21 @@ def price(baseline, workspace, *, today=None, config=None, rules=None) -> dict:
         delta_total += float(_num(row.get("delta")) or 0.0)
         if row.get("priced") and row.get("rule_code"):
             rule_versions.append("%s:v%s" % (row["rule_code"], _number_text(row.get("rule_version"))))
-    unit_price = base_unit_price + delta_total
+    delta_total = _money(delta_total)
+    unit_price = _money(base_unit_price + delta_total)
 
     tax_included = bool(baseline.get("tax_included")) or bool(case.get("tax_included"))
     tax_rate = float(cfg["tax_rate"])
-    unit_price_taxed = unit_price if tax_included else unit_price * (1.0 + tax_rate)
+    unit_price_taxed = unit_price if tax_included else _money(unit_price * (1.0 + tax_rate))
 
     unpriced = [row for row in rows if not row.get("priced")]
     est_pct = min(float(cfg["max_deviation_pct"]),
                   float(cfg["base_deviation_pct"])
                   + float(cfg["per_miss_deviation_pct"]) * len(unpriced))
     est_pct = round(est_pct, 6)
-    est_amount = unit_price * est_pct
-    price_range = {"low": unit_price * (1.0 - est_pct), "high": unit_price * (1.0 + est_pct)}
+    est_amount = _money(unit_price * est_pct)
+    price_range = {"low": _money(unit_price * (1.0 - est_pct)),
+                   "high": _money(unit_price * (1.0 + est_pct))}
 
     warnings: List[str] = []
     for row in unpriced:

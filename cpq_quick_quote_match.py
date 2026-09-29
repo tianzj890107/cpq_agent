@@ -669,9 +669,14 @@ def build_baseline(inputs, case_code, cases=None, *, user=None, weights=None,
                                    _text(row.get("reason_code")) or "not_eligible")
     quantity = _num(input_row.get("quantity"))
     tier_qty, unit_price, tier_matched = _base_tier(row.get("quantity_tiers"), quantity)
-    if tier_qty is None:
+    if tier_qty is None and not row.get("quantity_tiers"):
+        # 准入契约允许缺数量档；此时以已审核的标准单价作基准，数量差额仍须
+        # 由后续差异规则独立定价，不能暗示它命中了某个不存在的档位。
+        unit_price = _num(row.get("standard_price"))
+        tier_matched = False
+    if unit_price is None:
         raise QuickQuoteMatchError(
-            "案例「%s」没有数量档位单价（quantity_tiers 为空）：先补上档位再作为基准"
+            "案例「%s」没有可用的数量档位单价或标准单价：先补价格再作为基准"
             % code, "case_missing_tiers")
     snapshot = {key: copy.deepcopy(row.get(key)) for key in qq_case.CASE_FIELDS}
     return {
@@ -688,6 +693,7 @@ def build_baseline(inputs, case_code, cases=None, *, user=None, weights=None,
         "base_tier_qty": tier_qty,
         "base_tier_matched": bool(tier_matched),
         "base_unit_price": unit_price,
+        "base_price_source": "quantity_tier" if tier_qty is not None else "standard_price",
         "source_type": row.get("source_type"),
         "review_status": row.get("review_status"),
         "valid_until": row.get("valid_until"),

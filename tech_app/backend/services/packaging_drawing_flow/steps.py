@@ -5,6 +5,7 @@ import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from tech_app.backend.storage import store
+from tech_app.backend.services import requirement_service
 
 from . import model, persistence
 
@@ -540,6 +541,12 @@ def _board_of(key: str, entry: Dict[str, Any], provenance: Dict[str, Any],
     status = str(entry.get("status") or "")
     row = provenance.get(key) if isinstance(provenance.get(key), dict) else {}
     origin = str(row.get("origin") or entry.get("origin") or "")
+    if str(sources.get(key) or "") == "user_text" and row.get("value") not in (None, ""):
+        if status == "confirmed" and entry.get("value") is not None:
+            return ("written" if requirement_service.values_equivalent(
+                    row.get("value"), entry.get("value"))
+                    else "conflict")
+        return "pending"
     if status == "conflict" or str(row.get("status") or "") == "conflict":
         return "conflict"
     if str(sources.get(key) or "") == "manual" or origin == "user_confirmed":
@@ -634,6 +641,11 @@ def field_write(ctx: Dict[str, Any]) -> Dict[str, Any]:
         entry = fields[key] if isinstance(fields[key], dict) else {}
         rows[key] = _field_row(key, entry, _board_of(key, entry, provenance, sources, unit_ok),
                                ir_id, ir_hash)
+        # CAD 缺值时，字段卡片也要呈现已填入的报价文字；不能一边显示“缺失”，
+        # 一边让用户在 1.1 表单里看到非空值而无从判断来源。
+        if sources.get(key) == "user_text" and data.get(key) not in (None, ""):
+            rows[key]["value"] = model.jsonable(data[key])
+            rows[key]["origin"] = "user_text"
     # 人工确认通道（Spec `packaging-manual-field-confirmation.md` §2.3）：把需求里
     # "人工录入/确认且当前有值"的字段作为真实字段集交给确认通道 —— 人工值一个字都不许被
     # 图纸候选覆盖，看板与门禁必须同时认它（`accept` 不再是恒空集）。

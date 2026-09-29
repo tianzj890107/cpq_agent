@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import re
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 from ..models.workflow import RequirementDoc, RequirementWaiver, WorkflowReview
@@ -47,6 +49,87 @@ REQUIREMENT_DRAWING_NOT_PARSED = "REQUIREMENT_DRAWING_NOT_PARSED"
 #: 空了才叫"没有需求"，**不能**因为"没有附件"就当成没有需求。
 QUOTE_TEXT_KEYS = ("quote_requirement_text", "requirement_text", "quote_text",
                    "description", "requirement_description")
+
+
+def values_equivalent(left, right) -> bool:
+    """字段证据比对：文本逐字或数值等价；布尔值不误当 0/1。"""
+    if isinstance(left, bool) or isinstance(right, bool):
+        return left is right
+    if str(left).strip() == str(right).strip():
+        return True
+    try:
+        return Decimal(str(left).strip()) == Decimal(str(right).strip())
+    except (InvalidOperation, ValueError):
+        return False
+
+
+def extract_explicit_packaging_quote_fields(text: str) -> dict:
+    """仅抄录报价文字里带明确标签且唯一的包装字段，不从 DWG 幅面或案例反推。"""
+    source = str(text or "")
+    out: dict = {}
+
+    def unique(pattern: str, flags: int = re.I):
+        values = [match.group(1).strip() for match in re.finditer(pattern, source, flags)]
+        return values[0] if values and len(set(values)) == 1 else None
+
+    labels = {
+        "box_type": r"盒型编码\s*[:：]?\s*([A-Z0-9]+(?:-[A-Z0-9]+)+)",
+        "box_family": r"盒族\s*[:：]?\s*([^；;\n，,]+)",
+        "closure_type": r"闭合方式\s*[:：]?\s*([^；;\n，,]+)",
+    }
+    for key, pattern in labels.items():
+        value = unique(pattern)
+        if value:
+            out[key] = value
+    sizes = [tuple(float(value) for value in match.groups()) for match in re.finditer(
+        r"内尺寸\s*[:：]?\s*(\d+(?:\.\d+)?)\s*[×xX*]\s*"
+        r"(\d+(?:\.\d+)?)\s*[×xX*]\s*(\d+(?:\.\d+)?)\s*mm\b", source, re.I)]
+    if sizes and len(set(sizes)) == 1 and all(value > 0 for value in sizes[0]):
+        out.update(zip(("inner_length", "inner_width", "inner_height"), sizes[0]))
+    gsm = unique(r"面纸(?:克重)?\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(?:g|克)(?:\s*/\s*m(?:²|2))?")
+    if gsm and float(gsm) > 0:
+        out["face_paper_gsm"] = float(gsm)
+    insert = unique(r"内托\s*[:：]?\s*([A-Za-z\u4e00-\u9fff]+)")
+    if not insert:
+        match = re.search(r"\b(EVA)\s*内托\b", source, re.I)
+        insert = match.group(1).upper() if match else None
+    if insert:
+        out["insert_type"] = insert + "内托" if insert.upper() == "EVA" else insert
+    groove = unique(r"V\s*槽\s*[:：]?\s*(是|否|有|无)")
+    if groove:
+        out["v_groove"] = "yes" if groove in ("是", "有") else "no"
+    elif re.search(r"(?:^|[；;，,\s])V\s*槽(?:[；;，,\s。]|$)", source, re.I):
+        out["v_groove"] = "yes"
+    quantity = unique(r"数量\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(?:只|个|件)\b")
+    if quantity and float(quantity) > 0:
+        out["quote_quantity"] = quantity
+    return out
+
+
+def merge_explicit_packaging_quote_fields(data: dict, text: str) -> dict:
+    """只填空位，来源与原文同存；现有人工/CAD 值及其来源均不变。"""
+    merged = dict(data or {})
+    sources = dict(merged.get("field_sources") or {})
+    evidence = dict(merged.get("quote_text_field_evidence") or {})
+    provenance = dict(merged.get("field_provenance") or {})
+    for key, value in extract_explicit_packaging_quote_fields(text).items():
+        existing = merged.get(key)
+        if existing is not None and (not isinstance(existing, str) or existing.strip()):
+            continue
+        if sources.get(key) and sources[key] != "user_text":
+            continue
+        merged[key] = value
+        sources[key] = "user_text"
+        evidence[key] = text
+        provenance.setdefault(key, {"origin": "user_text", "status": "needs_confirmation",
+                                    "value": value, "confidence": 0.0,
+                                    "evidence_refs": ["quote_requirement_text"]})
+    merged["field_sources"] = sources
+    if provenance:
+        merged["field_provenance"] = provenance
+    if evidence:
+        merged["quote_text_field_evidence"] = evidence
+    return merged
 
 #: 需求修订版在 `data` 里的键（RequirementDoc 没有 revision 列，不新增 schema）。
 REVISION_KEY = "revision"
@@ -481,11 +564,30 @@ def save_requirement_draft(project_id: str, doc: RequirementDoc,
     # 结论送不回原来那张报价卡片，系统另建一张，销售点开是「无法打开该历史记录」，
     # 客户信息也只剩技术侧填过的。前端已改成合并，这里再兜一道：任何客户端都别想抹掉它们。
     doc.data = keep_quote_source((current or {}).get("data"), doc.data)
+    old_data = (current or {}).get("data") or {}
+    if str(doc.data.get("industry") or "").strip().lower() == "packaging":
+        # 报价原文与逐字段证据属于服务端留痕；旧客户端整份 PUT 不带它们时仍应保留。
+        if not str(doc.data.get("quote_requirement_text") or "").strip():
+            if str(old_data.get("quote_requirement_text") or "").strip():
+                doc.data["quote_requirement_text"] = old_data["quote_requirement_text"]
+        evidence = dict(old_data.get("quote_text_field_evidence") or {})
+        evidence.update(doc.data.get("quote_text_field_evidence") or {})
+        if evidence:
+            doc.data["quote_text_field_evidence"] = evidence
+        provenance = dict(old_data.get("field_provenance") or {})
+        provenance.update(doc.data.get("field_provenance") or {})
+        if provenance:
+            doc.data["field_provenance"] = provenance
     # 字段来源（Spec 4.3）：和报价溯源一样是「服务端写入的留痕」。整份表单 PUT 上来时
     # 必须与旧值合并，否则「人工修改」会被下一次保存/解析悄悄降级成 AI 来源。
     existing_sources = ((current or {}).get("data") or {}).get("field_sources")
     incoming_sources = (doc.data or {}).get("field_sources")
     doc.data["field_sources"] = merge_field_sources(existing_sources, incoming_sources)
+    if str(doc.data.get("industry") or "").strip().lower() == "packaging":
+        text = (str(doc.data.get("quote_requirement_text") or "").strip()
+                or quote_requirement_text(project_id, data=doc.data))
+        if text:
+            doc.data = merge_explicit_packaging_quote_fields(doc.data, text)
     doc.requirement_no = doc.requirement_no or (current or {}).get("requirement_no") or next_requirement_no(project_id)
     doc.created_by = (current or {}).get("created_by") or user.get("username", "system")
     doc.created_at = (current or {}).get("created_at") or now_cst_str()

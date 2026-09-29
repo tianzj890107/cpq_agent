@@ -112,6 +112,30 @@ def apply_to_requirement(project_id: str, semantics: Dict[str, Any], *,
             continue
         previous = provenance.get(key)
         manual_source = _is_manual_source(previous, sources.get(key))
+        # 报价原文是独立的一手证据，不是 CAD 确认值，也不能被 CAD 候选静默覆盖。
+        # 两边一致才把证据升级为 confirmed；不一致保留原值并显式要求人工裁定。
+        if sources.get(key) == "user_text" and _has_value(data.get(key)):
+            current_value = data.get(key)
+            candidate_value = candidate.get("value")
+            status = str(candidate.get("status") or "missing")
+            if status == "confirmed" and requirement_service.values_equivalent(
+                    current_value, candidate_value):
+                record = _entry_snapshot(candidate)
+                record["value"] = current_value
+                record["corroborates"] = "quote_requirement_text"
+                provenance[key] = record
+                kept[key] = {"reason": "quote_text_cad_agree"}
+                continue
+            entry = dict(previous) if isinstance(previous, dict) else {}
+            entry.update({"origin": "user_text", "value": current_value,
+                          "status": ("conflict" if status == "confirmed" and
+                                     candidate_value is not None else "needs_confirmation")})
+            if status != "missing" and candidate_value is not None:
+                entry["alternatives"] = [*(entry.get("alternatives") or []),
+                                         _alternative(candidate)]
+            provenance[key] = entry
+            kept[key] = {"reason": entry["status"]}
+            continue
         if _is_user_confirmed(previous, sources.get(key), data.get(key)):
             entry = dict(previous) if isinstance(previous, dict) and previous else _entry_snapshot(candidate)
             alternatives = list(entry.get("alternatives") or [])

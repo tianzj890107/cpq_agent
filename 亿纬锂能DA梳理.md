@@ -2,7 +2,7 @@
 
 > 由《亿纬锂能DA梳理.xlsx》生成，**请勿手工编辑** —— 改动请改 xlsx，
 > 再运行 `python cpq_ontology.py` 重新生成（`--check` 可对账）。
-> 三个助手各一节；每个逻辑实体一张属性表，表名即物理表名。
+> 三个助手各一节；末尾另列 Excel 增补但尚未接入运行时的定义。
 
 ## 报价助手（quote）
 
@@ -17,50 +17,50 @@
 | --- | --- | --- | --- | --- | --- |
 | calc_order_id | 测算单id | 文本 | 是 |  |  |
 | calc_order_no | 测算单号 | 文本 |  |  |  |
-| calc_type | 测算类型 | 枚举 |  |  | 简易询盘、询盘、投标、合同 |
+| calc_type | 测算类型 | 枚举 |  |  | 询盘、投标、合同 |
 | org_code | 所属组织 | 组织 |  |  |  |
-| is_price_adjust | 是否调价 | 布尔 |  |  |  |
+| is_price_adjust | 是否调价 | 布尔 |  |  | 是、否 |
 | opportunity_no | 关联商机编号 | 文本/关联对象 |  |  |  |
-| contract_no | 关联合同号 | 文本 |  |  |  |
+| contract_no | 关联合同号 | 文本/关联对象 |  |  |  |
 | contract_version | 合同版本 | 文本 |  |  |  |
 | customer | 客户 | 文本/关联对象 |  |  |  |
 | customer_level | 客户等级 | 枚举 |  |  | S、A、B、C |
 | project_name | 项目名称 | 文本 |  |  |  |
 | project_scale | 项目规模 | 数值/整数 |  |  |  |
-| ex_factory_time | 出厂时间 | 数值/整数 |  |  |  |
-| currency | 币种 | 日期范围 |  |  |  |
+| ex_factory_time | 出厂时间 | 日期范围 |  |  |  |
+| currency | 币种 | 文本/关联对象 |  |  |  |
 | tax_rate | 税率 | 枚举 |  |  | 13%、6%、3% |
 | overseas_tax_rate | 海外税率 | 数值/百分比 |  |  |  |
-| bidding_service_fee | 投标服务费 | 数值/百分比 |  |  |  |
+| bidding_service_fee | 投标服务费 | 数值/金额 |  |  |  |
 | purchase_service_fee | 采购服务费 | 数值/金额 |  |  |  |
 | co_marketing_fee | Co-marketing费 | 数值/金额 |  |  |  |
 | testing_service_fee | 检测服务费 | 数值/金额 |  |  |  |
 | sales_agent_fee | 销售代理服务费 | 数值/金额 |  |  |  |
 | other_business_fee | 其他商务费用 | 数值/金额 |  |  |  |
-| quality_control_req | 质量专控要求 | 枚举 |  |  | 无/2502SDM1、2502SDM2C、SDM2F-WK |
-| is_carbon_footprint | 是否碳足迹组件 | 布尔 |  |  |  |
-| is_plastic_tax | 是否征收塑料税 | 布尔 |  |  |  |
-| weee | WEEE | 布尔 |  |  |  |
-| quality_insurance_req | 质量保险要求 | 布尔 |  |  |  |
-| commercial_liability_insurance | 商业综合责任险 | 布尔 |  |  |  |
-| credit_insurance_req | 信用保险要求 | 布尔 |  |  |  |
-| credit_sale_ratio | 赊销比例（信保） | 数值/比例 |  |  |  |
-| advance_guarantee_req | 预付款保函要求 | 布尔 |  |  |  |
-| advance_guarantee_amount_ratio | 预付款保函金额比例 | 数值/比例 |  |  |  |
-| advance_guarantee_term_month | 预付款保函期限（月） | 数值/整数 |  |  |  |
-| performance_guarantee_req | 履约保函要求 | 布尔 |  |  |  |
-| performance_guarantee_amount_ratio | 履约保函金额比例 | 数值/比例 |  |  |  |
-| performance_guarantee_term_month | 履约保函期限（月） | 数值/整数 |  |  |  |
-| warranty_guarantee_req | 质保保函要求 | 布尔 |  |  |  |
-| warranty_guarantee_amount_ratio | 质保保函金额比例 | 数值/比例 |  |  |  |
-| warranty_guarantee_term_month | 质保保函期限（月） | 数值/整数 |  |  |  |
+| quality_control_req | 质量专控要求 | 枚举 |  |  | 无、2502SDM1、2502SDM2C、SDM2F-WK |
+| is_carbon_footprint | 是否碳足迹组件 | 布尔 |  |  | 是、否 |
+| is_plastic_tax | 是否征收塑料税 | 布尔 |  |  | 是、否 |
+| weee | WEEE | 布尔 |  |  | 是、否 |
+| quality_insurance_req | 质量保险要求 | 布尔 |  |  | 是、否 |
+| commercial_liability_insurance | 商业综合责任险 | 布尔 |  |  | 是、否 |
+| credit_insurance_req | 信用保险要求 | 布尔 |  |  | 是、否 |
+| credit_sale_ratio | 赊销比例（信保） | 数值/百分比 |  |  |  |
+| advance_guarantee_req | 预付款保函要求 | 布尔 |  |  | 是、否 |
+| advance_guarantee_amount_ratio | 预付款保函金额比例 | 数值/百分比 |  |  |  |
+| advance_guarantee_term_month | 预付款保函期限（月） | 数值/浮点 |  |  |  |
+| performance_guarantee_req | 履约保函要求 | 布尔 |  |  | 是、否 |
+| performance_guarantee_amount_ratio | 履约保函金额比例 | 数值/百分比 |  |  |  |
+| performance_guarantee_term_month | 履约保函期限（月） | 数值/浮点 |  |  |  |
+| warranty_guarantee_req | 质保保函要求 | 布尔 |  |  | 是、否 |
+| warranty_guarantee_amount_ratio | 质保保函金额比例 | 数值/百分比 |  |  |  |
+| warranty_guarantee_term_month | 质保保函期限（月） | 数值/浮点 |  |  |  |
 | logistics_calc_region | 物流测算区域 | 枚举 |  |  | 国际/国内 |
 | trade_term | 贸易术语 | 枚举 |  |  | 国内：送货上门/客户自提；\n国际：FOB(装运港船上交货)/DDP(完税后交货)/EXW(工厂交货)...... |
 | transport_type | 运输类型 | 枚举 |  |  | 点对点/按距离 |
 | logistics_fee_adjust | 物流费用调整 | 数值/金额 |  |  |  |
-| logistics_inquiry_status | 物流询价状态 | 数值/金额 |  |  |  |
-| calc_status | 测算状态 | 枚举 |  |  |  |
-| audit_status | 审核状态 | 枚举 |  |  |  |
+| logistics_inquiry_status | 物流询价状态 | 文本 |  |  |  |
+| calc_status | 测算状态 | 枚举 |  |  | 草稿、测算中、测算完成 |
+| audit_status | 审核状态 | 枚举 |  |  | 未提交、审核中、审核完成 |
 
 ### clm_calc_destination
 
@@ -71,19 +71,19 @@
 | --- | --- | --- | --- | --- | --- |
 | calc_order_id | 测算单id | 文本 |  | 是 |  |
 | destination_id | 目的地信息id | 文本 | 是 |  |  |
-| ship_from_type | 发运地类型 | 枚举 |  |  |  |
-| ship_from | 发运地 | 枚举 |  |  |  |
-| ship_from_country | 发运国家 | 文本/关联对象 |  |  |  |
-| departure_port | 起运港 | 文本 |  |  |  |
-| dest_port_country | 目的港国家 | 枚举 |  |  |  |
-| dest_port | 目的港 | 文本 |  |  |  |
-| country_region | 国家/地区 | 文本 |  |  |  |
-| province | 省 | 文本 |  |  |  |
-| city | 市 | 文本 |  |  |  |
+| ship_from_type | 发运地类型 | 枚举 |  |  | 工厂、仓库 |
+| ship_from | 发运地 | 枚举 |  |  | 中国工厂、荷兰仓、比利时仓 |
+| ship_from_country | 发运国家 | 文本/关联对象 |  |  | 中国、荷兰、越南、马来西亚 |
+| departure_port | 起运港 | 文本 |  |  | 上海港、宁波港 |
+| dest_port_country | 目的港国家 | 枚举 |  |  | 荷兰、波兰 |
+| dest_port | 目的港 | 文本 |  |  | 阿姆斯特丹、格但斯坦 |
+| country_region | 国家/地区 | 文本 |  |  | 法国、波兰、德国 |
+| province | 省 | 文本 |  |  | 广东、浙江、甘肃、新疆 |
+| city | 市 | 文本 |  |  | 广州市、杭州市、兰州、乌鲁木齐 |
 | district | 区/县 | 文本 |  |  |  |
 | postal_code | 邮编 | 文本 |  |  |  |
-| trade_term | 贸易术语 | 文本 |  |  |  |
-| ship_factory | 发货工厂 | 枚举 |  |  |  |
+| trade_term | 贸易术语 | 文本 |  |  | 国内：送货上门/客户自提；\n国际：FOB(装运港船上交货)/DDP(完税后交货)/EXW(工厂交货)...... |
+| ship_factory | 发货工厂 | 枚举 |  |  | 惠州基地、西安基地 |
 | distance | 距离 | 数值/浮点 |  |  |  |
 
 ### clm_calc_product
@@ -104,12 +104,12 @@
 | spec | 规格 | 文本 |  |  |  |
 | quantity | 数量 | 数值/浮点 |  |  |  |
 | price | 价格 | 数值/金额 |  |  |  |
-| cost__calc | 是否成本测算 | 布尔 |  |  |  |
-| base_cost | 基础成本 | 数值/整数 |  |  |  |
+| cost__calc | 是否成本测算 | 布尔 |  |  | 是、否 |
+| base_cost | 基础成本 | 数值/金额 |  |  |  |
 | profit_markup | 利润加成 | 数值/金额 |  |  |  |
 | other_markup | 其他加价 | 数值/金额 |  |  |  |
-| spare_quantity | 备件数量 | 数值/金额 |  |  |  |
-| gift_quantity | 赠品数量 | 数值/整数 |  |  |  |
+| spare_quantity | 备件数量 | 数值/浮点 |  |  |  |
+| gift_quantity | 赠品数量 | 数值/浮点 |  |  |  |
 | product_category | 产品大类 | 枚举 |  |  |  |
 
 ### clm_calc_product_tech
@@ -130,7 +130,7 @@
 | plug_wire_model | 插头线型号 | 文本 |  |  | 5264-2P |
 | plug_direction | 插头方向 | 枚举 |  |  | 反向/正向 |
 | wire_length | 线长 | 数值/浮点 |  |  | 16 |
-| is_wire_wound | 是否绕线 | 布尔 |  |  | 否 |
+| is_wire_wound | 是否绕线 | 布尔 |  |  | 是、否 |
 | cell_code | 电芯编码 | 文本 |  |  | 81005049 |
 | cell_model | 电芯型号 | 文本 |  |  | ER14250V1.3 |
 | reference_size | 参考尺寸 | 文本 |  |  | 1/2AA |
@@ -158,16 +158,16 @@
 | film_scheme | 胶膜方案 | 枚举 |  |  | POE+EVA /双POE |
 | film_weight | 胶膜克重 | 枚举 |  |  | 双ECA（400+380） |
 | connector | 连接端子 | 枚举 |  |  | PV-LR5 |
-| avg_cable_length | 平均线长（米） | 枚举 |  |  |  |
-| positive_cable_length | 正极线长（米） | 数值 |  |  |  |
-| negative_cable_length | 负极线长（米） | 数值 |  |  |  |
+| avg_cable_length | 平均线长（米） | 数值/浮点 |  |  |  |
+| positive_cable_length | 正极线长（米） | 数值/浮点 |  |  |  |
+| negative_cable_length | 负极线长（米） | 数值/浮点 |  |  |  |
 | label | 标签 | 枚举 |  |  | 防震标签/RFID标签/隆基标准 |
 | dust_plug | 防尘塞 | 枚举 |  |  | 无/防尘塞 |
 | current_bin | 电流分档 | 枚举 |  |  | 中间档位按0.1A分档/中间档位按0.15A分档/中间档位按0.2A分档 |
 | yield_loss | 良率损失 | 枚举 |  |  |  |
-| el_full_inspect_req | EL全检要求 | 数值/比例 |  |  |  |
+| el_full_inspect_req | EL全检要求 | 枚举 |  |  |  |
 | transport_scheme | 运输保障方案 | 枚举 |  |  | 加厚包装/标准运输 |
-| other_nonstd_markup | 其他非标加价 | 数值 |  |  |  |
+| other_nonstd_markup | 其他非标加价 | 数值/浮点 |  |  |  |
 
 ### clm_calc_payment
 
@@ -180,9 +180,9 @@
 | payment_line_id | 付款行id | 文本 | 是 |  |  |
 | stage_name | 阶段名称 | 枚举 |  |  | 预付款/备料款/发货款/到货款/验收款/质保金 |
 | fund_occupy_days | 资金占用天数 | 枚举 |  |  |  |
-| plan_payment_ratio | 计划收付款比例 | 数值/整数 |  |  |  |
-| payback_dimension | 回款维度 | 数值/比例 |  |  |  |
-| pre_delivery_payment | 货前款 | 枚举 |  |  |  |
+| plan_payment_ratio | 计划收付款比例 | 数值/浮点 |  |  |  |
+| payback_dimension | 回款维度 | 枚举 |  |  | 合同维度、批次维度 |
+| pre_delivery_payment | 货前款 | 布尔 |  |  | 是、否 |
 
 ### clm_calc_logistics
 
@@ -193,11 +193,11 @@
 | --- | --- | --- | --- | --- | --- |
 | calc_order_id | 测算单id | 文本 |  | 是 |  |
 | logistics_id | 物流信息id | 文本 | 是 |  |  |
-| logistics_calc_type | 物流计算类型 | 布尔 |  |  | 优选/指定 |
+| logistics_calc_type | 物流计算类型 | 布尔 |  |  | 优选、指定 |
 | logistics_type | 物流类型 | 枚举 |  |  | 快递运输/陆运运输/铁运运输/水运运输 |
-| vehicle_type | 车型 | 枚举 |  |  |  |
-| max_vehicle_type | 最大可进车型 | 枚举 |  |  |  |
-| container_type | 柜型 | 枚举 |  |  | 20GP/40HQ |
+| vehicle_type | 车型 | 枚举 |  |  | 6.5米、9.6米、13.6米、16.5米 |
+| max_vehicle_type | 最大可进车型 | 枚举 |  |  | 6.5米、9.6米、13.6米、16.5米 |
+| container_type | 柜型 | 枚举 |  |  | 20GP、40HQ |
 
 ### clm_calc_bom_head
 
@@ -249,7 +249,7 @@
 | calc_order_id | 测算单id | 文本 |  | 是 |  |
 | product_line_id | 产品行id | 文本 |  | 是 |  |
 | markup_item_id | 加价明细id | 文本 | 是 |  |  |
-| rule_category | 规则分类 | 枚举值 |  |  | 定价/报价 |
+| rule_category | 规则分类 | 枚举 |  |  | 定价/报价 |
 | seq_num | 序号 | 数值/浮点 |  |  |  |
 | markup_item_name | 加价项名称 | 文本 |  |  |  |
 | markup_value | 加价值 | 文本 |  |  |  |
@@ -266,21 +266,21 @@
 | quote_order_name | 报价单名称 | 文本 |  |  |  |
 | calc_order_id | 测算单id | 文本 |  | 是 |  |
 | calc_order_no | 关联测算单号 | 文本 |  |  |  |
-| quote_form | 报价形式 | 文本/关联对象 |  |  |  |
-| quote_type | 报价类型 | 枚举 |  |  |  |
-| quote_template | 报价模板 | 枚举 |  |  |  |
-| quote_valid_days | 报价有效天数 | 文本/枚举 |  |  |  |
-| is_sealed | 是否用印 | 数值/整数 |  |  |  |
-| opportunity_no | 关联商机编号 | 布尔 |  |  |  |
-| currency | 币种 | 文本/关联对象 |  |  |  |
-| sign_entity | 签约主体 | 枚举 |  |  |  |
+| quote_form | 报价形式 | 枚举 |  |  | 1.综合单价\n2.成品、物流\n3.成品 |
+| quote_type | 报价类型 | 枚举 |  |  | 询盘报价、多轮子投标 |
+| quote_template | 报价模板 | 枚举 |  |  | 标准模板、综合单价模板 |
+| quote_valid_days | 报价有效天数 | 数值/整数 |  |  |  |
+| is_sealed | 是否用印 | 布尔 |  |  | 是、否 |
+| opportunity_no | 关联商机编号 | 文本/关联对象 |  |  |  |
+| currency | 币种 | 文本/关联对象 |  |  | 人民币、美元、欧元、日元、英镑 |
+| sign_entity | 签约主体 | 组织 |  |  |  |
 | sign_entity_address | 签约主体地址 | 文本 |  |  |  |
 | sign_entity_credit_code | 签约主体社会信用代码 | 文本 |  |  |  |
 | quote_contact | 报价联系人 | 文本 |  |  |  |
 | quote_contact_phone | 报价联系人电话 | 文本 |  |  |  |
 | quote_contact_dept | 报价联系人部门 | 文本 |  |  |  |
 | apply_date | 申请日期 | 文本 |  |  |  |
-| customer | 客户 | 日期 |  |  |  |
+| customer | 客户 | 文本/关联对象 |  |  |  |
 | customer_address | 客户地址 | 文本/关联对象 |  |  |  |
 | customer_contact | 客户联系人 | 文本 |  |  |  |
 | customer_contact_info | 客户联系方式 | 文本 |  |  |  |
@@ -304,10 +304,10 @@
 | spec | 规格 | 文本 |  |  |  |
 | quantity | 数量 | 数值/浮点 |  |  |  |
 | quoted_price | 报价 | 数值/金额 |  |  |  |
-| discount | 折扣 | 数值/比例 |  |  |  |
+| discount | 折扣 | 数值/百分比 |  |  |  |
 | estimated_price | 折后价格 | 数值/金额 |  |  |  |
 | total_amount | 总金额 | 数值/金额 |  |  |  |
-| tax_rate | 税率 | 数值/比例 |  |  |  |
+| tax_rate | 税率 | 数值/百分比 |  |  |  |
 | tax_amount | 税金 | 数值/金额 |  |  |  |
 
 ## 配置助手（config）
@@ -621,3 +621,147 @@
 | corp_id | 企业ID |  |  |  |  |
 | system_version | 系统版本号 |  |  |  |  |
 | owner_org_code | 数据所属组织 |  |  |  |  |
+
+<!-- 以下定义已由 scripts/sync_da_master_data.py 做物理结构对账，
+     但尚不参与运行时 SQL schema 或报价表单。
+     同名 product_para_value 在此处是 EAV 方案；现有业务读写仍走宽表列。 -->
+
+## DA 增补待接入（pending）
+
+共 9 个逻辑实体。
+
+### industry
+
+- 业务对象：CLM-技术参数
+- 逻辑实体：行业表
+
+| 属性编码 | 属性名称 | 字段类型 | 主键 | 外键 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| id | id |  | 是 |  |  |
+| industry_code | 行业编码 |  |  |  |  |
+| industry_name | 行业名称 |  |  |  |  |
+
+### para_catalog
+
+- 业务对象：CLM-技术参数
+- 逻辑实体：技术参数表
+
+| 属性编码 | 属性名称 | 字段类型 | 主键 | 外键 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| id | id |  | 是 |  |  |
+| para_code | 参数编码 |  |  |  |  |
+| para_name | 参数名称 |  |  |  |  |
+| para_type | 参数类型 |  |  |  |  |
+
+### industry_para
+
+- 业务对象：CLM-技术参数
+- 逻辑实体：行业参数表
+
+| 属性编码 | 属性名称 | 字段类型 | 主键 | 外键 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| id | id |  | 是 |  |  |
+| industry_code | 行业编码 |  |  | 关联industry.industry_code |  |
+| para_code | 参数编码 |  |  | 关联para_catalog.para_code |  |
+| product_catagory_code | 产品分类 |  |  |  |  |
+
+### product_para_value
+
+- 业务对象：CLM-技术参数
+- 逻辑实体：产品参数值表
+
+| 属性编码 | 属性名称 | 字段类型 | 主键 | 外键 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| id | id |  | 是 |  |  |
+| product_item_code | 产品编码 |  |  | 关联md_clm_material_base_info.number |  |
+| product_item_name | 产品名称 |  |  |  |  |
+| para_code | 参数编码 |  |  | 关联para_catalog.para_code |  |
+| para_name | 参数名称 |  |  |  |  |
+| para_value | 参数值 |  |  |  |  |
+
+### md_clm_material_category
+
+- 业务对象：CLM产品分类
+- 逻辑实体：md_clm_material_category
+
+| 属性编码 | 属性名称 | 字段类型 | 主键 | 外键 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| id | id |  | 是 |  |  |
+| number | 分类编码 |  |  |  |  |
+| name | 分类名称 |  |  |  |  |
+| material_category_level | 分类层级 |  |  |  |  |
+| current_number | 本级编码 |  |  |  |  |
+| parent_number | 上级分类 |  |  |  |  |
+| is_inherit_feature | 是否继承特征 |  |  |  |  |
+| industry_code | 行业编码 |  |  | 关联industry.industry_code |  |
+
+### md_clm_process_info
+
+- 业务对象：CLM制程工序
+- 逻辑实体：制程基本信息
+
+| 属性编码 | 属性名称 | 字段类型 | 主键 | 外键 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| id | id |  |  |  |  |
+| number | 编码 |  |  |  |  |
+| name | 名称 |  |  |  |  |
+| factory | 工厂 |  |  | 关联factoty.id |  |
+| product_period | 制程周期 |  |  |  |  |
+| effect_begin_date | 有效起始时间 |  |  |  |  |
+| effect_end_date | 有效截止日期 |  |  |  |  |
+| parent_id | 上级制程 |  |  |  |  |
+
+### md_clm_operation_info
+
+- 业务对象：CLM制程工序
+- 逻辑实体：制程工序信息
+
+| 属性编码 | 属性名称 | 字段类型 | 主键 | 外键 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| id | id |  |  |  |  |
+| number | 工序编码 |  |  |  |  |
+| name | 工序名称 |  |  |  |  |
+| desc | 工序描述 |  |  |  |  |
+| md_clm_factory_id | 工厂 |  |  | 关联factoty.id |  |
+| md_process_info_id | 制程 |  |  | 关联md_clm_process_info.id |  |
+
+### md_clm_process_routing_base_info
+
+- 业务对象：CLM工艺路线
+- 逻辑实体：工艺路线基本信息
+
+| 属性编码 | 属性名称 | 字段类型 | 主键 | 外键 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| id | id |  |  |  |  |
+| number | 工艺路线编码 |  |  |  |  |
+| name | 工艺路线名称 |  |  |  |  |
+| desc | 工艺路线描述 |  |  |  |  |
+| effect_begin_date | 有效起始时间 |  |  |  |  |
+| effect_end_date | 有效截止时间 |  |  |  |  |
+| effect_status | 有效状态 |  |  |  |  |
+| factory | 工厂 |  |  | 关联factoty.id |  |
+| yield | 成品良率 |  |  |  |  |
+| md_bpart_product_base_info_id | Bpart |  |  |  | 关联Bpart要改掉 |
+| product_item_code | 产品编码 |  |  | 关联md_clm_material_base_info.number |  |
+
+### md_clm_process_routing_operation
+
+- 业务对象：CLM工艺路线
+- 逻辑实体：工艺路线行信息
+
+| 属性编码 | 属性名称 | 字段类型 | 主键 | 外键 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| id | id |  |  |  |  |
+| line_number | 序号 |  |  |  |  |
+| md_operation_info_id | 工序 |  |  | 关联md_clm_operation_info.id |  |
+| md_asset_basic_info_id | 工作中心 |  |  |  |  |
+| setup_time | 准备时间 |  |  |  |  |
+| setup_time_unit | 准备时间单位 |  |  |  |  |
+| waste_rate | 损耗率 |  |  |  |  |
+| man_time | 人工工时 |  |  |  |  |
+| man_time_unit | 人工工时单位 |  |  |  |  |
+| machine_time | 机器工时 |  |  |  |  |
+| machine_time_unit | 机器工时单位 |  |  |  |  |
+| md_fixure_basic_info_id | 模治具 |  |  |  |  |
+| md_factory_id | 工厂 |  |  |  |  |
+| md_process_rputing_id | 工艺路线 |  |  | 关联md_clm_process_routing_base_info.id |  |

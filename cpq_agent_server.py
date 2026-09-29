@@ -2093,7 +2093,12 @@ def _handle_quick_quote_parse(data=None) -> dict:
         return {"ok": False, "error": str(exc), "kind": "service_unavailable",
                 "advice": "统一解析服务不在线：文字 / Excel / PDF 需求不受影响，"
                           "DWG/DXF 请稍后重试或转人工。"}
-    mapped = cpq_quick_quote_file.to_match_inputs(parsed)
+    # 工作区已有销售录入值时，把它交给既有冲突检测；CAD 值与销售值不一致要把双方
+    # 数字写进 warning，而不是上传图纸后静默采用其中一边。
+    fallback = body.get("fallback") if isinstance(body.get("fallback"), dict) else {}
+    fallback = {key: fallback[key] for key in cpq_quick_quote_file.MATCH_INPUT_KEYS
+                if key in fallback}
+    mapped = cpq_quick_quote_file.to_match_inputs(parsed, fallback=fallback)
     out = {"ok": True, "parse": parsed, "inputs": mapped["inputs"],
            "missing": mapped["missing"], "sources": mapped["sources"],
            "warnings": mapped["warnings"], "capability": parsed.get("capability") or {},
@@ -4395,11 +4400,13 @@ def _qq_session_not_found(session_id: str) -> dict:
                      "快速报价实例不存在（或已被清理）：%s" % _qq_text(session_id), 404)
 
 
-def _qq_touch(state: dict, **changes) -> dict:
-    """写一次状态：改字段 + 记 `updated_at`（页面用它显示"最近更新时间"）。"""
+def _qq_touch(state: dict, *, session_id: str = "", **changes) -> dict:
+    """写一次状态并落盘；禁止只改仓储返回的嵌套 dict 而不触发 flush。"""
     if isinstance(state, dict):
         state.update(changes)
         state["updated_at"] = _now_iso()
+        if _qq_text(session_id):
+            QUICK_QUOTE_SESSIONS[_qq_text(session_id)] = state
     return state
 
 
@@ -4529,7 +4536,8 @@ def _handle_quick_quote_session_create(body, *, user=None, idempotency_key: str 
             who = _qq_text(item)
             if who and who != actor_id and who not in participants:
                 participants.append(who)
-        _qq_touch(state, owner_user_id=state.get("owner_user_id") or actor_id,
+        _qq_touch(state, session_id=session_id,
+                  owner_user_id=state.get("owner_user_id") or actor_id,
                   participants=participants, card=card, quote_mode=quote_mode,
                   industry=industry, workflow_state=state.get("workflow_state") or "created")
         return {"ok": True, "quick_quote_session_id": session_id, "session_id": session_id,
@@ -4557,8 +4565,9 @@ def _handle_quick_quote_session_match(session_id: str, body) -> dict:
     # 重新匹配不**倒退**已经过去的阶段（选过基准/算过价就不许被打回 matched）。
     state["inputs"] = dict(inputs)
     state["match"] = result
-    if _qq_workflow_state(state) in ("created", "matched"):
-        _qq_touch(state, workflow_state="matched")
+    stage = _qq_workflow_state(state)
+    _qq_touch(state, session_id=session_id,
+              workflow_state="matched" if stage in ("created", "matched") else stage)
     return {"ok": True, "quick_quote_session_id": _qq_text(session_id), "match": result}
 
 
@@ -4575,7 +4584,7 @@ def _handle_quick_quote_session_baseline(session_id: str, body, *, user=None) ->
     workspace = cpq_quick_quote_workspace.new_workspace(baseline, user=user)
     state.update({"inputs": dict(inputs), "baseline": baseline, "workspace": workspace,
                   "quote": {}, "diff": [], "revision": int(state.get("revision") or 0) + 1})
-    _qq_touch(state, workflow_state="based")
+    _qq_touch(state, session_id=session_id, workflow_state="based")
     return {"ok": True, "quick_quote_session_id": _qq_text(session_id),
             "baseline": baseline, "workspace": workspace}
 
@@ -4601,7 +4610,7 @@ def _handle_quick_quote_session_workspace(session_id: str, body, *, user=None) -
     # 差异行**在顶层**（Spec §4.3）：前端保存并渲染的就是这一份，不再去 workspace.rows 里找。
     diff = cpq_quick_quote_workspace.diff_table(workspace)
     state["diff"] = diff
-    _qq_touch(state, workflow_state="edited",
+    _qq_touch(state, session_id=session_id, workflow_state="edited",
               revision=int(state.get("revision") or 0) + 1)
     return {"ok": True, "quick_quote_session_id": _qq_text(session_id), "workspace": workspace,
             "diff": diff,
@@ -4631,7 +4640,7 @@ def _handle_quick_quote_session_price(session_id: str, body, *, user=None) -> di
     state["quote"] = quote
     diff = state.get("diff") or cpq_quick_quote_workspace.diff_table(workspace)
     state["diff"] = diff
-    _qq_touch(state, workflow_state="priced")
+    _qq_touch(state, session_id=session_id, workflow_state="priced")
     return {"ok": True, "quick_quote_session_id": _qq_text(session_id), "quote": quote,
             "diff": diff,
             "diff_total": cpq_quick_quote_workspace.diff_total(workspace),
@@ -4665,11 +4674,12 @@ def _handle_quick_quote_session_confirm(session_id: str, body, *, user=None) -> 
     state["quote"] = dict(stored_quote or {})
     state["versions"] = int(saved.get("version_no") or 1)
     state["version_no"] = int(saved.get("version_no") or 1)
-    _qq_touch(state, workflow_state="confirmed")
+    _qq_touch(state, session_id=session_id, workflow_state="confirmed")
     # 确认后首页**同一张业务卡**要立刻能看到版本、价格、状态与快速报价标识（Spec §4.4/§6）：
     # 卡片摘要随确认响应一起回，前端据此 upsert 同一张卡，不新增第二张项目卡。
     card = _qq_card_summary(session_id, state)
     state["card"] = card
+    QUICK_QUOTE_SESSIONS[_qq_text(session_id)] = state
     return {"ok": True, "quick_quote_session_id": _qq_text(session_id),
             "quick_quote_id": saved.get("quick_quote_id"),
             "version_no": saved.get("version_no"),
@@ -4712,7 +4722,7 @@ def _handle_quick_quote_session_transfer(session_id: str, body, *, user=None) ->
         return _qq_error(getattr(exc, "code", "") or "transfer_failed",
                          str(exc) or "转精准报价失败", 409)
     state["transfer"] = result if isinstance(result, dict) else {"result": result}
-    _qq_touch(state, workflow_state="transferred")
+    _qq_touch(state, session_id=session_id, workflow_state="transferred")
     return {"ok": True, "quick_quote_session_id": _qq_text(session_id), "handoff": result}
 
 

@@ -25,6 +25,7 @@
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -32,9 +33,30 @@ import secrets as _secrets
 import sys
 import traceback
 import urllib.parse
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_RUNTIME_STARTED_AT = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _source_digest() -> str:
+    """启动时对关键源文件取指纹；之后修改文件不会改变这个进程的身份。"""
+    digest = hashlib.sha256()
+    for name in ("cpq_suite_server.py", "cpq_agent_server.py", "cpq_wf.py",
+                 "tech_app/backend/main.py"):
+        with open(os.path.join(SCRIPT_DIR, name), "rb") as source:
+            digest.update(name.encode("utf-8"))
+            digest.update(source.read())
+    return digest.hexdigest()[:16]
+
+
+_RUNTIME_SOURCE_DIGEST = _source_digest()
+
+
+def runtime_identity() -> dict:
+    """供验收辨认进程实际加载的源码，不暴露环境变量或密钥。"""
+    return {"started_at": _RUNTIME_STARTED_AT, "source_digest": _RUNTIME_SOURCE_DIGEST}
 
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -835,6 +857,9 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def do_GET(self):
+        if self.path.split("?", 1)[0] == "/suite/health":
+            self._send_json(200, {"ok": True, **runtime_identity()})
+            return
         if self._dispatch_agent("do_GET"):
             return
         if self._dispatch_auth():
@@ -879,6 +904,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_PUT(self):
+        if self._dispatch_agent("do_PUT"):
+            return
         # /auth/* 的新端点（改账号、改本人资料/密码/账号级设置）走 PUT，
         # 不分发就会变成 404 而不是该有的 401/403/400。
         if self._dispatch_auth():

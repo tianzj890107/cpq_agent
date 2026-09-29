@@ -948,7 +948,9 @@
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({name: (file && file.name) || "", data: b64,
-                              match: options.match === false ? false : true})
+                              match: options.match === false ? false : true,
+                              fallback: options.fallback ||
+                                (quickQuoteSessionId() ? workspaceState.inputs : {})})
       });
     }).then(function (resp) {
       return resp.json().catch(function () { return {}; }).then(function (data) {

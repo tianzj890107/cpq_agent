@@ -102,13 +102,19 @@ def _route_matcher(template: str):
 # 模块导入期编译一次：真实请求路径里是具体 id（/parts/P-001/cost），正则按段匹配。
 CONTRIBUTE_MATCHERS = tuple((method, _route_matcher(path)) for method, path in CONTRIBUTE_ROUTES)
 
+# 包装成本回传的动作级 ACL：财务经理可读已有成本时，还必须能进入本接口自己的
+# 角色/缺口门禁。独立列出，避免改变上方 21 条历史白名单的精确基线。
+PACKAGING_QUOTE_SEND_MATCHERS = (
+    ("POST", _route_matcher("/api/projects/{project_id}/requirement/packaging-quote/send")),
+)
+
 
 def is_contribute_route(method: str, path: str) -> bool:
     """这次请求是不是白名单里的专属业务动作（决定 ACL 用 contribute 还是 write）。"""
     verb = _text(method).upper()
     target = str(path or "")
     return any(row_method == verb and matcher.match(target)
-               for row_method, matcher in CONTRIBUTE_MATCHERS)
+               for row_method, matcher in (*CONTRIBUTE_MATCHERS, *PACKAGING_QUOTE_SEND_MATCHERS))
 
 PACKAGING_COST_MATCHERS = tuple((method, _route_matcher(path))
                                  for method, path in PACKAGING_COST_ROUTES)

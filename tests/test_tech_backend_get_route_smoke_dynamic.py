@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -102,11 +103,24 @@ class GetRouteSmokeTest(unittest.TestCase):
             self.assertIn(expected, self.paths)
 
     def test_no_get_route_returns_5xx(self):
+        # 全仓 discover 会先导入其它测试模块；有些模块在导入期切换 CPQ_SSO，
+        # 且 main/config 是进程级单例。用独立进程测真实路由，避免把前一个
+        # 测试的登录服务地址/模型设置当成本 App 的配置。
+        if os.environ.get("CPQ_GET_SMOKE_ISOLATED") != "1":
+            env = os.environ.copy()
+            env.update(CPQ_GET_SMOKE_ISOLATED="1", CPQ_SSO="false", AUTH_ENABLED="false")
+            env.pop("CPQ_INTERNAL_TOKEN", None)
+            done = subprocess.run(
+                [sys.executable, "-m", "unittest",
+                 "tests.test_tech_backend_get_route_smoke_dynamic.GetRouteSmokeTest.test_no_get_route_returns_5xx",
+                 "-q"], cwd=str(ROOT), env=env, capture_output=True, text=True, timeout=180)
+            self.assertEqual(done.returncode, 0, (done.stdout + done.stderr)[-3000:])
+            return
         failures = []
         for path in self.paths:
             response = self.client.get(self._url(path))
             if response.status_code >= 500:
-                failures.append(f"{response.status_code} {path}")
+                failures.append(f"{response.status_code} {path}: {response.text[:220]}")
         self.assertEqual(
             failures, [],
             "以下 GET 接口在最小数据集上直接 5xx（多为 NameError / 未处理异常）：\n  "

@@ -25,6 +25,7 @@ MD_PATH = SCRIPT_DIR / "亿纬锂能DA梳理.md"
 
 # agent key -> (章节标题, xlsx 里的 sheet 名)
 SECTIONS = (("quote", "报价助手"), ("config", "配置助手"), ("rule", "规则助手"))
+PENDING_SECTION = ("pending", "DA 增补待接入")
 _COLUMNS = ("code", "name", "type", "pk", "fk", "note")
 _HEADER = "| 属性编码 | 属性名称 | 字段类型 | 主键 | 外键 | 备注 |"
 _DIVIDER = "| --- | --- | --- | --- | --- | --- |"
@@ -62,12 +63,19 @@ def dump_md(onto: dict) -> str:
         "",
         "> 由《亿纬锂能DA梳理.xlsx》生成，**请勿手工编辑** —— 改动请改 xlsx，",
         "> 再运行 `python cpq_ontology.py` 重新生成（`--check` 可对账）。",
-        "> 三个助手各一节；每个逻辑实体一张属性表，表名即物理表名。",
+        "> 三个助手各一节；末尾另列 Excel 增补但尚未接入运行时的定义。",
         "",
     ]
-    for key, title in SECTIONS:
+    for key, title in (*SECTIONS, PENDING_SECTION):
         section = onto.get(key) or {}
         entities = section.get("entities") or []
+        if key == "pending":
+            lines += [
+                "<!-- 以下定义已由 scripts/sync_da_master_data.py 做物理结构对账，",
+                "     但尚不参与运行时 SQL schema 或报价表单。",
+                "     同名 product_para_value 在此处是 EAV 方案；现有业务读写仍走宽表列。 -->",
+                "",
+            ]
         lines += [f"## {title}（{key}）", "",
                   f"共 {len(entities)} 个逻辑实体。", ""]
         for entity in entities:
@@ -112,8 +120,8 @@ def _split_cells(line: str) -> list:
 
 def parse_md(text: str) -> dict:
     """把 .md 还原成 cpq_db._load_ontology() 的结构。"""
-    by_key = {key: [] for key, _ in SECTIONS}
-    title_to_key = {title: key for key, title in SECTIONS}
+    by_key = {key: [] for key, _ in (*SECTIONS, PENDING_SECTION)}
+    title_to_key = {title: key for key, title in (*SECTIONS, PENDING_SECTION)}
     current_key = None
     entity = None
     in_table = False
@@ -155,7 +163,7 @@ def parse_md(text: str) -> dict:
             in_table = False
 
     result = {}
-    for key, _ in SECTIONS:
+    for key, _ in (*SECTIONS, PENDING_SECTION):
         entities = by_key[key]
         index = {}
         if key == "quote":
@@ -182,7 +190,7 @@ def _shape(onto: dict) -> dict:
                    "business_object": e["business_object"],
                    "attrs": [{c: (a.get(c) or "") for c in _COLUMNS} for a in e["attrs"]]}
                   for e in (onto.get(key) or {}).get("entities") or []]
-            for key, _ in SECTIONS}
+            for key, _ in (*SECTIONS, PENDING_SECTION)}
 
 
 def main(argv: list) -> int:
@@ -204,7 +212,7 @@ def main(argv: list) -> int:
     counts = "；".join(
         f"{title} {len((source.get(key) or {}).get('entities') or [])} 实体 / "
         f"{sum(len(e['attrs']) for e in (source.get(key) or {}).get('entities') or [])} 属性"
-        for key, title in SECTIONS)
+        for key, title in (*SECTIONS, PENDING_SECTION))
     print(f"已写入 {MD_PATH}（{counts}）")
     return 0
 

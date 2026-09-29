@@ -215,6 +215,14 @@ PROCESS_MARKERS = ("啤", "烫", "印", "UV", "uv", "覆膜", "过油", "裱", "
 #: 规格串（`1.8mm灰板裱光银纸` / `2.5mm灰板` / `350g粉灰`）：以数值+单位开头的是**材料**，不是件名。
 _SPEC_LIKE = re.compile(r"^\s*\d+(?:\.\d+)?\s*(?:mm|MM|g|G|克|度|张|层)")
 
+# 通用图纸注释形态，不按客户文件名/哈希/金标件数过滤。带序号的尺寸说明、
+# 装箱数量、装柜图标题和纸张纹向都不是可制造的单个部件。
+_NON_PART_ANNOTATION = re.compile(
+    r"(?:装柜(?:图纸|示意图)|^\s*\d+\s*(?:PCS?|只|件)\s*/\s*(?:箱|托|套)\s*$"
+    r"|^\s*\d+[、.．)]\s*(?:内径|外径|尺寸|厚度|本色)"
+    r"|^\s*\d+(?:\.\d+)?\s*[xX×*]\s*\d+(?:\.\d+)?\s*(?:MM|mm|高|厚)"
+    r"|^\s*(?:纸张纹路|纸纹方向|纸张方向)\s*$)", re.IGNORECASE)
+
 #: 别名规范（Spec §1.1）：规范写法 `忖纸→衬纸`、`左盒/右盒→左盖/右盖`。
 ALIASES: Tuple[Tuple[str, str], ...] = (
     ("忖纸", "衬纸"),
@@ -441,6 +449,9 @@ def _exclusion_reason(raw: Any, name: Any, layer: Any = "") -> str:
     name_text = _text(name)
     if not name_text:
         return "not_a_name_anchor"
+    if _NON_PART_ANNOTATION.search(_width_normalized(name_text)) or _NON_PART_ANNOTATION.search(
+            _width_normalized(raw)):
+        return "drawing_annotation_not_part"
     for probe in dict.fromkeys((name_text, _squeeze(name_text))):
         if any(marker in probe for marker in VIEW_MARKERS):
             return "view_or_diagram_title"

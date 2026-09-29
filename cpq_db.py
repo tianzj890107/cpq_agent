@@ -174,11 +174,15 @@ def _load_ontology_xlsx() -> dict:
         if i == 0:
             continue
         r = (r + [""] * 9)[:9]
+        # 只有业务对象/实体名构成有效行时才继承合并单元格。尾部的「·」
+        # 是工作簿排版符号，不是可查询的物理表。
+        if not r[3] and not r[0] and not r[2]:
+            continue
         for j in range(3):
             if r[j]:
                 ff[j] = r[j]
         bo, code, name = ff
-        if not code:
+        if not _is_ident(code):
             continue
         e = ents.setdefault(code, {"table": code, "cn": name, "business_object": bo, "attrs": []})
         if r[3]:
@@ -195,6 +199,11 @@ def _load_ontology_xlsx() -> dict:
     # 否则主键/外键/备注会整体错位一列。
     # ---- 配置助手：业务对象|逻辑实体(名-code)|属性名称|字段编号|字段类型|主键|外键|备注 ----
     # ---- 规则助手：业务对象|逻辑实体(名-code)|属性名称|字段编号|主键|外键 ----
+    pending_entities: dict = {}
+    # Excel 新增的 CLM 参数/工艺目录尚未接入当前报价 Agent 的 SQL schema。
+    # 其中 product_para_value 与既有电池宽表同名，却采用 EAV 四列口径；
+    # 在物理表/前端迁移完成前，必须单独记载，不能合并进现有宽表。
+    pending_objects = {"CLM-技术参数", "CLM产品分类", "CLM制程工序", "CLM工艺路线"}
     for agent, ncol, ci_type, ci_pk, ci_fk, ci_note in (
             ("config", 8, 4, 5, 6, 7),
             ("rule", 6, None, 4, 5, None)):
@@ -211,19 +220,26 @@ def _load_ontology_xlsx() -> dict:
             cn, table = _split_entity(fent)
             if not table:
                 continue
-            e = ents.setdefault(table, {"table": table, "cn": cn, "business_object": fbo, "attrs": []})
+            target = pending_entities if agent == "config" and fbo in pending_objects else ents
+            e = target.setdefault(table, {"table": table, "cn": cn, "business_object": fbo, "attrs": []})
             # 「属性名称 / 字段编号」两列在个别表里填反了（如 product_para_value）。
             # 物理列 code 必然是 ASCII 标识符，据此纠正，避免把中文当成列名喂给模型。
             code, name = r[3], r[2]
             if not _is_ident(code) and _is_ident(name):
                 code, name = name, code
-            if code:
+            if _is_ident(code):
+                # 新增区域省略了「字段类型」，把「主键」写在第 5 列、
+                # 外键说明写在第 6 列；旧区域仍按原八列布局解析。
+                shifted = agent == "config" and target is pending_entities
+                field_type = r[ci_type] if ci_type is not None and not shifted else ""
+                pk = r[4] if shifted else r[ci_pk]
+                fk = r[5] if shifted else r[ci_fk]
+                note = r[7] if shifted else (r[ci_note] if ci_note is not None else "")
                 _add_attr(e, {"code": code, "name": name,
-                              "type": r[ci_type] if ci_type is not None else "",
-                              "pk": r[ci_pk], "fk": r[ci_fk],
-                              "note": r[ci_note] if ci_note is not None else ""})
+                              "type": field_type, "pk": pk, "fk": fk, "note": note})
         result[agent] = {"entities": list(ents.values()), "bi_index": {}}
 
+    result["pending"] = {"entities": list(pending_entities.values()), "bi_index": {}}
     wb.close()
     return result
 

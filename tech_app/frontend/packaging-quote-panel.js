@@ -147,6 +147,16 @@
   function render(target, payload) {
     if (!target) return null;
     target.innerHTML = "";
+    var quote = (payload && payload.quote) || {};
+    if (quote.draft || quote.publish_blocked) {
+      var warning = document.createElement("div");
+      warning.className = "pkg-quote-warning";
+      warning.setAttribute("data-pkg-incomplete-cost", "1");
+      warning.textContent = "非完整成本：本报价仅供内部试算，仍有 "
+        + String(quote.gap_count || (quote.gaps || []).length || 0)
+        + " 条成本缺口，不能作为正式报价对外发布。";
+      target.appendChild(warning);
+    }
     var sections = (payload && payload.sections) || {};
     SECTION_ORDER.forEach(function (id) {
       if (sections[id]) target.appendChild(renderSection(id, sections[id]));

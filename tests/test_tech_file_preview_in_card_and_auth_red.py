@@ -141,6 +141,8 @@ import types
 data_dir, root = sys.argv[1], sys.argv[2]
 os.environ["DATA_DIR"] = data_dir
 os.environ["AUTH_ENABLED"] = "false"
+os.environ["CPQ_SSO"] = "false"
+os.environ.pop("CPQ_INTERNAL_TOKEN", None)
 sys.path.insert(0, root)
 try:
     import dotenv  # noqa: F401
@@ -221,7 +223,9 @@ async def probe():
 
 no_ticket, passed, by_query, by_header = asyncio.run(probe())
 urls = [f.get("url") for g in (manifest.get("groups") or []) for f in (g.get("files") or [])]
-print(json.dumps({"status": client.get("/api/health").status_code,
+health_response = client.get("/api/health")
+print(json.dumps({"status": health_response.status_code,
+                  "health_detail": health_response.text[:300],
                   "total": manifest.get("total"),
                   "urls": urls,
                   "no_ticket": no_ticket,

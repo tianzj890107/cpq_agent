@@ -903,15 +903,7 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "",
         # 用户再点一次「完成本步」若整份覆盖，第 2 步的包装分区与第 5 步要落的报价版本会一起消失。
         # 合并直接复用回传通道那条既有语义 `merge_step_snapshot()`（§2.1：不许写第二份合并逻辑）；
         # 它只认「对象」负载，空串 / `"{}"` / 非法 JSON 一律**不碰** data_snapshot（§2.2）。
-        payload = {}
-        snap_text = (snapshot or "").strip()[:200000]
-        if snap_text:
-            try:
-                parsed = json.loads(snap_text)
-            except ValueError:
-                parsed = None
-            if isinstance(parsed, dict):
-                payload = parsed
+        payload = parse_step_snapshot(snapshot)
         if payload:
             merge_step_snapshot(session_id, step_no, payload, conn=conn)
         cpq_auth._exec(
@@ -1048,6 +1040,32 @@ def _snapshot_dict(v) -> dict:
     return {}
 
 
+# 实测包装交接包约 269 KB。旧版截到 200 KB 会损坏 JSON，却仍推进步骤。
+MAX_STEP_SNAPSHOT_BYTES = 5_000_000
+
+
+def parse_step_snapshot(snapshot: str) -> dict:
+    """解析快照；非法对象保持旧值，超限则拒绝完成步骤。"""
+    raw = (snapshot or "").strip()
+    if not raw:
+        return {}
+    if len(raw.encode("utf-8")) > MAX_STEP_SNAPSHOT_BYTES:
+        raise WfError("步骤快照超过 5 MB，未完成本步；请缩减内容或联系管理员")
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def serialize_step_snapshot(snapshot: dict) -> str:
+    """合并路径同样执行大小门禁；完整 JSON 或明确失败，不做截断。"""
+    raw = json.dumps(snapshot, ensure_ascii=False)
+    if len(raw.encode("utf-8")) > MAX_STEP_SNAPSHOT_BYTES:
+        raise WfError("步骤快照超过 5 MB，未保存本次内容；请缩减内容或联系管理员")
+    return raw
+
+
 def merge_step_snapshot(session_id: str, step_no: int, snapshot: dict, conn=None) -> dict:
     """把新的技术结果**合并**进某一步已有的 data_snapshot，不改任何步骤状态。
 
@@ -1071,10 +1089,11 @@ def merge_step_snapshot(session_id: str, step_no: int, snapshot: dict, conn=None
         merged = _snapshot_dict(row[0]) if row else {}
         for key, value in (snapshot or {}).items():
             merged[key] = value
+        payload = serialize_step_snapshot(merged)
         cpq_auth._exec(
             conn, "UPDATE cpq_wf_card_step SET data_snapshot = %s::jsonb"
                   " WHERE card_id = %s AND step_no = %s",
-            (json.dumps(merged, ensure_ascii=False), cid, int(step_no)))
+            (payload, cid, int(step_no)))
         _commit(conn)
         return merged
     finally:
