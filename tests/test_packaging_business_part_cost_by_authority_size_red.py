@@ -406,9 +406,12 @@ class EGuardrails(unittest.TestCase):
         # 冻结**重指**为 5：多出来的那一条是按图纸补推导（`…/packaging-business-parts/derive`）。
         # 本次视觉复核又新增人工确认几何映射的 PUT，重指为 6；计数仍精确相等。
         src = _source(ROOT / "tech_app" / "frontend" / "app.js")
-        self.assertEqual(6, src.count("packaging-business-parts/"),
-                         "新增的一条只能是人工确认候选的 geometry-binding 写接口")
+        # 图纸尺寸人工确认单列 size-confirm PUT，总数精确重指为 7。
+        self.assertEqual(8, src.count("packaging-business-parts/"),
+                         "新增入口只能是 geometry-binding、size-confirm 与 auto-bind-candidates")
         self.assertEqual(1, src.count("/geometry-binding"))
+        self.assertEqual(1, src.count("/size-confirm"))
+        self.assertEqual(1, src.count("/auto-bind-candidates"))
         self.assertEqual(1, src.count('id="packagingBusinessPartCostBySize"'),
                          "面板入口的按钮只许有一处（Spec §C2）")
         self.assertEqual(1, src.count('$("packagingBusinessPartCostBySize")'),

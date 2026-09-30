@@ -411,9 +411,12 @@ class DWiring(unittest.TestCase):
         # Spec `packaging-all-parts-visual-adjudication.md` §3 把计数精确重指为 6，
         # 与 `test_packaging_business_part_{basis_in_panel,cost_by_authority_size,
         # process_by_authority_route,process_entry}_red` 的同一冻结逐字一致。
-        self.assertEqual(6, self.SOURCE.count("packaging-business-parts/"),
-                         "新增的一条只能是人工确认候选的 geometry-binding 写接口")
+        # 图纸尺寸人工确认再新增一条 size-confirm PUT；计数仍精确冻结。
+        self.assertEqual(8, self.SOURCE.count("packaging-business-parts/"),
+                         "新增入口只能是 geometry-binding、size-confirm 与 auto-bind-candidates")
         self.assertEqual(1, self.SOURCE.count("/geometry-binding"))
+        self.assertEqual(1, self.SOURCE.count("/size-confirm"))
+        self.assertEqual(1, self.SOURCE.count("/auto-bind-candidates"))
 
     def test_d4_pure_functions_have_no_dom_or_fetch(self):
         for name in ("packagingAuthorityFileName", "packagingAuthorityBase64Of",

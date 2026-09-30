@@ -914,7 +914,9 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
         src_info = cpq_wf.close_source_task(
             conn, source_task_id, user,
             comment=f"技术工艺{_HANDOFF_LABELS.get(handoff_kind, '回传报价')}："
-                    f"来源待办已随本次交接完成")
+                    f"来源待办已随本次交接完成",
+            allow_packaging_delegate=(handoff_kind == PACKAGING_HANDOFF_KIND),
+            expected_card_id=card["card_id"])
 
         # ⑤ 第 2 步：只进不退；快照**只合并**（老键保留、同名覆盖），绝不整份覆盖 ——
         # 第 2 步里还有别人填过的东西（s1_basic 之类），一次回传不该把它们抹掉。

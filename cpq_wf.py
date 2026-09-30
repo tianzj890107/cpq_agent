@@ -483,7 +483,9 @@ def _int_or_none(v):
 UNCLOSED_TASK_STATUSES = ("cancelled", "expired")
 
 
-def close_source_task(conn, task_id, user: dict, *, comment: str = "") -> dict:
+def close_source_task(conn, task_id, user: dict, *, comment: str = "",
+                      allow_packaging_delegate: bool = False,
+                      expected_card_id=None) -> dict:
     """在**当前事务**里关闭来源的 claimed 待办，并把结果如实回报。
 
     返回 ``{task_id, status, closed, already, skipped}``：
@@ -498,19 +500,25 @@ def close_source_task(conn, task_id, user: dict, *, comment: str = "") -> dict:
         return {"task_id": "", "status": "", "closed": False, "already": False,
                 "skipped": "missing_task_id"}
     cur = cpq_auth._exec(
-        conn, "SELECT card_id, status, claimed_by_user_id FROM cpq_wf_task WHERE task_id = %s",
+        conn, "SELECT card_id, status, claimed_by_user_id, task_kind FROM cpq_wf_task WHERE task_id = %s",
         (tid,))
     row = cur.fetchone()
     if not row:
         return {"task_id": str(tid), "status": "", "closed": False, "already": False,
                 "skipped": "not_found"}
     cid, status, claimed_by = int(row[0]), str(row[1] or ""), row[2]
+    task_kind = str(row[3] or "") if len(row) > 3 else ""
     uid = int(user["user_id"]) if user else None
     is_admin = bool(user) and str(user.get("role_code") or "") in ADMIN_ROLES
     if status == "completed":
         return {"task_id": str(tid), "status": status, "closed": False, "already": True,
                 "skipped": ""}
-    if status == "claimed" and not is_admin and (claimed_by is None or int(claimed_by) != uid):
+    delegated_packaging_cost = (allow_packaging_delegate and status == "claimed"
+                                and str(user.get("role_code") or "") == "finance_mgr"
+                                and task_kind == TASK_KIND_TECH_NEW
+                                and _int_or_none(expected_card_id) == cid)
+    if status == "claimed" and not is_admin and not delegated_packaging_cost \
+            and (claimed_by is None or int(claimed_by) != uid):
         holder = "其他同事"
         cur = cpq_auth._exec(
             conn, "SELECT display_name FROM cpq_wf_user WHERE user_id = %s", (claimed_by,))
@@ -526,7 +534,9 @@ def close_source_task(conn, task_id, user: dict, *, comment: str = "") -> dict:
         conn, "UPDATE cpq_wf_task SET status = 'completed', completed_at = %s"
               " WHERE task_id = %s AND status IN ('open', 'claimed')", (_ts(_now()), tid))
     _log(conn, cid, tid, uid, "complete", None, None,
-         comment or "技术工艺回传报价：来源待办已随本次交接完成")
+         (comment or "技术工艺回传报价：来源待办已随本次交接完成")
+         + ("（包装成本由财务经理代完成来源工艺待办，原领取人保留审计）"
+            if delegated_packaging_cost and claimed_by != uid else ""))
     return {"task_id": str(tid), "status": "completed", "closed": True, "already": False,
             "skipped": ""}
 
@@ -904,6 +914,21 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "",
         # 合并直接复用回传通道那条既有语义 `merge_step_snapshot()`（§2.1：不许写第二份合并逻辑）；
         # 它只认「对象」负载，空串 / `"{}"` / 非法 JSON 一律**不碰** data_snapshot（§2.2）。
         payload = parse_step_snapshot(snapshot)
+        if 3 <= step_no <= 6:
+            # 步骤完成 API 是最终写闸，不能只依赖浏览器先问过的 step-gate。
+            # 包装身份取技术工艺回传写入的第 2 步快照，不信本次 POST 自称的包。
+            source = step_snapshot(session_id, 2, conn=conn) or {}
+            package = source.get("packaging_package") if isinstance(source, dict) else None
+            if isinstance(package, dict) and package.get("industry") == "packaging":
+                from cpq_quote_gate import quote_step_completion_gate
+                guard_data = dict(payload)
+                guard_data["packaging_package"] = package
+                if step_no == 6 and not isinstance(guard_data.get("packaging_quote"), dict):
+                    previous = step_snapshot(session_id, 5, conn=conn) or {}
+                    guard_data["packaging_quote"] = previous.get("packaging_quote")
+                verdict = quote_step_completion_gate(step_no, guard_data)
+                if not verdict["ok"]:
+                    raise WfError(verdict["message"])
         if payload:
             merge_step_snapshot(session_id, step_no, payload, conn=conn)
         cpq_auth._exec(

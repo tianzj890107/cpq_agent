@@ -141,7 +141,10 @@ class PackagingLayoutSpatialModelCombinationRed(TestCase):
                              if "unkept-arc" in (row.get("entity_ids") or []))
         other_row = copy.deepcopy(document["business_parts"][0])
         other_row["business_part_code"] = "OTHER-PART"
-        other_row["geometry_binding"]["candidates"] = [dict(raw_candidate, id=raw_candidate["candidate_id"])]
+        # 新口径可能已自动绑上原行；本用例只验证“另一件也把同一原始图元当候选”时
+        # 后续手动选择会被共享图元门禁拒绝，因此另一件本身必须仍是未绑定候选。
+        other_row["geometry_binding"] = {"status": "ambiguous", "candidates": [
+            dict(raw_candidate, id=raw_candidate["candidate_id"])]}
         document["business_parts"].append(other_row)
         selected = packaging_parts.set_geometry_binding(
             document, code, [], bound_by="manual",

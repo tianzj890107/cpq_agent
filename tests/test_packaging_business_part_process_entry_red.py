@@ -246,11 +246,14 @@ class CGuardrails(unittest.TestCase):
         # **重指**为"成本一条 + 工艺一条"（重指≠放宽：多出来的必须逐个点名）。
         # `## 480` 按 Spec `packaging-2-1-result-parts-and-shape-only-pane.md` §2.4b C6 再**重指**
         # 一次（计数 4 → 5）：多出来的那一条是按图纸补推导（`…/packaging-business-parts/derive`）。
-        # 视觉复核新增人工确认候选的 geometry-binding PUT，计数再重指为 6。
+        # 视觉复核新增人工确认候选的 geometry-binding PUT；图纸尺寸人工确认再新增
+        # size-confirm PUT。两条都是明确的写入口，计数重指为 7。
         src = _source(APP_JS)
-        self.assertEqual(6, src.count("packaging-business-parts/"),
-                         "新增的一条只能是人工确认候选的 geometry-binding 写接口")
+        self.assertEqual(8, src.count("packaging-business-parts/"),
+                         "新增入口只能是 geometry-binding、size-confirm 与 auto-bind-candidates")
         self.assertEqual(1, src.count("/geometry-binding"))
+        self.assertEqual(1, src.count("/size-confirm"))
+        self.assertEqual(1, src.count("/auto-bind-candidates"))
         red = _source(COST_ENTRY_RED)
         self.assertIn("重指", red, "`## 412` 的 E4 必须写明重指而不是偷偷放宽（Spec §C4）")
         self.assertIn("4", red.split("test_e4_no_frontend_change")[1][:900],

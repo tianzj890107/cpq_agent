@@ -1913,6 +1913,14 @@
       const wait = board.waitingText(card);
       const anomaly = card.anomaly && card.anomaly.has_anomaly;
       let out = (stage && stage !== '—') ? '<br>当前阶段：<span>' + escH(stage) + '</span>' : '';
+      const progress = card.packaging_progress || {};
+      if (Array.isArray(progress.completed) && progress.completed.length) {
+        out += '<br>包装已完成：<span>' + escH(progress.completed.join('、')) + '</span>';
+        if (Number(progress.cost_gap_count || 0) > 0) {
+          out += ' · <span>成本缺口 ' + escH(progress.cost_gap_count) + ' 项（仅草稿）</span>';
+        }
+      }
+      if (progress.read_error) out += '<br>包装进度读取失败：<span>' + escH(progress.read_error) + '</span>';
       if (wait) out += (out ? ' · ' : '<br>') + '在等：<span>' + escH(wait) + '</span>';
       if (anomaly) out += ' · <span style="color:var(--color-red)">有异常</span>';
       return out;

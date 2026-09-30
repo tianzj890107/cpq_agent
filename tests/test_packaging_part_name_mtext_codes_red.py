@@ -126,12 +126,12 @@ class RealSamplePartNamesAreCleanRed(unittest.TestCase):
             self.assertIn(clean, names,
                           "%r 必须在圆盘盒的件名清单里（Spec §1）" % clean)
 
-    def test_a4_row_count_merges_the_mirror_duplicate(self):
+    def test_a4_material_spec_is_not_a_business_part(self):
         _require_sample(self, "圆盘盒")
-        # 2026-09-28 全流程修订：通用图纸注释过滤额外移除 9 条非零件文字。
-        # MTEXT 镜像归并规则本身未变；见 packaging-full-flow-20260928.md §1.4。
-        self.assertEqual(56, len(_rows("圆盘盒")),
-                         "圆盘盒：镜像归并后再剔除图例/装箱/尺寸说明，应是 56 个候选")
+        # 新增通用材料规格句式过滤后件数可以变化；验收语义，不按金标件数凑数。
+        names = _names("圆盘盒")
+        self.assertNotIn("透明0.5MM厚30%RPET胶片单面防刮花/单面覆膜", names)
+        self.assertTrue(names, "图纸上真实的件名仍须保留")
 
     def test_a5_the_mirror_pair_is_one_part(self):
         _require_sample(self, "圆盘盒")

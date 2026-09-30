@@ -7200,6 +7200,10 @@ PACKAGING_BUSINESS_PARTS_READ_PATH = "/api/projects/{pid}/requirement/packaging-
 PACKAGING_GEOMETRY_READ_PATH = "/api/projects/{pid}/requirement/packaging-geometry"
 PACKAGING_BINDING_WRITE_PATH = ("/api/projects/{pid}/requirement/packaging-business-parts/"
                                 "{part_code}/geometry-binding")
+PACKAGING_AUTO_BIND_PATH = ("/api/projects/{pid}/requirement/"
+                            "packaging-business-parts/auto-bind-candidates")
+PACKAGING_SIZE_CONFIRM_PATH = ("/api/projects/{pid}/requirement/packaging-business-parts/"
+                               "{part_code}/size-confirm")
 #: 「对答案参照」的唯一路径常量（Spec `packaging-business-tables-are-answer-keys-only.md` §2.2）：
 #: 客户工作簿进来之后落的**只是参照**，所以接口名字也从"导入对照表"改成"导入对答案参照"。
 PACKAGING_BUSINESS_PARTS_REFERENCE_PATH = ("/api/projects/{pid}/requirement/"
@@ -7401,6 +7405,12 @@ class PackagingGeometryBindingAction(BaseModel):
     component_ids: List[str] = Field(default_factory=list)
     candidate_id: str = ""
     reason: str = ""
+
+
+class PackagingSizeConfirmAction(BaseModel):
+    length_mm: float
+    width_mm: float
+    note: str
 
 
 def _business_parts_body(pid: str, doc: Any = None) -> dict:
@@ -7621,6 +7631,32 @@ def read_packaging_business_parts(pid: str, user: dict = Depends(current_user)):
     return _business_parts_body(pid)
 
 
+@app.post(PACKAGING_AUTO_BIND_PATH)
+def auto_bind_packaging_business_candidates(pid: str, user: dict = Depends(current_user)):
+    """旧图纸项目幂等补齐最高分候选归属；只在显式 POST 中写，不在 GET 隐式迁移。"""
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES,
+             "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(pid)
+    doc = packaging_parts.load_business_parts(pid)
+    if not isinstance(doc, dict):
+        raise HTTPException(409, "项目里还没有业务部件清单")
+    updated = packaging_parts.auto_bind_business_candidates(doc)
+    if updated == doc:
+        return _business_parts_body(pid, doc)
+    saved = packaging_parts.save_business_parts(pid, updated)
+    def count_auto(record):
+        return sum(1 for row in (record.get("business_parts") or [])
+                   if (row.get("geometry_binding") or {}).get("bound_by") == "auto"
+                   and (row.get("geometry_binding") or {}).get("status") == "bound")
+    store.audit(pid, "workflow:packaging_candidate_auto_bound", {
+        "business_parts_id": saved.get("business_parts_id"),
+        "auto_bound_total": count_auto(saved),
+        "newly_auto_bound_total": max(0, count_auto(saved) - count_auto(doc)),
+        "by": str(user.get("username") or ""),
+    })
+    return _business_parts_body(pid, saved)
+
+
 @app.get(PACKAGING_GEOMETRY_READ_PATH)
 def read_packaging_geometry(pid: str, user: dict = Depends(current_user), limit: int = 0):
     """CAD 平面图用的图元/图层/范围（纯读）：前端据此画图，**不**重新解析 DWG。"""
@@ -7672,6 +7708,33 @@ def update_packaging_geometry_binding(
         "business_parts_id": saved.get("business_parts_id"),
         "by": str(user.get("username") or ""),
     })
+    return _business_parts_body(pid, saved)
+
+
+@app.put(PACKAGING_SIZE_CONFIRM_PATH)
+def confirm_packaging_business_part_size(
+    pid: str, part_code: str, body: PackagingSizeConfirmAction,
+    user: dict = Depends(current_user),
+):
+    """在图形归属已人工确认后，单独确认这件的图纸尺寸；两件事不可合并推定。"""
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES,
+             "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(pid)
+    doc = packaging_parts.load_business_parts(pid)
+    if not isinstance(doc, dict):
+        raise HTTPException(409, "项目里还没有业务部件清单")
+    try:
+        updated = packaging_parts.confirm_business_part_size(
+            doc, part_code, body.length_mm, body.width_mm,
+            actor=str(user.get("username") or ""), note=body.note)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    saved = packaging_parts.save_business_parts(pid, updated)
+    store.audit(pid, "workflow:packaging_business_part_size_confirmed", {
+        "business_part_code": part_code,
+        "length_mm": body.length_mm, "width_mm": body.width_mm,
+        "note": body.note, "business_parts_id": saved.get("business_parts_id"),
+        "by": user.get("username", "")})
     return _business_parts_body(pid, saved)
 
 
@@ -9123,8 +9186,12 @@ async def packaging_business_part_cost(
     _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
     _workflow_project(pid)
     loaded = _packaging_business_part_row(pid, code)
-    row = loaded["row"]
     doc = loaded["doc"]
+    try:
+        row = packaging_parts.verified_business_part_input_row(loaded["row"], doc)
+    except ValueError as exc:
+        raise HTTPException(409, {"code": str(exc),
+                                  "message": "图纸推导件尚未人工确认几何归属与尺寸，不能按候选尺寸算成本。"}) from exc
     requirement = store.load_requirement(pid) or {}
     qty = max(1, int(quantity or 1))
     inputs = packaging_parts.business_cost_inputs(row, requirement=requirement, quantity=qty)
@@ -9240,8 +9307,12 @@ async def packaging_business_part_process(
     _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
     _workflow_project(pid)
     loaded = _packaging_business_part_row(pid, code)
-    row = loaded["row"]
     doc = loaded["doc"]
+    try:
+        row = packaging_parts.verified_business_part_input_row(loaded["row"], doc)
+    except ValueError as exc:
+        raise HTTPException(409, {"code": str(exc),
+                                  "message": "图纸推导件尚未人工确认几何归属与尺寸，不能按候选尺寸排工艺。"}) from exc
     inputs = packaging_parts.business_process_inputs(row)
     if not inputs["ok"]:
         raise _packaging_business_part_reject(inputs)

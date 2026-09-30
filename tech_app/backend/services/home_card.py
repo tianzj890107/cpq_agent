@@ -171,6 +171,42 @@ def business_case_id(project_id: str) -> str:
         return ""
 
 
+def packaging_progress(project_id: str) -> Dict[str, Any]:
+    """包装下游事实与需求单待办分开显示；不反写 1.1 的正式流程状态。"""
+    try:
+        requirement = store.load_requirement(project_id) or {}
+        data = requirement.get("data") if isinstance(requirement.get("data"), dict) else {}
+        if _text(data.get("industry") or requirement.get("industry")) != "packaging":
+            return {}
+    except Exception:  # noqa: BLE001
+        return {"read_error": "requirement_unavailable", "completed": []}
+    facts: Dict[str, Any] = {"completed": [], "cost_gap_count": 0, "read_error": ""}
+    try:
+        from .packaging_drawing_flow import persistence
+        flow = persistence.load_flow(project_id) or {}
+        steps = flow.get("steps") if isinstance(flow.get("steps"), list) else []
+        if steps and all(_text(row.get("status")) in ("completed", "skipped")
+                         for row in steps if isinstance(row, dict)):
+            facts["completed"].append("图纸解析")
+        from ..storage import da_repo
+        req_no = _text(requirement.get("requirement_no"))
+        match = da_repo.load_box_match(project_id, req_no) or {}
+        if _text(match.get("decision")) == "confirmed":
+            facts["completed"].append("盒型确认")
+        from . import packaging_bom, packaging_route, packaging_cost
+        if packaging_bom.load_bom(project_id, req_no).get("built"):
+            facts["completed"].append("BOM 已生成")
+        if _text(packaging_route.load_route(project_id, req_no).get("status")) == "confirmed":
+            facts["completed"].append("工艺已确认")
+        cost = packaging_cost.load_cost(project_id, req_no)
+        if cost.get("built"):
+            facts["completed"].append("成本已试算")
+            facts["cost_gap_count"] = len(cost.get("gaps") or [])
+    except Exception as exc:  # noqa: BLE001 - 进度缺失必须显式披露，不改主卡片
+        facts["read_error"] = type(exc).__name__
+    return facts
+
+
 def build_card(project_id: str, meta: Optional[dict] = None, user: Optional[dict] = None) -> Dict[str, Any]:
     """一张首页卡片；投影读不动时降级为空阶段，绝不抛。"""
     meta = meta if isinstance(meta, dict) else (store.load_meta(project_id) or {})
@@ -193,6 +229,7 @@ def build_card(project_id: str, meta: Optional[dict] = None, user: Optional[dict
         "last_event": _last_event(project_id, meta),
         "anomaly": _anomaly(project_id, projection, stages_rows),
         "business_case_id": business_case_id(project_id),
+        "packaging_progress": packaging_progress(project_id),
         "primary_action": _primary_action(project_id, code, next_action),
     }
 

@@ -214,6 +214,12 @@ PROCESS_MARKERS = ("啤", "烫", "印", "UV", "uv", "覆膜", "过油", "裱", "
 
 #: 规格串（`1.8mm灰板裱光银纸` / `2.5mm灰板` / `350g粉灰`）：以数值+单位开头的是**材料**，不是件名。
 _SPEC_LIKE = re.compile(r"^\s*\d+(?:\.\d+)?\s*(?:mm|MM|g|G|克|度|张|层)")
+# 「透明 0.5mm 厚 30% RPET 胶片，单面覆膜」是材料+厚度+处理说明，
+# 不是可制造部件名称。仅用通用语法判据，不按文件名、图号或该样本整句特判。
+_MATERIAL_DESCRIPTION = re.compile(
+    r"^\s*(?:透明|本色|磨砂|哑光|亮光|单面|双面)"
+    r"[^\n]{0,30}\d+(?:\.\d+)?\s*(?:mm|g|克|%)"
+    r"[^\n]{0,50}(?:胶片|薄膜|灰板|纸张|覆膜|防刮花)", re.IGNORECASE)
 
 # 通用图纸注释形态，不按客户文件名/哈希/金标件数过滤。带序号的尺寸说明、
 # 装箱数量、装柜图标题和纸张纹向都不是可制造的单个部件。
@@ -479,6 +485,8 @@ def _exclusion_reason(raw: Any, name: Any, layer: Any = "") -> str:
         return "single_character_label"
     if _SPEC_LIKE.match(name_text):
         return "spec_like_text"
+    if _MATERIAL_DESCRIPTION.match(_width_normalized(name_text)):
+        return "material_spec_not_part"
     return ""
 
 

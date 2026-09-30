@@ -3359,6 +3359,9 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None,
               author: str = "system", business_parts: Any = None) -> Dict[str, Any]:
     """把图纸零件回填进算不出尺寸的 BOM 行；纯函数：不改入参、不落库。
 
+    有业务部件清单的包装 DWG 不再按列表序号/面积猜绑定；未确认件保持 needs_input。
+    下面的位置配对仅兼容没有业务部件文档的老模板路径，其结果仍须人工核对。
+
     - 只碰 `box_part` / `optional_part` 且（`needs_input` 或长宽为空）的行，锁定行绝不碰；
     - 行按出现顺序（= 模板 `seq` 升序）↔ 零件按面积降序，逐行取件；
       零件比分出的行少时**循环取件**并保留 `fallback_paired=true` 留痕
@@ -3388,6 +3391,22 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None,
         if isinstance(business_parts, dict) else ""
     biz_hash = _text((business_parts or {}).get("business_parts_hash")) \
         if isinstance(business_parts, dict) else ""
+    # 面积排序只说明图上有哪些轮廓，不能证明「BOM 第 N 行就是第 N 大零件」。
+    # 线上两张 DWG 的业务部件定位为 0/28、0/56；继续按位置回填会把错误尺寸
+    # 标成 computed。保留原行和几何候选，等明确的部件↔实体映射后再计入成本。
+    if isinstance(business_parts, dict) and business_parts.get("business_parts"):
+        pending = [_text(row.get("item_key")) for row in rows if _needs_binding(row)]
+        for row in rows:
+            if _needs_binding(row):
+                row["binding_method"] = "unbound"
+                row["status"] = "needs_input"
+        return {"items": rows, "bound": 0,
+                "unbound": ["part_size_unbound:%s" % key for key in pending],
+                "skipped_locked": 0, "gaps": ["part_size_unbound:%s" % key for key in pending],
+                "pairing_review": [], "role_unbound": [], "role_unbound_total": 0,
+                "rule_id": BINDING_RULE_ID, "engine_version": ENGINE_VERSION,
+                "parts_id": doc_id, "parts_hash": doc_hash,
+                "business_parts_id": biz_id, "business_parts_hash": biz_hash}
     available = [row for row in ((parts or {}).get("parts") or [])
                  if isinstance(row, dict)
                  and _num(row.get("unfolded_length_mm")) is not None
@@ -3529,7 +3548,7 @@ BUSINESS_PART_CODE_FORMAT = "%s-P%02d"
 BUSINESS_BINDING_STATUSES = ("bound", "partial", "unbound", "ambiguous")
 
 #: 绑定来源闭集：自动判定 / 人工确认（人工的覆盖自动的，且必须留痕）。
-BUSINESS_BINDING_BY = ("deterministic", "manual")
+BUSINESS_BINDING_BY = ("deterministic", "manual", "auto")
 
 #: 业务部件的「事实档」闭集（Spec `packaging-business-truth-state-disclosure.md` §2.3）：
 #: 与 `packaging_business_part_resolver.TRUTH_STATES` **逐字相同** —— 判定只有那一处
@@ -4111,6 +4130,8 @@ def business_parts_document(reference: Any, geometry: Any, *,
     }
     doc["business_parts_id"] = ""
     doc["business_parts_hash"] = ""
+    if doc["derived_from_drawing"]:
+        doc = auto_bind_business_candidates(doc)
     doc["business_parts_id"], doc["business_parts_hash"] = _business_identity(doc)
     return doc
 
@@ -4439,6 +4460,7 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
     for row in (record.get("business_parts") or []):
         if not isinstance(row, dict) or _text(row.get("business_part_code")) != wanted:
             continue
+        previous_candidates = copy.deepcopy((row.get("geometry_binding") or {}).get("candidates") or [])
         known = [item for item in ids if item in components]
         unknown = [item for item in ids if item not in components]
         states = sorted({_text(components[item].get("status")) for item in known}) or []
@@ -4479,15 +4501,23 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
             "status": status, "component_ids": known,
             "entity_ids": confirmed_entities,
             "bbox": union_box,
-            "confidence": 1.0 if status == "bound" and source == "manual" else 0.0,
-            "reasons": reasons, "bound_by": source, "bound_at": _stamp(),
+            "confidence": (1.0 if status == "bound" and source == "manual" else
+                           candidate_confidence_percent(selected) / 100.0
+                           if status == "bound" and source == "auto" else 0.0),
+            "reasons": reasons, "bound_by": source,
+            "bound_at": "" if source == "auto" else _stamp(),
             "rule_id": BUSINESS_BINDING_RULE_ID, "geometry_component_ref": known,
             "candidate_id": selected_id, "size_confirmed": False,
             "size_source": "none" if candidate_mismatch else "geometry_binding",
-            "attribution": {"status": ("human_confirmed_candidate" if candidate_mismatch else
+            "attribution": {"status": ("auto_selected" if status == "bound" and source == "auto" else
+                                       "human_confirmed_candidate" if candidate_mismatch else
                                        "human_confirmed" if known and source == "manual"
                                        else "review_needed"), "reasons": reasons},
+            "candidates": previous_candidates,
         }
+        previous_size = row.pop("confirmed_size", None)
+        if isinstance(previous_size, dict) and previous_size:
+            row.setdefault("confirmed_size_history", []).append(dict(previous_size))
         break
     claimed = {str(cid) for part in (record.get("business_parts") or [])
                if isinstance(part, dict)
@@ -4507,6 +4537,133 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
     record["stats"] = business_parts_stats(record.get("business_parts") or [])
     record["business_parts_id"], record["business_parts_hash"] = _business_identity(record)
     return record
+
+
+def candidate_confidence_percent(candidate: Any) -> int:
+    """与看板同口径的 CAD 证据排序分；未校准为正确概率，不能当尺寸证据。"""
+    item = candidate if isinstance(candidate, dict) else {}
+    entities = item.get("entity_ids") if isinstance(item.get("entity_ids"), list) else []
+    components = item.get("component_ids") if isinstance(item.get("component_ids"), list) else []
+    if not entities and not components:
+        return 0
+    score = (0.15 if entities else 0) + (0.10 if components else 0)
+    score += 0.20 if item.get("anchor_in_region") is True else 0
+    score += 0.20 if item.get("dimension_spatial") is True else 0
+    score += 0.10 if item.get("geometry_status") == "supported" else 0
+    box = item.get("bbox")
+    distance = _num(item.get("distance_mm"))
+    if isinstance(box, (list, tuple)) and len(box) >= 4 and distance is not None and distance >= 0:
+        values = [_num(value) for value in box[:4]]
+        if all(value is not None for value in values):
+            diagonal = math.hypot(values[2] - values[0], values[3] - values[1])
+            if diagonal > 0:
+                score += 0.15 * max(0, 1 - distance / min(diagonal, 200))
+    return int(math.floor(min(0.85, max(0, score)) * 100 + 0.5))
+
+
+def auto_bind_business_candidates(doc: Any) -> Dict[str, Any]:
+    """图纸推导件自动绑定最高分的完整 CAD 候选；不覆盖人工归属或尺寸。"""
+    record = copy.deepcopy(doc) if isinstance(doc, dict) else {}
+    if not record.get("derived_from_drawing"):
+        return record
+    proposals = []
+    for original in (record.get("business_parts") or []):
+        if not isinstance(original, dict):
+            continue
+        code = _text(original.get("business_part_code"))
+        binding = original.get("geometry_binding") if isinstance(original.get("geometry_binding"), dict) else {}
+        if not code or binding.get("status") == "bound" or binding.get("bound_by") == "manual":
+            continue
+        candidates = [item for item in (binding.get("candidates") or []) if isinstance(item, dict)]
+        if not candidates:
+            continue
+        ranked = sorted(enumerate(candidates), key=lambda pair: (
+            -candidate_confidence_percent(pair[1]),
+            _text(pair[1].get("id") or pair[1].get("candidate_id")), pair[0]))
+        best = ranked[0][1]
+        proposals.append((-candidate_confidence_percent(best), code, best))
+    # 多个件抢同一组图元时，先给证据更强的一件，不让清单行序决定归属。
+    for negative_score, code, best in sorted(proposals, key=lambda item: (item[0], item[1])):
+        candidate_id = _text(best.get("id") or best.get("candidate_id"))
+        score = -negative_score
+        reason = "highest_candidate_has_no_cad_evidence" if score <= 0 else ""
+        if not reason:
+            try:
+                proposed = set_geometry_binding(
+                    record, code, best.get("component_ids") or [], bound_by="auto",
+                    reason="最高证据分候选自动归属", candidate_id=candidate_id)
+                proposed_row = next((row for row in (proposed.get("business_parts") or [])
+                                     if isinstance(row, dict) and _text(row.get("business_part_code")) == code), {})
+                if (proposed_row.get("geometry_binding") or {}).get("status") == "bound":
+                    record = proposed
+                    continue
+                reason = "highest_candidate_geometry_incomplete"
+            except ValueError as exc:
+                reason = str(exc)
+        current = next((row for row in (record.get("business_parts") or [])
+                        if isinstance(row, dict) and _text(row.get("business_part_code")) == code), None)
+        if current is not None:
+            current.setdefault("geometry_binding", {})["auto_selection"] = {
+                "candidate_id": candidate_id, "confidence_percent": score,
+                "status": "blocked", "reason": reason}
+    if record != doc:
+        record["stats"] = business_parts_stats(record.get("business_parts") or [])
+        record["business_parts_id"], record["business_parts_hash"] = _business_identity(record)
+    return record
+
+
+def confirm_business_part_size(doc: Any, code: Any, length_mm: Any, width_mm: Any,
+                               *, actor: str, note: str) -> Dict[str, Any]:
+    """人工核对图纸尺寸后确权；几何绑定未人工确认时不允许只填两个数字过关。"""
+    length, width = _num(length_mm), _num(width_mm)
+    if length is None or width is None or length <= 0 or width <= 0:
+        raise ValueError("size_must_be_positive")
+    if not _text(actor) or not _text(note):
+        raise ValueError("size_confirmation_requires_actor_and_evidence_note")
+    record = copy.deepcopy(doc) if isinstance(doc, dict) else {}
+    target = next((row for row in (record.get("business_parts") or [])
+                   if isinstance(row, dict) and _text(row.get("business_part_code")) == _text(code)), None)
+    if target is None:
+        raise ValueError("business_part_code_not_found")
+    binding = target.get("geometry_binding") if isinstance(target.get("geometry_binding"), dict) else {}
+    if (binding.get("status") != "bound" or binding.get("bound_by") not in ("manual", "auto")
+            or not binding.get("component_ids")):
+        raise ValueError("confirmed_geometry_binding_required_before_size_confirmation")
+    previous = target.get("confirmed_size")
+    if isinstance(previous, dict) and previous:
+        target.setdefault("confirmed_size_history", []).append(dict(previous))
+    target["confirmed_size"] = {"length_mm": length, "width_mm": width,
+                                "source": "drawing_dimension_manual",
+                                "confirmed_by": _text(actor), "confirmed_at": _stamp(),
+                                "note": _text(note),
+                                "component_ids": list(binding.get("component_ids") or [])}
+    binding["size_confirmed"] = True
+    target["geometry_binding"] = binding
+    record["stats"] = business_parts_stats(record.get("business_parts") or [])
+    record["business_parts_id"], record["business_parts_hash"] = _business_identity(record)
+    return record
+
+
+def verified_business_part_input_row(row: Any, doc: Any) -> Dict[str, Any]:
+    """单件工艺/成本的输入行：图纸推导件只使用已经人工确认的尺寸。"""
+    result = copy.deepcopy(row) if isinstance(row, dict) else {}
+    if not isinstance(doc, dict) or not doc.get("derived_from_drawing"):
+        return result
+    binding = result.get("geometry_binding") if isinstance(result.get("geometry_binding"), dict) else {}
+    confirmed = result.get("confirmed_size") if isinstance(result.get("confirmed_size"), dict) else {}
+    if (binding.get("status") != "bound" or binding.get("bound_by") not in ("manual", "auto")
+            or binding.get("size_confirmed") is not True or not binding.get("component_ids")
+            or (_num(confirmed.get("length_mm")) or 0) <= 0
+            or (_num(confirmed.get("width_mm")) or 0) <= 0):
+        raise ValueError("drawing_part_size_not_confirmed")
+    reference = dict(business_part_reference_block(result))
+    reference["length_mm"] = _num(confirmed["length_mm"])
+    reference["width_mm"] = _num(confirmed["width_mm"])
+    reference["size_source"] = "manual_confirmed_drawing"
+    reference["size_confirmed_by"] = _text(confirmed.get("confirmed_by"))
+    result[REFERENCE_BLOCK_KEY] = reference
+    result[LEGACY_REFERENCE_BLOCK_KEY] = dict(reference)
+    return result
 
 
 def business_binding_stale_reason(stored_id: Any, current_id: Any) -> str:

@@ -180,8 +180,9 @@ class PackagingAllPartsVisualAdjudicationRed(unittest.TestCase):
         source = (ROOT / "tech_app/frontend/app.js").read_text(encoding="utf-8")
         self.assertIn('data-qq-candidate-warning="1"', source)
         self.assertIn('id="packagingPartCandidateSelect"', source)
-        self.assertIn('id="packagingConfirmCandidate"', source)
-        self.assertIn('确认归属不等于确认尺寸', source)
+        self.assertNotIn('id="packagingConfirmCandidate"', source)
+        self.assertIn('packagingGeometryBindingUrl(wanted)', source)
+        self.assertIn('尺寸仍须单独确认', source)
         start = source.index("function packagingBusinessPartAttributionText(")
         end = source.index("\nfunction ", start + 1)
         function = source[start:end]

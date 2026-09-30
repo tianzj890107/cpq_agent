@@ -574,6 +574,7 @@ def business_part_rows(business_doc: Any) -> list:
     # 顶层的两个键，每行都固定住 —— 读侧靠它判"这份 BOM 是按上一版清单做的"。
     doc_id = _text(business_doc.get("business_parts_id"))
     doc_hash = _text(business_doc.get("business_parts_hash"))
+    drawing_derived = bool(business_doc.get("derived_from_drawing"))
     out: list = []
     seen: set = set()
     for row in rows:
@@ -584,12 +585,31 @@ def business_part_rows(business_doc: Any) -> list:
             continue
         seen.add(code)
         reference = _reference_block(row)
+        confirmed_size = row.get("confirmed_size") if isinstance(row.get("confirmed_size"), dict) else {}
+        binding = row.get("geometry_binding") if isinstance(row.get("geometry_binding"), dict) else {}
+        if drawing_derived and not (binding.get("status") == "bound"
+                                    and binding.get("bound_by") in ("manual", "auto")
+                                    and binding.get("size_confirmed") is True
+                                    and binding.get("component_ids")):
+            confirmed_size = {}
         process_text = _text(reference.get("process_text"))
         purchased = any(word in process_text for word in PURCHASED_KEYWORDS)
-        length = _positive_number(reference.get("length_mm"))
-        width = _positive_number(reference.get("width_mm"))
+        # 图纸推导件的“参考/候选尺寸”不等于客户确认；只有人工绑定图元并核对尺寸后，
+        # confirmed_size 才能进入 BOM。旧模板/对照表口径保持原状以兼容历史数据。
+        size_values = confirmed_size if drawing_derived else reference
+        length = _positive_number(size_values.get("length_mm"))
+        width = _positive_number(size_values.get("width_mm"))
         missing = [name for name, value in (("length_mm", length), ("width_mm", width))
                    if value is None]
+        size_origin = ({"kind": "manual_confirmed_drawing", "confirmed_by":
+                        _text(confirmed_size.get("confirmed_by")),
+                        "confirmed_at": _text(confirmed_size.get("confirmed_at")),
+                        "note": _text(confirmed_size.get("note")),
+                        "business_parts_id": doc_id, "business_parts_hash": doc_hash}
+                       if drawing_derived and not missing else
+                       ({} if drawing_derived else _reference_size_source(
+                           reference, business_parts_id=doc_id,
+                           business_parts_hash=doc_hash)))
         out.append({
             "bom_category": "optional_part" if purchased else "box_part",
             "item_key": code,
@@ -601,8 +621,7 @@ def business_part_rows(business_doc: Any) -> list:
             "unit": "件",
             "length_mm": length,
             "width_mm": width,
-            "size_source_json": _json_text(_reference_size_source(
-                reference, business_parts_id=doc_id, business_parts_hash=doc_hash)),
+            "size_source_json": _json_text(size_origin),
             "status": "needs_input" if missing else "computed",
             "missing_variables": missing,
             "is_optional": 1 if purchased else 0,

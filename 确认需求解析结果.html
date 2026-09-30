@@ -1813,6 +1813,8 @@
       const payload = {
         projectName: ($('projectName') && $('projectName').textContent) || '报价单',
         customer: '', projectCode: '', steps: stepsData,
+        session_id: currentSessionId,
+        industry: LAST_PACKAGING_PACKAGE ? 'packaging' : '',
       };
       if (be) be.disabled = true;
       try {
@@ -1850,7 +1852,8 @@
       try {
         const res = await cpqAuthFetch(AGENT_URL + '/api/import', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sections: all, sid: currentSessionId }),
+          body: JSON.stringify({ sections: all, sid: currentSessionId,
+                                 industry: LAST_PACKAGING_PACKAGE ? 'packaging' : '' }),
         }).then(r => r.json());
         (res.results || []).forEach(r => {
           if (r.ok) addAiBubble((r.note ? '⏭️' : '✅') + ' **' + r.label + '** → `' + r.table + '`：' + (r.note || ('已写入 ' + r.rows + ' 行')));
@@ -3557,8 +3560,11 @@
         // 第 5 步「报价方案」确认：把这一版报价随快照带回卡片 —— 后端据此落一版
         // （只增不改、同指纹幂等、换成本出新版，Spec packaging-quote-version-persistence §2.1）。
         // 定价发生在浏览器（服务端定价接口是只读的），不带回去服务端就无从知道"这一版算的是什么"。
-        if (step === 5 && LAST_PACKAGING_QUOTE) {
-          data = Object.assign({}, data || {}, { packaging_quote: LAST_PACKAGING_QUOTE });
+        if (step >= 3 && LAST_PACKAGING_PACKAGE) {
+          data = Object.assign({}, data || {}, {
+            packaging_package: LAST_PACKAGING_PACKAGE,
+            packaging_quote: LAST_PACKAGING_QUOTE,
+          });
         }
         const d = await wfApi('/wf/card/step-done', {
           method: 'POST',
@@ -4012,7 +4018,20 @@
       const n = Number(step) || 0;
       let payload = null;
       try {
+        if (n >= 3 && !LAST_PACKAGING_PACKAGE && currentSessionId) {
+          const prior = await wfApi('/wf/card/step-data?session_id=' +
+            encodeURIComponent(currentSessionId) + '&step_no=2');
+          if (prior && prior.data && prior.data.packaging_package) {
+            await renderPackagingQuotePanel(prior.data);
+          }
+        }
         payload = data || collectStepData(n);
+        if (LAST_PACKAGING_PACKAGE && n >= 3) {
+          payload = Object.assign({}, payload, {
+            packaging_package: LAST_PACKAGING_PACKAGE,
+            packaging_quote: LAST_PACKAGING_QUOTE,
+          });
+        }
         const d = await cpqAuthFetch(AGENT_URL + '/api/quote/step-gate', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -4058,6 +4077,11 @@
     function assertQuoteExportable() {
       const rows = quoteDetailRows();
       const problems = [];
+      if (typeof LAST_PACKAGING_PACKAGE !== 'undefined' && LAST_PACKAGING_PACKAGE
+          && (!LAST_PACKAGING_QUOTE || LAST_PACKAGING_QUOTE.draft
+          || LAST_PACKAGING_QUOTE.publish_blocked || LAST_PACKAGING_QUOTE.gap_count)) {
+        problems.push('包装成本尚有缺口或尚未定价，不能生成/导入正式报价单。');
+      }
       if (!rows.length) {
         problems.push('报价明细为空：至少要有 1 行（第 5 步）。');
         return { ok: false, problems: problems, rows: 0 };
@@ -4189,10 +4213,18 @@
     /* 最近一次定价出来的报价（第 5 步确认时随快照带回卡片，据此落一版报价版本；
        Spec packaging-quote-version-persistence.md §2.1）。 */
     let LAST_PACKAGING_QUOTE = null;
+    let LAST_PACKAGING_PACKAGE = null;
 
     /* 毛利率从第 3 步「定价规则（利润加成）」的已渲染行里读（页面上没有单独的输入框）；
        读不到就交给服务端报"缺费率"并把原因显示在面板上 —— 不猜数字。 */
     function packagingMarginRate() {
+      const manual = document.getElementById('packagingMarginInput');
+      if (manual) {
+        const raw = String(manual.value || '').trim();
+        if (!raw) return null;
+        const n = Number(raw);
+        return Number.isFinite(n) && n >= 0 && n < 100 ? n / 100 : null;
+      }
       if (typeof window.PACKAGING_QUOTE_MARGIN_RATE === 'number') return window.PACKAGING_QUOTE_MARGIN_RATE;
       const rows = extractSectionRows('s3_markup');
       for (const row of rows) {
@@ -4210,11 +4242,14 @@
     async function renderPackagingQuotePanel(snap) {
       const pkg = snap && snap.packaging_package;
       if (!pkg || !window.PackagingQuotePanel) return null;
+      LAST_PACKAGING_PACKAGE = pkg;
+      const rate = packagingMarginRate();
       const key = [((pkg.box_type || {}).confirmed_box_type || ''),
                    ((pkg.source || {}).result_version || pkg.result_version || ''),
-                   ((pkg.cost || {}).total_cost === undefined ? '' : (pkg.cost || {}).total_cost)].join('|');
-      if (key === PACKAGING_PANEL_KEY) return null;   // 同一份包不重复定价
-      PACKAGING_PANEL_KEY = key;
+                   ((pkg.cost || {}).total_cost === undefined ? '' : (pkg.cost || {}).total_cost),
+                   (rate === null ? '' : rate)].join('|');
+      if (key === PACKAGING_PANEL_KEY && LAST_PACKAGING_QUOTE) return null;
+      LAST_PACKAGING_QUOTE = null;
       let host = document.getElementById('packagingQuotePanel');
       if (!host) {
         host = document.createElement('section');
@@ -4227,15 +4262,31 @@
           '<div class="collapse-title"><span class="num">包</span>包装：定价与报价分区' +
           '<span class="readonly-chip" id="packagingPanelChip">系统计算</span></div>' +
           '<i class="ti ti-chevron-down collapse-arrow"></i>' +
-        '</div><div class="collapse-content"></div>';
-      const content = host.querySelector('.collapse-content');
-      const rate = packagingMarginRate();
+        '</div><div class="collapse-content">' +
+          '<label for="packagingMarginInput">毛利率（%）</label> ' +
+          '<input id="packagingMarginInput" type="number" min="0" max="99.99" step="0.01"' +
+          ' value="' + (rate === null ? '' : String((rate * 100).toFixed(2))) + '"' +
+          ' style="width:90px;max-width:100%;margin:0 8px">' +
+          '<button class="btn btn-secondary" type="button" id="packagingRepriceBtn">按此毛利率重算</button>' +
+          '<div id="packagingQuoteContent"></div>' +
+        '</div>';
+      const reprice = document.getElementById('packagingRepriceBtn');
+      if (reprice) reprice.addEventListener('click', () => {
+        renderPackagingQuotePanel({ packaging_package: LAST_PACKAGING_PACKAGE });
+      });
+      const content = document.getElementById('packagingQuoteContent');
       const options = { base: AGENT_URL };
-      if (rate !== null) { options.pricing_mode = 'gross_margin'; options.gross_margin_rate = rate; }
+      if (rate === null) {
+        content.textContent = '请先输入明确的毛利率，再点“按此毛利率重算”；系统不会默认填入费率。';
+        return null;
+      }
+      options.pricing_mode = 'gross_margin';
+      options.gross_margin_rate = rate;
       try {
         const result = await window.PackagingQuotePanel.renderCard(snap, content, options);
         const quote = (result && result.quote) || {};
         LAST_PACKAGING_QUOTE = Object.keys(quote).length ? quote : null;
+        if (LAST_PACKAGING_QUOTE) PACKAGING_PANEL_KEY = key;
         const chip = document.getElementById('packagingPanelChip');
         if (chip) {
           chip.textContent = quote.draft

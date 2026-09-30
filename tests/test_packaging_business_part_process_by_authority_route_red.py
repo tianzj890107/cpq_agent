@@ -555,9 +555,12 @@ class FGuardrails(unittest.TestCase):
         # 一次（4 → 5）：多出来的那一条只许是按图纸补推导那一条路由。视觉复核另加人工确认
         # 候选的 geometry-binding PUT，计数精确重指为 6，不是无约束放宽。
         src = _source(APP_JS)
-        self.assertEqual(6, src.count("packaging-business-parts/"),
-                         "新增的一条只能是人工确认候选的 geometry-binding 写接口")
+        # 图纸尺寸人工确认单列 size-confirm PUT，总数精确重指为 7。
+        self.assertEqual(8, src.count("packaging-business-parts/"),
+                         "新增入口只能是 geometry-binding、size-confirm 与 auto-bind-candidates")
         self.assertEqual(1, src.count("/geometry-binding"))
+        self.assertEqual(1, src.count("/size-confirm"))
+        self.assertEqual(1, src.count("/auto-bind-candidates"))
 
     def test_f5_business_cost_route_is_untouched(self):
         src = _source(MAIN_PY)

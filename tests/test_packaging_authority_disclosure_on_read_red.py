@@ -390,7 +390,9 @@ class EWiring(unittest.TestCase):
         source = self._source()
         start = source.find("function openPackagingBusinessPart")
         self.assertGreaterEqual(start, 0)
-        block = source[start:start + 3000]
+        # 候选自动归属增加了面板前置状态，断言覆盖整个函数体而不是固定字符窗口。
+        end = source.find("\nfunction ", start + 1)
+        block = source[start:end if end >= 0 else None]
         self.assertIn("部件图", block, "右栏要给「部件图」一行（Spec §C5）")
         self.assertIn("清单告警", block, "右栏要给「清单告警」一行（Spec §C5）")
         self.assertIn("packagingAuthorityDisclosureLines", block,

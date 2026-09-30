@@ -239,6 +239,16 @@ def price(package: dict, *, gross_margin_rate=None, markup_rate=None,
             "包装定价只接管 industry=packaging 的包", 400, "not_packaging")
     cost = pkg.get("cost") if isinstance(pkg.get("cost"), dict) else {}
     gaps = copy.deepcopy(list(pkg.get("gaps") or []))
+    # 材料金额明确为 0 却有正数局部费用时，不能从「没有逐条 gap」推成可发布。
+    # 不推断材料价，只加一条可审计的成本证据缺口；历史没有 material_total 字段的包
+    # 维持旧行为，避免把缺失字段默认为 0 后误判。
+    readiness = cost.get("readiness") if isinstance(cost.get("readiness"), dict) else {}
+    if (("material_total" in cost and (_num(cost.get("material_total")) or 0) <= 0)
+            or readiness.get("verdict") == "provisional"):
+        if not any(isinstance(row, dict) and row.get("code") == "material_cost_evidence_missing"
+                   for row in gaps):
+            gaps.append({"code": "material_cost_evidence_missing",
+                         "detail": "材料成本为零或成本仍属暂定，不能作为正式报价依据"})
     has_gaps_flag = bool(cost.get("has_gaps")) or bool(gaps)
     if has_gaps_flag and publish:
         raise PricingError("成本仍有缺口，只能出成本与草稿，不得生成正式报价单",

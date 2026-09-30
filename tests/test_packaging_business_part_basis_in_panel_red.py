@@ -379,8 +379,11 @@ class CTaskResultsCarryTheBasis(unittest.TestCase):
         # `## 480` 按 Spec `packaging-2-1-result-parts-and-shape-only-pane.md` §2.4b C6 把这条
         # 批次级冻结**重指**为 5：多出来的那一条是按图纸补推导（`…/packaging-business-parts/derive`）。
         # 视觉复核新增人工确认候选的 geometry-binding PUT，计数精确重指为 6。
-        self.assertEqual(6, _source(APP_JS).count("packaging-business-parts/"))
+        # 图纸尺寸人工确认单列 size-confirm PUT，冻结总数从 6 重指为 7。
+        self.assertEqual(8, _source(APP_JS).count("packaging-business-parts/"))
         self.assertEqual(1, _source(APP_JS).count("/geometry-binding"))
+        self.assertEqual(1, _source(APP_JS).count("/size-confirm"))
+        self.assertEqual(1, _source(APP_JS).count("/auto-bind-candidates"))
 
 
 if __name__ == "__main__":
