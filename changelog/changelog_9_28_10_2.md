@@ -106,3 +106,14 @@
 - 全图预览正方形且保留视口上限；当前看板不把所有待确认件叫结构补件、不要求参考表才能看CAD；清洗排模富文本并保存/审计零件关联，关联本身不推导用量。摘要读取最终业务件统计，模型预算降级留痕；需求创建探测后端转换能力，模型标签解释会话与视觉路由区别。
 - 验证：最终全仓6889项通过、28项跳过（574.295秒）；新增定向25项通过，其中补充的缓存命中重填表格测试单独复跑通过。成本、包装、后端路由/未定义名等107项复跑通过；JS语法、两张报价HTML内联脚本、Python编译与diff空白检查通过。首轮包装3157项通过；中途全仓回归因编辑窗口中的语法错误失败，已修复后重新完整回归，不将失败那轮算作通过。
 - 全部为本地实现，未改线上卡片；提交、推送与 34 部署记录见 `## 520`。没有硬编码样图件数/名称/金标尺寸，没有伪造价格、材料或费率；真实样图整件正确率、页面视觉和正式报价仍需部署后重新验收，不能用单测通过代替。
+
+## 520. `## 519` 的提交、双远端推送与 34 部署记录（10-1）
+
+- 提交 `62a1849`（`## 518-519 包装线上业务闭环、草稿试算与报价状态恢复`），入库 22 个文件：新增验收报告 `docs/reports/online-packaging-e2e-20260930.md`、Spec `packaging-online-business-closure.md` 与其 25 条红测；改动 `cpq_agent_server.py`（包装状态优先提示）、`cpq_tech_bridge.py`（包装产品行）、`main.py`、`cost_review.py`、`manufacturing_snapshot.py`、`workflow_projection.py`（`draft_only` 与草稿可用性）、`packaging_drawing_flow/steps.py`、`packaging_layout.py`、`packaging_part_visual_review.py`、6 个前端脚本、`drawing-flow.css`、两张报价页面与本 changelog。
+- 本批同时把 `## 518`/`## 519` 里“不提交、推送或部署”的旧口径改为指向本节，并给 Spec 末段补上部署记录指向，避免与事实不符。
+- 不入库的未跟踪项（与本次能力无关）：`拆分程序/`（独立拆分程序与酒盒拆分方法说明，仓库运行路径无引用）、`.~亿纬锂能DA梳理.xlsx`（Excel 锁文件）。
+- 提交前复跑（复核口径）：全仓 6890 项通过、28 项跳过；本 Spec 定向 25 项通过；`git diff --check`、Python 编译、6 个前端脚本 `node --check`、两张报价页内联脚本与 Spec 状态守卫均通过。
+- 双远端：GitLab 与 GitHub 的 `ytbz` 均回读为 `62a18499f31f763187eed107095e75f04a816c21`，与本地 HEAD 三方一致。
+- 34 部署：`bash scripts/deploy_34_bare.sh ytbz`，`557d5b3 → 62a1849`；`build.commit=62a18499f31f`、`branch=ytbz`、`deployed_at=2026-10-01T01:40:26+0800`，8010 pid=4030155，`/suite/health` 与 `/api/health` 均 200。
+- 部署后核对：两份真实样本主转换器（ODA 27.1）直出、`converter_role=primary`、`fallback_used=false`（酒盒 6711 实体/8 层，圆盘盒 3457 实体/32 层）；隔离端到端自检 `verdict=ok`（酒盒八步 8/8、零件 263 件、可算 13/可挤出 13；圆盘盒八步 8/8、零件 312 件、可算 92/可挤出 255；两条权威实样路线 confirmed）；隔离自检未写运行目录，项目数 75 → 75；8010 首页与两张报价页面，以及 `quick-quote-panel.js`/`app.js`/`cost-review.js`/`requirement-create.js`/`tech-task.js`/`tech-workbench.js`/`assembly-integration.js`/`drawing-flow.css` 均 200。
+- 能力声明不变：**DWG 编排能力完成，真实转换能力未验收**；门禁两项人工项（`converter_license`、`real_samples_e2e_passed`）未代签。本批“已实现”只指本地代码与定向测试通过，真实样图整件边界/尺寸准确率、线上页面视觉与 DA/费率完整性仍须另行实图验收，不能作为客户正式报价。
