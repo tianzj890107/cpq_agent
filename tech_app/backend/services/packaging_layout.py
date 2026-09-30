@@ -12,9 +12,24 @@ _SCHEME = re.compile(r"(?:内托)?方案\s*([1-9]\d*)")
 _PAIRED_NAME = re.compile(r"^(.*?)(内|左|上|前)、(外|右|下|后)(.+)$")
 
 
+def clean_cad_text(raw: Any) -> str:
+    text = str(raw or "").replace(r"\P", "\n").replace(r"\~", " ")
+    text = re.sub(r"\\[CcFfHhWwQqTtAa][^;]*;", "", text)
+    return re.sub(r"[{}]|\\[LlOoKk]", "", text).strip()
+
+
+def layout_record(entity_id: str, raw: str) -> dict:
+    text = clean_cad_text(raw)
+    n_up, sheet = _N_UP.search(text), _SHEET.search(text)
+    return {"entity_id": entity_id, "raw_text": raw, "text": text,
+            "n_up": int(n_up.group(1)) if n_up else None,
+            "sheet_mm": [float(sheet.group(1)), float(sheet.group(2))] if sheet else None,
+            "confirmed": False, "part_codes": [], "rule_id": "cad_layout_instruction_v1"}
+
+
 def is_layout_instruction(value: Any) -> bool:
     """The manufacturing instruction, not its location, decides the text role."""
-    return bool(_N_UP.search(str(value or "")))
+    return bool(_N_UP.search(clean_cad_text(value)))
 
 
 def extract_layout_rows(cad_ir: Any) -> list[dict]:
@@ -24,11 +39,13 @@ def extract_layout_rows(cad_ir: Any) -> list[dict]:
         if not isinstance(text, dict):
             continue
         raw = str(text.get("raw_text") or text.get("normalized_text") or "")
-        n_up = _N_UP.search(raw)
+        clean = clean_cad_text(raw)
+        n_up = _N_UP.search(clean)
         if not n_up:
             continue
-        sheet = _SHEET.search(raw)
+        sheet = _SHEET.search(clean)
         rows.append({
+            **layout_record(str(text.get("entity_id") or ""), raw),
             "entity_id": str(text.get("entity_id") or ""),
             "raw_text": raw,
             "position": list(text.get("position") or []),
@@ -98,4 +115,24 @@ def set_layout_confirmation(doc: Any, entity_id: str, confirmed: bool) -> dict:
     if confirmed and (not target.get("n_up") or not target.get("sheet_mm")):
         raise ValueError("layout_evidence_incomplete")
     target["confirmed"] = bool(confirmed)
+    return record
+
+
+def set_layout_assignment(doc: Any, entity_id: str, part_codes: list, *, actor: str) -> dict:
+    """Attach an observed layout to real business parts, without deriving consumption."""
+    record = copy.deepcopy(doc) if isinstance(doc, dict) else {}
+    known = {row.get("business_part_code") for row in record.get("business_parts") or []
+             if isinstance(row, dict)}
+    codes = list(dict.fromkeys(part_codes))
+    if not actor or any(code not in known for code in codes):
+        raise ValueError("layout_assignment_invalid")
+    target = next((row for row in record.get("layout_rows") or []
+                   if row.get("entity_id") == entity_id), None)
+    if target is None:
+        raise ValueError("layout_entity_not_found")
+    target["part_codes"] = codes
+    target["assignment_actor"] = actor
+    target["assignment_source"] = "user_selection"
+    # Association is not approval of sheet size, yield, usage or price.
+    target["confirmed"] = False
     return record

@@ -20,6 +20,7 @@
 """
 from __future__ import annotations
 
+import math
 from typing import Callable, List, Optional, Tuple
 
 from ..models.cost_review import CostReview, CostReviewWaiver, merge_totals
@@ -70,14 +71,14 @@ def ir_from_packaging_parts(doc) -> Optional[DesignIR]:
     （2.1 那一趟解析拆出来的，唯一事实源）。不认这一份，这个项目的零件在这个口径下
     就一件都看不见 —— 判成「还没有可测算的零件」，而 2.1 明明有 263 件。
     """
-    rows = doc.get("parts") if isinstance(doc, dict) else None
+    rows = (doc.get("business_parts") if "business_parts" in doc else doc.get("parts")) if isinstance(doc, dict) else None
     if not isinstance(rows, list):
         return None
     parts: List[Part] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
-        part_id = str(row.get("part_code") or row.get("part_id") or "").strip()
+        part_id = str(row.get("business_part_code") or row.get("part_code") or row.get("part_id") or "").strip()
         if not part_id:
             continue
         parts.append(Part(part_id=part_id, name=str(row.get("name") or ""), quantity=1))
@@ -92,6 +93,11 @@ def parts_source(project_id: str, ir: Optional[DesignIR]) -> Optional[DesignIR]:
 
     两条来源在**同一个口径**（本模块的 summarize）里合并，不另算一份。
     """
+    requirement = store.load_requirement(project_id) or {}
+    if (requirement.get("data") or {}).get("industry") == "packaging":
+        from . import packaging_parts
+        # No fallback to geometry fragments, including empty/failed business catalogs.
+        return ir_from_packaging_parts(packaging_parts.load_business_parts(project_id))
     if ir is not None and ir.parts:
         return ir
     try:
@@ -106,15 +112,44 @@ def parts_source(project_id: str, ir: Optional[DesignIR]) -> Optional[DesignIR]:
 def _part_rows(project_id: str, ir: Optional[DesignIR]) -> List[dict]:
     """逐个零件：算没算过、单件多少、单台用量多少、小计多少。"""
     rows: List[dict] = []
+    requirement = store.load_requirement(project_id) or {}
+    packaging = (requirement.get("data") or {}).get("industry") == "packaging"
+    business_doc = {}
+    if packaging:
+        from . import packaging_parts
+        business_doc = packaging_parts.load_business_parts(project_id) or {}
     for part in (ir.parts if ir else []):
-        saved = store.load_cost(project_id, part.part_id)
-        breakdown = cost_model.breakdown(saved) if saved else {}
+        if packaging:
+            conclusion = packaging_parts.load_part_cost(project_id, part.part_id) or {}
+            current_hash = business_doc.get("business_parts_hash")
+            saved = (conclusion.get("analysis") if current_hash and
+                     conclusion.get("business_parts_hash") == current_hash else None)
+        else:
+            saved = store.load_cost(project_id, part.part_id)
+        if packaging:
+            amounts = []
+            for item in (saved or {}).get("items") or []:
+                try:
+                    amount = float(item["amount"])
+                    if not math.isfinite(amount) or amount < 0:
+                        raise ValueError("invalid material cost")
+                    amounts.append(amount)
+                except (KeyError, TypeError, ValueError):
+                    amounts = []
+                    saved = None
+                    break
+            total = sum(amounts)
+            breakdown = ({"material": total, "labor": 0, "overhead": 0,
+                          "machining": 0, "total": total} if amounts else {})
+        else:
+            breakdown = cost_model.breakdown(saved) if saved else {}
         quantity = max(1, int(part.quantity or 1))
         unit = float(breakdown.get("total") or 0)
         rows.append({
             "id": part.part_id,
             "name": part.name or "",
             "kind": "part",
+            "cost_scope": "material_only" if packaging else "part",
             "quantity": quantity,
             "has_cost": bool(saved and (saved.get("items") or [])),
             "item_count": len((saved or {}).get("items") or []),
@@ -166,6 +201,24 @@ def summarize(project_id: str, ir: Optional[DesignIR], plan) -> dict:
     # 但 has_cost 是真。零元的行要单独点名，不能让它一路送到报价。
     zero = [row["id"] for row in parts + [assembly]
             if row["has_cost"] and row["unit_cost"] <= 0]
+    requirement = store.load_requirement(project_id) or {}
+    packaging_result = None
+    if (requirement.get("data") or {}).get("industry") == "packaging":
+        from . import packaging_cost
+        packaging_result = packaging_cost.load_cost(project_id) or {}
+        built = bool(packaging_result.get("built"))
+        total = float(packaging_result.get("total_cost") or 0)
+        assembly = dict(assembly, name="包装整单成本", has_cost=built,
+                        unit_cost=total, subtotal=total,
+                        breakdown={"material": float(packaging_result.get("material_total") or 0),
+                                   "labor": float(packaging_result.get("labor_total") or 0),
+                                   "machining": float(packaging_result.get("process_total") or 0),
+                                   "overhead": sum(float(packaging_result.get(key) or 0) for key in
+                                       ("tooling_total", "packaging_total", "freight_total", "other_total", "loss_amount")),
+                                   "total": total} if built else {},
+                        summary="包装确定性公式整单测算；不叠加零件材料费，不套通用成本系数")
+        zero = [row["id"] for row in parts + [assembly]
+                if row["has_cost"] and row["unit_cost"] <= 0]
     return {
         "parts": parts,
         "assembly": assembly,
@@ -179,7 +232,10 @@ def summarize(project_id: str, ir: Optional[DesignIR], plan) -> dict:
             "zero": zero,
             "assembly_costed": assembly["has_cost"],
         },
-        "ready": bool(parts) and not missing and assembly["has_cost"] and not zero,
+        "ready": bool(parts) and not missing and assembly["has_cost"] and not zero
+                 and not bool((packaging_result or {}).get("has_gaps"))
+                 and not bool((packaging_result or {}).get("stale")),
+        "packaging_cost": packaging_result,
     }
 
 
@@ -197,6 +253,15 @@ def confirm_gaps(project_id: str, ir: Optional[DesignIR], plan,
     counts = data["counts"]
     codes: List[str] = []
     fields: List[str] = []
+    packaging = data.get("packaging_cost") or {}
+    if packaging.get("stale"):
+        codes.append("packaging:stale")
+        fields.append("包装成本依据已变化，需要重新测算")
+    for index, gap in enumerate(packaging.get("gaps") or []):
+        if not isinstance(gap, dict):
+            continue
+        codes.append("packaging:gap:%s:%s" % (gap.get("code") or "unknown", index))
+        fields.append(str(gap.get("message") or gap.get("code") or "包装成本证据不完整"))
     for part_id in counts["missing"]:
         codes.append(f"part:{part_id}:missing")
         fields.append(f"零件 {part_id} 没算成本")

@@ -1165,6 +1165,15 @@ def packaging_snapshot(result: dict) -> dict:
         "是否含缺口": bool(cost.get("has_gaps")),
     }
     return {
+        "s2_products": {"kind": "table", "title": "包装产品信息", "数据": [{
+            "产品系列": "包装", "产品型号": box_code, "成品编码": box_code,
+            "成品描述": requirement.get("packaging_product_name") or requirement.get("title") or "包装产品",
+            "数量": requirement.get("quote_quantity") or cost.get("quote_quantity"),
+            "币种": requirement.get("currency") or cost.get("currency") or "",
+            "基础成本": cost.get("total_cost"), "是否成本测算": "是",
+            "成本结果版本": source.get("result_version") or package.get("result_version") or "",
+            "成本有缺口": bool(cost.get("has_gaps") or gaps),
+        }]},
         "s2_packaging": {"kind": "packaging", "title": "包装：盒型与参数",
                          "数据": [packaging_row]},
         "s2_packaging_cost": {"kind": "packaging", "title": "包装：成本构成",

@@ -494,6 +494,7 @@ function crRenderParts() {
   rows.forEach(row => {
     const flag = !row.has_cost ? ' ai-missing' : row.unit_cost <= 0 ? ' ai-missing' : '';
     html += `<tr class="${flag.trim()}"><td><code>${esc(row.id)}</code> ${esc(row.name)}`
+      + (row.cost_scope === 'material_only' ? '<small class="ai-hint">仅材料开料费，非完整零件成本</small>' : '')
       + (row.open_questions ? `<small class="ai-hint">${row.open_questions} 项待确认</small>` : '')
       + `</td><td>×${row.quantity}</td>`
       + `<td class="cr-breakdown">${crBreakdownRow(row.breakdown)}</td>`
@@ -704,6 +705,15 @@ function crRender() {
     button.classList.toggle('active', button.dataset.crTab === crTab);
   });
   $cr('crBody').innerHTML = renderers[crTab]();
+  const packagingCost = crData?.packaging_cost;
+  if (packagingCost && (packagingCost.has_gaps || packagingCost.stale)) {
+    const notice = document.createElement('div');
+    notice.className = 'inline-warn';
+    notice.textContent = packagingCost.stale
+      ? '包装成本依据已变化，需要重新测算；当前金额不能作为正式报价。'
+      : `包装成本有 ${(packagingCost.gaps || []).length} 项缺口，当前仅为部分成本草稿，不能作为正式报价。`;
+    $cr('crBody').prepend(notice);
+  }
   crRenderActions();
   crDisableActions();
   crRenderOps();
@@ -967,7 +977,10 @@ async function crRunPart(partId, quantity) {
     taskKey = String(submitted.task_id || taskKey);
     crPublishTask('task-progress', { taskId: taskKey, label: label, status: 'running',
                                      progress: `${partId} 已提交，正在测算…` });
-    crData = await crPollTask(taskKey, card, label);
+    const result = await crPollTask(taskKey, card, label);
+    // Business-part jobs return a single conclusion, not the whole review payload.
+    // Re-read the version-checked aggregate rather than replacing the board with it.
+    crData = Array.isArray(result?.parts) ? result : await api(crUrl());
     card.done(true);
     crStatus(`${partId} 已测算`);
     crPublishTask('task-completed', { taskId: taskKey, label: label, status: 'succeeded' });

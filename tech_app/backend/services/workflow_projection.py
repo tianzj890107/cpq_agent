@@ -112,6 +112,7 @@ _LOADERS = (
     # `packaging_parts.load_parts` 是同一趟解析拆出来的零件文档（唯一事实源）。
     ("packaging_cad_ir", lambda pid: packaging_cad_ir.load_ir(pid)),
     ("packaging_parts", lambda pid: packaging_parts.load_parts(pid)),
+    ("packaging_business_parts", lambda pid: packaging_parts.load_business_parts(pid)),
 )
 
 
@@ -383,6 +384,11 @@ def _rows_for(project_id: str, facts: Dict[str, Any], role: str) -> List[dict]:
         status = verdict.get("status") or "not_started"
         missing = list(verdict.get("missing") or [])
         blockers = list(verdict.get("blockers") or [])
+        requirement = facts.get("requirement") or {}
+        packaging_draft = ((requirement.get("data") or {}).get("industry") == "packaging"
+                           and requirement.get("status") == "draft")
+        draft_analysis = (packaging_draft and bool(facts.get("packaging_cad_ir"))
+                          and bool((facts.get("packaging_business_parts") or {}).get("business_parts")))
 
         # 前置步骤（本子步骤之前的全部子步骤）没完成 → 逐条说清缺哪一步。
         # 已完成的子步骤**跨过了**这道门（`actionable = completed || 前置步骤已完成`）：
@@ -390,6 +396,18 @@ def _rows_for(project_id: str, facts: Dict[str, Any], role: str) -> List[dict]:
         # 「请先完成 1.1」（Spec `tech-projection-step-state-must-agree-with-its-reasons.md` §2.1）。
         if not completed:
             for prior in keys[:index]:
+                # Draft analysis is available without impersonating formal sign-off.
+                # Submission/review/publish endpoints retain their own approval gates.
+                if packaging_draft and key == "2.1" and prior == "1.1":
+                    continue
+                if (packaging_draft and key in ("3.1", "3.2", "3.3", "4.1", "4.2", "4.3")
+                        and facts.get("packaging_cad_ir") and prior in ("1.1", "1.2", "1.3")):
+                    continue
+                if (draft_analysis and key in ("4.1", "4.2", "4.3")
+                        and prior in ("2.1", "3.1", "3.2", "3.3", "4.1", "4.2")):
+                    # Availability of an internal calculation is not sign-off.
+                    # The actual engine still requires valid BOM/route inputs.
+                    continue
                 if not done_by_key.get(prior):
                     prior_spec = next(row for row in stages_table.STAGES if row["sub"] == prior)
                     blockers.append(f"请先完成 {prior} {prior_spec['sub_title']}")
@@ -421,6 +439,7 @@ def _rows_for(project_id: str, facts: Dict[str, Any], role: str) -> List[dict]:
             "viewable": True,
             "actionable": bool(actionable),
             "completed": completed,
+            "draft_only": bool(packaging_draft and key in ("2.1", "3.1", "3.2", "3.3", "4.1", "4.2", "4.3")),
             "stale": bool(stale and completed),
             "blocked_reasons": blockers,
             "missing_requirements": missing,

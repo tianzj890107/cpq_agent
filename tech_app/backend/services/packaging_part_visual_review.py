@@ -1200,6 +1200,11 @@ def review_matches(cad_ir: Any, rows: Any, anchors: Any, regions: Any,
     for _risk, _code, binding, row, point, choices in work:
         if used >= max_calls:
             _demote(binding, choices, "review_needed", "model_review_budget_exhausted")
+            # Budget exhaustion is not adverse CAD evidence. Keep the candidates
+            # available to the existing deterministic, entity-validated auto binder.
+            binding["model_review"] = {"status": "skipped", "reason": "budget_exhausted",
+                                       "fallback": "validated_cad_candidates",
+                                       "calls_used": used, "call_limit": max_calls}
             continue
         preview = render_candidate_preview(cad_ir, point, choices, str(row.get("name") or ""))
         if preview is None:

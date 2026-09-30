@@ -1916,7 +1916,7 @@ function packagingCadPlanEmptyText(doc) {
 }
 // 业务部件面板的轮廓说明（Spec `packaging-business-part-plan-click-and-bound-outline.md` §C2）：
 // 画的是**绑定分量**的形状，业务尺寸仍以对照资料为准 —— 两者不许混为一谈。
-const PACKAGING_BOUND_OUTLINE_NOTE = "这是绑定分量的形状；业务尺寸以对照资料为准。";
+const PACKAGING_BOUND_OUTLINE_NOTE = "这是已归属的 CAD 图元；尺寸须以可信图纸标注或已留痕确认的尺寸为准。";
 const PACKAGING_CAD_LAYER_COLORS = {
   cut: "#dc2626", half_cut: "#1f6feb", crease: "#16a34a", v_groove: "#ec4899",
   glue_flap: "#f59e0b", print: "#57606a", bleed: "#eab308", frame: "#eab308",
@@ -3540,11 +3540,15 @@ function packagingBusinessPartsSourceLabel(doc) {
    三档**怎么判**只在解析器里（`packaging_business_part_resolver.TRUTH_STATES`）：页面只照 payload 说，
    不猜、也绝不把"没给档位"渲染成任何一档。两条都是纯函数（体内无 DOM / 全局 / 网络调用）。
    `observed`（图纸上识别到的）按 `## 495` §2.3 不再出标签 —— 识到是常态，写出来只是噪声。 */
-function packagingBusinessPartTruthLabel(truthState) {
+function packagingBusinessPartTruthLabel(truthState, row) {
   const state = (truthState === null || truthState === undefined) ? "" : String(truthState).trim();
   if (state === "observed") return "";
   if (state === "inferred") return "规则纠名（推断）";
-  if (state === "pending_confirmation") return "结构规则补件（待确认）";
+  if (state === "pending_confirmation") {
+    // The old one-argument label describes structural additions only. On the
+    // current board a pending state alone cannot prove a structural-rule source.
+    return row ? "证据待确认" : "结构规则补件（待确认）";
+  }
   return "";
 }
 
@@ -3703,7 +3707,7 @@ function renderPackagingBusinessTree(tree, rows) {
     // 事实档标签（Spec `packaging-business-truth-state-disclosure.md` §2.6）：逐值由 payload 的
     // `truth_state` 决定；空串 / 缺键的行**不**加属性、也不加这一行。
     const truthState = String(row.truth_state || "").trim();
-    const truthLabel = packagingBusinessPartTruthLabel(truthState);
+    const truthLabel = packagingBusinessPartTruthLabel(truthState, row);
     // 尺寸 / 材料 / 状态各一行（Spec §2.2/§2.3）：状态走后纯函数，`bound` 不出字就不渲染这一行。
     const bindingText = packagingBindingStatusText(status);
     const attributionText = packagingBusinessPartAttributionText(binding);
@@ -3855,7 +3859,7 @@ function openPackagingUnassignedCandidate(candidateId) {
 // 闭合表逐字照抄服务端 `main.py PACKAGING_THUMBNAIL_REASON_COPY` 里件级会出现的三个码；
 // **表外码照实暴露**（`部件图读不到（<码>）`），不许再断言"没入库 / 重新导入即可" ——
 // 宽泛兜底会把"字节被清理"赖到"没导入"头上，而导入不是那件事的下一步。纯函数，不碰 DOM / fetch。
-function packagingBusinessThumbnailReasonText(reason) {
+function packagingBusinessThumbnailReasonText(reason, cadAvailable) {
   const code = (reason === null || reason === undefined) ? "" : String(reason).trim();
   if (!code) return "";
   if (code === "image_bytes_unreadable") return "工作簿里的部件图读不出来（导入时就没读到字节）";
@@ -3864,6 +3868,7 @@ function packagingBusinessThumbnailReasonText(reason) {
   // （Spec `packaging-part-thumbnail-absence-must-name-its-source.md` §2.2，
   // 与 `main.py PACKAGING_THUMBNAIL_REASON_COPY` 同码同句、逐字）。
   if (code === "thumbnail_source_has_none") {
+    if (cadAvailable) return "这一版清单来自图纸推导，没有参考图片；CAD 平面图仍可查看已归属图元，无需导入对照表。";
     return "这一版清单来自图纸推导，图纸本身不带部件图；要按行看部件图，需先导入对照表。";
   }
   if (code === "thumbnail_not_saved") {
@@ -4164,7 +4169,8 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
         };
       }
     } else {
-      const copy = packagingBusinessThumbnailReasonText(String(thumb.reason || ""));
+      const copy = packagingBusinessThumbnailReasonText(String(thumb.reason || ""),
+        Boolean(currentPackagingBusinessParts?.derived_from_drawing));
       thumbnailHost.innerHTML = `<div class="packaging-part-note">${esc(copy)}</div>`;
       thumbnailHost.hidden = false;
     }
@@ -5629,6 +5635,9 @@ function setRightPane(which, title) {
   model.hidden = showAnalysis;
   if (!label) return;
   if (showAnalysis) modelTitle = label.textContent;   // 先存，再改
+  if (!showAnalysis && currentPackagingBusinessParts && /3D/.test(modelTitle)) {
+    modelTitle = "CAD 平面图 · 选择零件后查看";
+  }
   label.textContent = showAnalysis ? title : modelTitle;
 }
 

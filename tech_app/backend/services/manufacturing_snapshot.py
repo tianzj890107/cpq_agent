@@ -170,6 +170,13 @@ def packaging_snapshot(project_id: str, requirement_no: str = "",
                        scenario: Optional[str] = None) -> dict:
     """包装链路的一份快照：四份文档 + 每份的指纹 + 缺口（不抛错、不猜来源）。"""
     parts_doc = packaging_parts_doc(project_id)
+    from . import packaging_parts
+    business_doc = packaging_parts.load_business_parts(project_id) or {}
+    if "business_parts" in business_doc:
+        parts_doc = dict(business_doc)
+        parts_doc["parts"] = [dict(row, part_id=row.get("business_part_code"))
+                              for row in business_doc.get("business_parts") or []
+                              if isinstance(row, dict)]
     bom = packaging_bom_doc(project_id, requirement_no)
     route = packaging_route_doc(project_id, requirement_no)
     cost = packaging_cost_doc(project_id, requirement_no, scenario)

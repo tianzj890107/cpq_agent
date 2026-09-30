@@ -446,6 +446,12 @@ def _resolve_business_parts(ctx: Dict[str, Any], ir: Dict[str, Any], geometry_pa
                                       "message": "业务部件文档落库失败（%s）" % type(exc).__name__}]
             return {"detail": detail, "document": None}
     if isinstance(document, dict):
+        summarize_business = getattr(parts_module, "summarize_business_parts", None)
+        final_summary = summarize_business(document) if callable(summarize_business) else {}
+        stats = final_summary.get("stats") or document.get("stats") or {}
+        detail.update({key: stats[key] for key in
+                       ("business_part_total", "bound_total", "partial_total",
+                        "ambiguous_total", "unbound_total") if key in stats})
         detail["business_parts_id"] = str(document.get("business_parts_id") or "")
         detail["business_parts_hash"] = str(document.get("business_parts_hash") or "")
     return {"detail": detail, "document": document if isinstance(document, dict) else None}

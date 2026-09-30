@@ -289,7 +289,7 @@
 /* 预览里的 DWG 图复用同一套缩放视口（Spec `packaging-2-1-part-figure-fidelity.md` §C1）：
    视口自己给高度，svg 交给视口撑满（否则 `.file-preview-drawing .packaging-cad-plan-svg`
    的 max-height 会把图裁在视口中间）。 */
-.file-preview-drawing .packaging-part-shape-viewport { height: min(60vh, 460px); aspect-ratio: auto; }
+.file-preview-drawing .packaging-part-shape-viewport { height: auto; aspect-ratio: 1 / 1; max-width: 640px; max-height: 640px; }
 .file-preview-drawing .packaging-part-shape-viewport svg { max-height: none; }
 
 .packaging-cad-plan-entity.is-dimmed {

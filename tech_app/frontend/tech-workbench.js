@@ -1018,6 +1018,7 @@
         : null;
       const label = techModelLabel(settings);
       node.textContent = label === '未配置模型' ? label : `· ${label}`;
+      node.title = '当前全局/账户会话模型；CAD 视觉辅助可能使用视觉模型路由，实际调用以任务记录为准。';
     } catch (error) {
       node.textContent = '· 未配置模型';
     }

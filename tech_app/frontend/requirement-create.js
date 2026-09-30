@@ -10,6 +10,24 @@ function rcSubLabel(no){var a=(typeof window!=='undefined'&&window.CpqWorkflowSt
 window.CPQ_DWG_CAPABILITY_NOTE = window.CPQ_DWG_CAPABILITY_NOTE
   || '可上传，DWG 需 CAD 转换服务解析（当前环境未安装）';
 var rcDwgNote = window.CPQ_DWG_CAPABILITY_NOTE;
+// Capability is not a licence/quality sign-off. A failed probe means unknown, not absent.
+(async function refreshRequirementDwgCapability() {
+  try {
+    const response = await fetch('/api/capabilities/cad-converter');
+    if (!response.ok) return;
+    const cap = await response.json();
+    const old = rcDwgNote;
+    rcDwgNote = cap.available
+      ? `可上传，DWG 由 CAD 转换服务解析（${[cap.adapter_name, cap.converter_version].filter(Boolean).join(' ')}）；许可与实际转换质量需另行验收。`
+      : cap.stable_error_code === 'DWG_CONVERTER_BINARY_UNUSABLE'
+        ? '可上传，DWG 转换服务已配置但当前不可用，请检查转换器。'
+        : '可上传，当前环境未提供可用 DWG 转换服务。';
+    window.CPQ_DWG_CAPABILITY_NOTE = rcDwgNote;
+    document.querySelectorAll('.hint').forEach(node => {
+      if (node.textContent === old) node.textContent = rcDwgNote;
+    });
+  } catch (_) { /* unavailable probe does not prove the converter is uninstalled */ }
+})();
 const rcPid = TechProjectContext.bind().project;
 let rcProjectId = rcPid, rcRequirement = null, rcMeta = null, rcUser = {}, rcFiles = {}, rcLastExtractTaskId = '';
 

@@ -1926,6 +1926,13 @@
       return out;
     }
     function cardHtml(mode, s) {
+      if (mode === 'quote') {
+        const card = wfCardOf(s.id);
+        if (card) s = Object.assign({}, s, {
+          title: card.project_name || card.title || s.title,
+          customer: card.customer || s.customer,
+        });
+      }
       const st = techCardStage(s) || statusOf(mode, s);
       const info = mode === 'quote'
         ? '客户名称：<span>' + escH(s.customer || '—') + '</span>'

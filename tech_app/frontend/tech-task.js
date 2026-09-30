@@ -97,6 +97,9 @@
     const picked = document.getElementById('ttIndustry');
     const codes = TT_INDUSTRIES;
     if (picked && codes.includes(picked.value)) return picked.value;
+    const source = (task && task.payload) || {};
+    const sourceIndustry = source.industry || (source.quote || {}).industry;
+    if (codes.includes(sourceIndustry)) return sourceIndustry;
     let saved = '';
     try { saved = localStorage.getItem(TT_INDUSTRY_KEY) || ''; } catch (error) { saved = ''; }
     return codes.includes(saved) ? saved : TT_DEFAULT_INDUSTRY;
@@ -283,7 +286,8 @@
   /** 需求单里写清"这条技术工艺是哪张报价任务带来的"，1.1 之后每一步都能追回去。 */
   async function linkProject(projectId, description, filename, industry) {
     const payload = task.payload || {};
-    const title = (task.title || filename.replace(/\.[^.]+$/, '') || '新增工艺需求').slice(0, 80);
+    const title = (payload.project_name || (payload.quote || {}).title || task.title
+      || filename.replace(/\.[^.]+$/, '') || '新增工艺需求').slice(0, 80);
     const doc = await api(`/api/projects/${encodeURIComponent(projectId)}/requirement`)
       .then(d => d.requirement).catch(() => null);
     const data = Object.assign({}, (doc && doc.data) || {}, {
@@ -297,7 +301,8 @@
       // 第 3 批：报价实例号是回传时认回原报价卡片的**主**线索。任务载荷里有就直接用
       // （quote 段兜底），没有就空串 —— 不猜、不编。
       business_case_id: payload.business_case_id || (payload.quote || {}).business_case_id || '',
-      customer_name: task.customer || (doc && doc.data && doc.data.customer_name) || '',
+      customer_name: payload.customer || (payload.quote || {}).customer || task.customer
+        || (doc && doc.data && doc.data.customer_name) || '',
       // industry = 实际生效的；industry_selection = 人选的。与首页建单写的是同一对键。
       industry, industry_selection: industry,
     });

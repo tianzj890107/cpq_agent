@@ -3761,10 +3761,14 @@ def update_cost_review(project_id: str, body: CostReviewBody,
 
 
 @app.post("/api/projects/{project_id}/cost-review/parts/{part_id}")
-def run_cost_review_part(project_id: str, part_id: str, quantity: int = 1,
+async def run_cost_review_part(project_id: str, part_id: str, quantity: int = 1,
                          user: dict = Depends(current_user)):
     """算一个零件的成本（异步任务）。不联网。"""
     _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
+    requirement = store.load_requirement(project_id) or {}
+    if (requirement.get("data") or {}).get("industry") == "packaging":
+        return await packaging_business_part_cost(
+            project_id, part_id, quantity=quantity, note="", attachments=[], user=user)
     ir, plan, review = _cost_review_ctx(project_id)
     if ir is None:
         raise HTTPException(400, "请先完成 2.1 图纸解析：成本要按零件清单逐件算")
@@ -3785,6 +3789,14 @@ def run_cost_review_part(project_id: str, part_id: str, quantity: int = 1,
 def run_cost_review_assembly(project_id: str, user: dict = Depends(current_user)):
     """算整机（组装）成本（异步任务）。不联网。"""
     _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
+    requirement = store.load_requirement(project_id) or {}
+    if (requirement.get("data") or {}).get("industry") == "packaging":
+        _workflow_project(project_id)
+        def packaging_job():
+            tasks.report_progress("按包装 BOM、工艺路线和已保存排模证据测算整单成本")
+            packaging_cost.build_cost(project_id, actor=user)
+            return _cost_review_payload(project_id)
+        return {"task_id": tasks.submit(project_id, "cost_review_assembly", packaging_job)}
     ir, plan, review = _cost_review_ctx(project_id)
     if plan.process is None:
         raise HTTPException(400, "请先由工艺经理完成 2.2 组装工艺：组装成本要按它来算")
@@ -7656,12 +7668,19 @@ def confirm_packaging_layout(pid: str, entity_id: str, body: dict = Body(...),
         raise HTTPException(409, "packaging_business_parts_missing")
     from .services import packaging_layout
     try:
+        if "part_codes" in body:
+            if not isinstance(body["part_codes"], list) or any(
+                    not isinstance(code, str) for code in body["part_codes"]):
+                raise ValueError("layout_part_codes_must_be_strings")
+            doc = packaging_layout.set_layout_assignment(
+                doc, entity_id, body["part_codes"], actor=str(user.get("username") or ""))
         updated = packaging_layout.set_layout_confirmation(doc, entity_id, body["confirmed"])
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     saved = packaging_parts.save_business_parts(pid, updated)
     store.audit(pid, "workflow:packaging_layout_confirmation", {
         "entity_id": entity_id, "confirmed": body["confirmed"],
+        "part_codes": list(body.get("part_codes") or []),
         "business_parts_id": saved.get("business_parts_id"),
         "by": str(user.get("username") or ""),
     })
@@ -9220,7 +9239,7 @@ async def packaging_business_part_cost(
 
     没有几何的件也走得通 —— 尺寸只认清单尺寸；缺尺寸/克重一律 409 并说清缺什么。
     """
-    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
+    _require(user, packaging_cost.COST_WRITE_ROLES, "需要财务经理、工艺经理、工艺技术总监或管理员权限")
     _workflow_project(pid)
     loaded = _packaging_business_part_row(pid, code)
     doc = loaded["doc"]
