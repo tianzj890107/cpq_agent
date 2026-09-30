@@ -80,3 +80,14 @@
 - 未确认排模不进正式成本；已确认但缺纸张规格、模数或件与排版关系时不推算材料用量；不从图纸或大模型编造材料单价。模型只能建议件名与片段归属，不能产生 CAD ID 或确认尺寸。
 - 提交前复跑：全仓 6865 项通过、28 项跳过；Python/JS 语法、`git diff --check` 与 Spec 状态守卫均通过。提交、推送与 34 部署记录见 `## 517`。
 
+
+## 517. `## 516` 的提交、双远端推送与 34 部署记录（9-30）
+
+- 提交 `557d5b3`（`## 516 圆盘盒双方案分图、排版排模独立记录与多片段业务件`），入库 11 个文件：新增 `packaging_layout.py`、`split_round_box_schemes.py`（离线分图工具）、本批 Spec 与红测；改动 `main.py`（排模确认/撤销接口与 409 口径）、`packaging_business_part_resolver.py`（strict_schemes 与排模文字排除）、`packaging_drawing_flow/steps.py`、`packaging_parts.py`（`cad_fragments`/`layout_rows`/`scheme_labels`）、`tech-workbench.js`（包装第三阶段页签）与 `assembly-integration.js`，以及本 changelog。
+- 同时给新 Spec 补了状态行（`状态：Spec + 红测（已实现）` + 点名的红测），使 `tests/test_spec_status_truth_red.py` 的全仓守卫覆盖它。
+- 不入库的未跟踪项（与本次能力无关）：`拆分程序/`（独立拆分程序与酒盒拆分方法说明，仓库运行路径无引用）、`.~亿纬锂能DA梳理.xlsx`（Excel 锁文件）。
+- 提交前复跑：全仓 6865 项通过、28 项跳过；`git diff --check`、Python 编译、`node --check`（`assembly-integration.js`/`tech-workbench.js`）与 Spec 状态守卫均通过。
+- 双远端：GitLab 与 GitHub 的 `ytbz` 均回读为 `557d5b346855ccc0bf1fbd2e4cf5f3295bf7dcf8`，与本地 HEAD 三方一致。
+- 34 部署：`bash scripts/deploy_34_bare.sh ytbz`，`df9d3f0 → 557d5b3`；`build.commit=557d5b346855`、`branch=ytbz`、`deployed_at=2026-09-30T14:02:56+0800`，8010 pid=1380864，`/suite/health` 与 `/api/health` 均 200。
+- 部署后核对：两份真实样本主转换器（ODA 27.1）直出、`converter_role=primary`、`fallback_used=false`（酒盒 6711 实体/8 层，圆盘盒 3457 实体/32 层）；隔离端到端自检 `verdict=ok`（酒盒八步 8/8、零件 263 件、可算 13/可挤出 13；圆盘盒八步 8/8、零件 312 件、可算 92/可挤出 255；两条权威实样路线 confirmed）；隔离自检未写运行目录，项目数 72 → 72；8010 首页与两张报价页面、`quick-quote-panel.js`/`app.js`/`tech-workbench.js`/`assembly-integration.js` 均 200。
+- 能力声明不变：**DWG 编排能力完成，真实转换能力未验收**；门禁两项人工项（`converter_license`、`real_samples_e2e_passed`）未代签。分图工具的切割坐标只适用该样图，不能当通用识图规则；未确认排模不进成本，本批仍不能作为客户正式报价。
