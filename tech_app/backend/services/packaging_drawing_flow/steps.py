@@ -386,11 +386,21 @@ def _resolve_business_parts(ctx: Dict[str, Any], ir: Dict[str, Any], geometry_pa
     try:
         # 附件 / 知识库一律不传：解析只吃 DWG（Spec §2.1 第 5 条）。
         outcome = resolve(
-            project_id, ir, geometry_parts, None, None, use_model=True,
+            project_id, ir, geometry_parts, None, None, use_model=True, strict_schemes=True,
             review_progress=lambda index, total, name: _emit(
                 project_id, str(ctx.get("run_id") or ""), "parts",
                 "业务部件视觉复核 %d/%d：%s" % (index, total, name)),
         )
+    except ValueError as exc:
+        if str(exc).startswith("multiple_packaging_schemes"):
+            detail["unavailable"] = [{
+                "code": "multiple_packaging_schemes",
+                "message": "图纸含多个互斥方案，请拆成独立 DWG 后分别建项目解析；本次不生成混合 BOM。",
+            }]
+            return {"detail": detail, "document": None}
+        detail["unavailable"] = [{"code": BUSINESS_PARTS_RESOLVE_FAILED,
+                                  "message": "业务部件解析失败（ValueError）"}]
+        return {"detail": detail, "document": None}
     except Exception as exc:                             # noqa: BLE001 - 解析器自己坏了也要留痕
         detail["unavailable"] = [{"code": BUSINESS_PARTS_RESOLVE_FAILED,
                                   "message": "业务部件解析失败（%s）" % type(exc).__name__}]

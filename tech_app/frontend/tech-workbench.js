@@ -77,6 +77,12 @@
       ],
     },
   };
+  // 仅包装行业改变第三阶段的业务显示；view key / 后端 stage id 保持不变。
+  const PACKAGING_PROCESS_TABS = [
+    { key: 'drawings', label: '方案与部件', no: '3.1', stage: 'process', view: 'drawings' },
+    { key: 'params', label: '排版排模', no: '3.2', stage: 'process', view: 'params' }, // 3.2 排版排模
+    { key: 'process', label: '后道加工与组装工艺', no: '3.3', stage: 'process', view: 'process' }, // 3.3 后道加工与组装工艺
+  ];
 
   function currentMajorStep() {
     return MAJOR_STEPS.find(major => major.stages.includes(state.stage)) || MAJOR_STEPS[0];
@@ -330,7 +336,9 @@
     if (!bar) return;
     const major = currentMajorStep();
     const substeps = CONTEXT_SUBSTEPS[major.no] || [];
-    const proxy = CHILD_TAB_PROXY[state.stage] || null;
+    const originalProxy = CHILD_TAB_PROXY[state.stage] || null;
+    const proxy = state.stage === 'process' && state.industry === 'packaging'
+      ? { tabs: PACKAGING_PROCESS_TABS } : originalProxy;
     const canNav = Boolean(state.project || state.stage === 'requirement-create');
     if (title) title.textContent = major.title || major.label;
     if (header) header.hidden = false;
@@ -408,9 +416,12 @@
     }
     const cached = projectNames.get(project);
     if (cached && cached.project && (!taskId || cached.task)) {
+      state.industry = cached.industry || '';
+      renderContextSubsteps();
       renderProjectLabel();
       return;
     }
+    state.industry = '';
     label.textContent = '加载项目…';
     label.title = `project=${project}` + (taskId ? ` task_id=${taskId}` : '');
     resolveProjectNames(project, taskId);
@@ -435,6 +446,10 @@
     const entry = projectNames.get(project) || {};
     const data = projectData || {};
     const requirement = (requirementData && requirementData.requirement) || {};
+    state.industry = String((requirement.data && requirement.data.industry)
+      || (data.meta && data.meta.industry) || '');
+    entry.industry = state.industry;
+    renderContextSubsteps();
     const projectName = String(
       (data.meta && data.meta.project_name)
       || (requirement && requirement.title)

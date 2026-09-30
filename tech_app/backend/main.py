@@ -7197,6 +7197,8 @@ def extract_requirement_packaging_parts(
 # 路径写成具名常量（与上面几批同口径）：路由真实存在、路径在源码里逐字可见。
 # --------------------------------------------------------------------------- #
 PACKAGING_BUSINESS_PARTS_READ_PATH = "/api/projects/{pid}/requirement/packaging-business-parts"
+PACKAGING_LAYOUT_CONFIRM_PATH = ("/api/projects/{pid}/requirement/"
+                                 "packaging-layout/{entity_id}/confirmation")
 PACKAGING_GEOMETRY_READ_PATH = "/api/projects/{pid}/requirement/packaging-geometry"
 PACKAGING_BINDING_WRITE_PATH = ("/api/projects/{pid}/requirement/packaging-business-parts/"
                                 "{part_code}/geometry-binding")
@@ -7424,6 +7426,7 @@ def _business_parts_body(pid: str, doc: Any = None) -> dict:
         geometry = packaging_parts.geometry_evidence_of(packaging_parts.load_parts(pid) or {})
         return {"built": False, "engine_version": packaging_parts.BUSINESS_ENGINE_VERSION,
                 "business_parts_id": "", "business_parts_hash": "", "business_parts": [],
+                "layout_rows": [], "scheme_labels": [],
                 "unassigned_candidates": [], "layout_frame_total": 0,
                 "geometry_evidence": geometry,
                 "gap": packaging_parts.business_parts_gap(geometry),
@@ -7446,6 +7449,8 @@ def _business_parts_body(pid: str, doc: Any = None) -> dict:
             "business_parts_id": record.get("business_parts_id") or "",
             "business_parts_hash": record.get("business_parts_hash") or "",
             "business_parts": list(record.get("business_parts") or []),
+            "layout_rows": list(record.get("layout_rows") or []),
+            "scheme_labels": list(record.get("scheme_labels") or []),
             "unassigned_candidates": [dict(item) for item in (record.get("unassigned_candidates") or [])
                                       if isinstance(item, dict)],
             "layout_frame_total": int(record.get("layout_frame_total") or 0),
@@ -7594,8 +7599,14 @@ def derive_packaging_business_parts(pid: str, user: dict = Depends(current_user)
     # 解析器是依赖缝（与一键解析同一条路）：从 services 里现取，不把它绑进本模块的导入图。
     from .services import packaging_business_part_resolver as business_resolver
     ir = cad_ir.load_ir(pid) or {}
-    outcome = business_resolver.resolve_business_parts(
-        pid, ir, geometry, None, None, use_model=True)
+    try:
+        outcome = business_resolver.resolve_business_parts(
+            pid, ir, geometry, None, None, use_model=True, strict_schemes=True)
+    except ValueError as exc:
+        if str(exc).startswith("multiple_packaging_schemes"):
+            raise HTTPException(409, {"code": "multiple_packaging_schemes",
+                                      "message": "图纸含多个互斥方案，请先拆成独立 DWG 分别解析。"}) from exc
+        raise
     outcome = outcome if isinstance(outcome, dict) else {}
     detail = outcome.get("detail") if isinstance(outcome.get("detail"), dict) else {}
     if str(detail.get("authority_source") or "") != "dwg":
@@ -7629,6 +7640,32 @@ def read_packaging_business_parts(pid: str, user: dict = Depends(current_user)):
     """业务部件清单（纯读）：页面 / BOM / 工艺 / 成本的**唯一**部件集合。"""
     _workflow_project(pid)
     return _business_parts_body(pid)
+
+
+@app.put(PACKAGING_LAYOUT_CONFIRM_PATH)
+def confirm_packaging_layout(pid: str, entity_id: str, body: dict = Body(...),
+                             user: dict = Depends(current_user)):
+    """Confirm/revoke only the CAD layout instruction; no cost is produced here."""
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES,
+             "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(pid)
+    if not isinstance(body.get("confirmed"), bool):
+        raise HTTPException(400, "confirmed_must_be_boolean")
+    doc = packaging_parts.load_business_parts(pid)
+    if not isinstance(doc, dict):
+        raise HTTPException(409, "packaging_business_parts_missing")
+    from .services import packaging_layout
+    try:
+        updated = packaging_layout.set_layout_confirmation(doc, entity_id, body["confirmed"])
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    saved = packaging_parts.save_business_parts(pid, updated)
+    store.audit(pid, "workflow:packaging_layout_confirmation", {
+        "entity_id": entity_id, "confirmed": body["confirmed"],
+        "business_parts_id": saved.get("business_parts_id"),
+        "by": str(user.get("username") or ""),
+    })
+    return _business_parts_body(pid, saved)
 
 
 @app.post(PACKAGING_AUTO_BIND_PATH)

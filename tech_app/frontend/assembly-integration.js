@@ -34,6 +34,8 @@ let aiData = null;          // 后端 payload：plan / status / *_validation / *
 // 2.1 的零件与它们的单件成本单独放：aiData 会被每次任务结果和 PUT 响应整体替换，
 // 混在一起的话零件清单会在第一次生成之后凭空消失。
 let aiParts = [];
+let aiIndustry = '';
+let aiBusinessParts = null;
 let aiTab = 'drawings';
 let aiBusy = false;
 // deferred 长任务（runIntegration / integrationStep）自己的并发闸门：启动即回执，
@@ -627,6 +629,10 @@ function aiRenderDrawings() {
   html += `</section>`;
 
   html += `<section class="inline-card"><div class="inline-card-title">来自 2.1 的零件（参数推荐的另一路输入）</div>`;
+  if (aiIndustry === 'packaging' && (aiBusinessParts?.scheme_labels || []).length) {
+    html += `<div class="inline-row"><b>当前图纸方案</b>${esc(aiBusinessParts.scheme_labels.map(n => `方案${n}`).join('、'))}</div>`;
+    if (aiBusinessParts.scheme_labels.length > 1) html += '<div class="inline-warn">一张图含多个互斥方案，请分别上传方案文件，不能把两案合成同一份 BOM。</div>';
+  }
   if (!parts.length) {
     html += `<div class="inline-warn">⚠ 尚未拿到 2.1 的零件清单，请先完成图纸解析。</div>`;
   } else {
@@ -635,9 +641,22 @@ function aiRenderDrawings() {
     parts.forEach(part => {
       html += `<div class="inline-cov-row ${part.hasCost ? 'reused' : 'missing'}">`
         + `<span class="inline-cov-no">${esc(part.part_id)}</span>`
-        + `<span class="inline-cov-name">${esc(part.name)} ×${part.quantity || 1}</span>`
+        + `<span class="inline-cov-name">${esc(part.name)} ×${part.quantity || 1}`
+        + (aiIndustry === 'packaging' ? `<small> · CAD 图形片段 ${part.fragments?.length || 0} 个；片段不重复计件</small>` : '')
+        + (aiIndustry === 'packaging' && part.sections?.length > 1
+          ? `<small> · 文字包含 ${esc(part.sections.map(section => section.name).join('、'))}（图形归属待核）</small>` : '')
+        + `</span>`
         + `<span class="inline-cov-code${part.hasCost ? '' : ' new'}">`
         + (part.hasCost ? `单件 ${aiMoney(part.unitCost)} 元` : '未测算成本') + `</span></div>`;
+      if (aiIndustry === 'packaging' && part.fragments?.length) {
+        html += `<details class="inline-card"><summary>${esc(part.name)} 的 ${part.fragments.length} 个 CAD 图形片段</summary>`;
+        part.fragments.forEach(fragment => {
+          const box = fragment.bbox?.length === 4 ? fragment.bbox.map(n => Number(n).toFixed(2)).join(' / ') : '边界待确认';
+          html += `<div class="inline-row"><b>${esc(fragment.component_id)}</b>${esc(box)}`
+            + `<small> · 图层 ${esc((fragment.layers || []).join('、') || '未标注')} · 图元 ${fragment.entity_ids?.length || 0} 条</small></div>`;
+        });
+        html += '</details>';
+      }
     });
     if (parts.some(part => !part.hasCost)) {
       html += `<div class="inline-warn">⚠ 有零件在 2.1 还没做成本测算。整机成本会缺这几项的底价，`
@@ -691,16 +710,31 @@ function aiRequiredCard() {
 }
 
 // --------------------------------------------------------------------------- 面板：参数推荐
+function aiRenderPackagingLayout() {
+  const rows = aiBusinessParts?.layout_rows || [];
+  let html = '<section class="inline-card" data-packaging-layout><div class="inline-card-title">3.2 排版排模 · 图纸证据</div>';
+  if (!rows.length) return html + '<div class="inline-empty">图纸中没有识别到「排 N 模」说明；不得据此编造开料利用率。仍可使用下方参数推荐。</div></section>';
+  html += '<div class="inline-warn">排模说明不计入零件清单。确认只表示认可图上文字；未绑定到具体零件、未核实纸张与用量前，不参与正式成本。</div>';
+  rows.forEach(row => {
+    const sheet = row.sheet_mm?.length === 2 ? `${row.sheet_mm[0]} × ${row.sheet_mm[1]} mm` : '纸张尺寸待确认';
+    html += `<div class="inline-cov-row"><span class="inline-cov-name">${esc(row.raw_text)}</span>`
+      + `<span class="inline-cov-code">${esc(sheet)} · ${row.n_up ? `排 ${Number(row.n_up)} 模` : '模数待确认'} · ${row.confirmed ? '已核对文字' : '待核对'}</span>`
+      + `<button type="button" class="inline-action" data-ai-layout-confirm="${aiAttr(row.entity_id)}" data-confirmed="${row.confirmed ? 'true' : 'false'}">${row.confirmed ? '撤销确认' : '确认图上排模'}</button></div>`;
+  });
+  return html + '</section>';
+}
+
 function aiRenderParams() {
+  const layoutHtml = aiIndustry === 'packaging' ? aiRenderPackagingLayout() : '';
   const params = aiPlan().params;
   if (!params) {
-    return `<div class="inline-empty">尚未生成整机参数。点击上方「生成参数推荐」，`
+    return layoutHtml + `<div class="inline-empty">尚未生成整机参数。点击上方「生成参数推荐」，`
       + `平台会把<strong>你写的整合需求 + 已上传的整合图纸 + 2.1 已确认的零件</strong>一起交给模型，`
       + `按<strong>报价成品参数字典</strong>（亿纬锂能 DA 梳理 · 产品技术参数）逐项推荐整机参数，`
       + `并给出零件间连接关系与整机 BOM。</div>`;
   }
   const editing = true;   // 参数表一直可填，见 aiRenderActions 的 alwaysEditable
-  let html = `<section class="inline-card"><div class="inline-card-title">整机概览</div>`;
+  let html = layoutHtml + `<section class="inline-card"><div class="inline-card-title">整机概览</div>`;
   html += `<div class="inline-row"><b>整机</b>${esc(params.assembly_name || '—')}</div>`;
   const checklist = aiData?.param_checklist;
   if (checklist) html += `<div class="inline-row"><b>产品族</b>${esc(checklist.family_name)}`
@@ -1640,6 +1674,16 @@ async function aiRunOp(kind, dispatch) {
 }
 
 function aiBindBody() {
+  document.querySelectorAll('[data-ai-layout-confirm]').forEach(button => {
+    button.onclick = async () => {
+      try {
+        aiBusinessParts = await api(`/api/projects/${encodeURIComponent(aiPid)}/requirement/packaging-layout/${encodeURIComponent(button.dataset.aiLayoutConfirm)}/confirmation`, {
+          method: 'PUT', body: JSON.stringify({ confirmed: button.dataset.confirmed !== 'true' }),
+        });
+        aiRender();
+      } catch (error) { aiToast(error.message || '排模确认失败', true); }
+    };
+  });
   document.querySelectorAll('[data-ai-drop]').forEach(button => {
     button.onclick = () => aiDropDrawing(button.dataset.aiDrop);
   });
@@ -2039,6 +2083,14 @@ async function aiConfirm() {
 /** 2.1 的零件与它们已测算的单件成本 —— 整合图纸页要拿它说明"底价从哪来"。 */
 async function aiLoadParts() {
   try {
+    if (aiIndustry === 'packaging') {
+      aiBusinessParts = await api(`/api/projects/${encodeURIComponent(aiPid)}/requirement/packaging-business-parts`);
+      return (aiBusinessParts?.business_parts || []).map(part => ({
+        part_id: part.business_part_code, name: part.name, quantity: 1,
+        hasCost: false, unitCost: null, fragments: part.cad_fragments || [],
+        sections: part.declared_sections || [],
+      }));
+    }
     const aggregate = await api(`/api/projects/${encodeURIComponent(aiPid)}/summary`);
     const parts = aggregate?.ir?.parts || [];
     const costs = await Promise.all(parts.map(part =>
@@ -2062,6 +2114,15 @@ async function aiStart() {
   aiLoadManifest();
   aiLoadAgentMeta();
   try {
+    const requirementPayload = await api(`/api/projects/${encodeURIComponent(aiPid)}/requirement`).catch(() => ({}));
+    aiIndustry = String(requirementPayload?.requirement?.data?.industry || '');
+    if (aiIndustry === 'packaging') {
+      const names = { drawings: '方案与部件', params: '排版排模', process: '后道加工与组装工艺' };
+      document.querySelectorAll('[data-ai-tab]').forEach(button => {
+        const name = names[button.dataset.aiTab];
+        if (name) button.textContent = `${{ drawings: '3.1', params: '3.2', process: '3.3' }[button.dataset.aiTab]} ${name}`;
+      });
+    }
     const [payload, parts] = await Promise.all([api(aiUrl('')), aiLoadParts()]);
     aiData = payload;
     aiParts = parts;

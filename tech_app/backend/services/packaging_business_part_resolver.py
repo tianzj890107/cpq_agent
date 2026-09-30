@@ -25,6 +25,8 @@ import os
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from . import packaging_layout
+
 ENGINE_VERSION = "packaging-business-part-resolver/1"
 
 #: 落库的 doc key 与 `packaging_parts.BUSINESS_DOC_KEY` 是同一份文档（这里只做解析，不落库）。
@@ -518,7 +520,7 @@ def _is_excluded_text(text: Any, layer: Any = "") -> bool:
     return False
 
 
-def extract_text_anchors(cad_ir: Any) -> List[Dict[str, Any]]:
+def extract_text_anchors(cad_ir: Any, *, layout_aware: bool = False) -> List[Dict[str, Any]]:
     """CAD IR → 名称锚点（Spec §2.2/§2.3）。
 
     只读 IR 里已经解析好的 `texts`（TEXT/MTEXT 的原文、插入点、图层、entity id），
@@ -526,6 +528,15 @@ def extract_text_anchors(cad_ir: Any) -> List[Dict[str, Any]]:
     视图标题 / 产地备注 / 方案名 / 标题栏栏位 / 材料表头 / 整盒自称一律排除（原因留痕）。
     """
     ir = cad_ir if isinstance(cad_ir, dict) else {}
+    layout_rows = packaging_layout.extract_layout_rows(ir)
+    # Only drawings explicitly carrying a scheme and multiple 排N模 labels have
+    # the round-box left-parts/right-layout convention. Derive the boundary from
+    # the CAD labels, never a sample-specific X coordinate.
+    layout_x = [_num(row["position"][0]) for row in layout_rows
+                if len(row.get("position") or []) >= 2]
+    layout_x = [value for value in layout_x if value is not None]
+    right_layout_edge = (min(layout_x) if layout_aware and len(layout_x) >= 2
+                         and packaging_layout.scheme_labels(ir) else None)
     anchors: List[Dict[str, Any]] = []
     for row in (ir.get("texts") or []):
         if not isinstance(row, dict):
@@ -543,7 +554,14 @@ def extract_text_anchors(cad_ir: Any) -> List[Dict[str, Any]]:
             "position": list(row.get("position") or []) or None,
             "anchor_version": ANCHOR_VERSION,
         }
-        reason = _exclusion_reason(raw, name, layer)
+        position = row.get("position") or []
+        position_x = _num(position[0]) if len(position) >= 2 else None
+        in_layout_zone = (right_layout_edge is not None and position_x is not None
+                          and position_x >= right_layout_edge)
+        reason = ("layout_instruction" if layout_aware and packaging_layout.is_layout_instruction(raw)
+                  else "layout_zone_label" if in_layout_zone
+                  else "section_heading" if right_layout_edge is not None and name.strip() == "外盒"
+                  else _exclusion_reason(raw, name, layer))
         if reason:
             item["excluded"] = reason
             anchors.append(item)
@@ -1475,6 +1493,7 @@ def _derived_rows(anchors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "sequence_no": len(rows) + 1,
             "business_part_code": "%s%02d" % (DERIVED_CODE_PREFIX, len(rows) + 1),
             "name": name,
+            "declared_sections": packaging_layout.declared_sections(name),
             "name_from_drawing": True,
             # 事实档（Spec `packaging-wine-dwg-parts-and-downstream-truth.md` §2.1）：
             # 图上直接读到 = `observed`；被视图方向规则纠过名 = `inferred`（锚点上已留痕）。
@@ -1551,6 +1570,7 @@ def _expand_family_groups(rows: List[Dict[str, Any]], anchors: List[Dict[str, An
             source = member["row"]
             child = json.loads(json.dumps(source, ensure_ascii=False, default=str))
             child["name"] = member["name"]
+            child["declared_sections"] = packaging_layout.declared_sections(member["name"])
             child["name_from_drawing"] = True
             child["parent_name"] = plan["base_name"]
             child["parent_code"] = _text(source.get("business_part_code"))
@@ -1591,6 +1611,7 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
                            *, seed_path: Any = None,
                            import_workbook: Callable[..., Any] = None,
                            use_model: bool = False,
+                           strict_schemes: bool = False,
                            model_reviewer: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
                            review_progress: Optional[Callable[[int, int, str], None]] = None
                            ) -> Dict[str, Any]:
@@ -1609,9 +1630,11 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
     """
     ir = cad_ir if isinstance(cad_ir, dict) else {}
     source_block = ir.get("source") if isinstance(ir.get("source"), dict) else {}
+    if strict_schemes and len(packaging_layout.scheme_labels(ir)) > 1:
+        raise ValueError("multiple_packaging_schemes: 先将不同方案拆成独立图纸项目，不得合成同一份 BOM")
     drawing_sha256 = _text(source_block.get("source_sha256"))
 
-    anchors = _apply_view_direction_rule(extract_text_anchors(ir))
+    anchors = _apply_view_direction_rule(extract_text_anchors(ir, layout_aware=strict_schemes))
     # 区域优先取**已过滤**的几何零件文档（真样本 263 件）；没有文档才退回 IR 的原始分量。
     regions = regions_from_geometry_parts(geometry_parts) or build_geometry_regions(ir)
     rects = dimension_rects(ir)
@@ -1700,6 +1723,8 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
     structure_rows = [row for row in rows if _text(row.get("structure_rule"))]
     reference = {
         "parts": rows,
+        "layout_rows": packaging_layout.extract_layout_rows(ir),
+        "scheme_labels": packaging_layout.scheme_labels(ir),
         "derived_from_drawing": True,
         "gold_standard_used": False,
         "refused_sources": list(RUNTIME_REFUSED_SOURCES),

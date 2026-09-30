@@ -69,3 +69,14 @@
 - 34 部署：`bash scripts/deploy_34_bare.sh ytbz`，`31b92ab → df9d3f0`；`build.commit=df9d3f068705`、`branch=ytbz`、`deployed_at=2026-09-30T13:50:24+0800`，8010 pid=1333115，`/suite/health` 与 `/api/health` 均 200。
 - 部署后核对：两份真实样本主转换器（ODA 27.1）直出、`converter_role=primary`、`fallback_used=false`（酒盒 6711 实体/8 层，圆盘盒 3457 实体/32 层）；隔离端到端自检 `verdict=ok`（酒盒八步 8/8、零件 263 件、可算 13/可挤出 13；圆盘盒八步 8/8、零件 312 件、可算 92/可挤出 255；两条权威实样路线 confirmed）；隔离自检未写运行目录，项目数 72 → 72；8010 首页与两张报价页面、`quick-quote-panel.js`/`app.js`/`agent-chat.js` 均 200。
 - 能力声明不变：**DWG 编排能力完成，真实转换能力未验收**；门禁两项人工项（`converter_license`、`real_samples_e2e_passed`）未代签。本批仍是内部草稿口径，材料价/工时/零件尺寸证据缺口须人工确认后重算，不能作为客户正式报价。
+
+## 516. 圆盘盒双方案、排版排模与多片部件（9-30）
+
+- 圆盘盒样图含上下两个互斥内托方案，新增离线分图工具 `tech_app/tools/split_round_box_schemes.py`：按图纸自身标出的坐标带切分，切分范围与保留/丢弃实体数留痕，原图不改且拒绝覆盖已有产物；切割坐标只适用该样图，不作通用识图规则。
+- 同一项目里图纸仍含多个互斥方案时，业务部件解析直接拒绝（`multiple_packaging_schemes`：一键解析回 409、流程步记 unavailable），不再把方案合成同一份混合 BOM。
+- 右侧「排 N 模」不再当业务零件：新增排模记录（`layout_rows`/`scheme_labels`），独立保存排模原文、CAD 实体 ID、排模数与纸张尺寸，解析不出的字段留空不猜；新增确认/撤销接口 `PUT /api/projects/{pid}/requirement/packaging-layout/{entity_id}/confirmation`，限工艺经理等角色并留审计。
+- 一件业务零件可由多个不相连 CAD 片段构成：每片保留 CAD ID、图层、矩形与确认状态（`cad_fragments`），不再用并集矩形冒充零件外形；同一业务件多片只计一次，未知归属仍呈待确认。
+- 包装第三阶段页签改为「3.1 方案与部件 / 3.2 排版排模 / 3.3 后道加工与组装工艺」，仅包装行业生效，其它行业页签与阶段 ID 不变，既有参数推荐能力保留。
+- 未确认排模不进正式成本；已确认但缺纸张规格、模数或件与排版关系时不推算材料用量；不从图纸或大模型编造材料单价。模型只能建议件名与片段归属，不能产生 CAD ID 或确认尺寸。
+- 提交前复跑：全仓 6865 项通过、28 项跳过；Python/JS 语法、`git diff --check` 与 Spec 状态守卫均通过。提交、推送与 34 部署记录见 `## 517`。
+

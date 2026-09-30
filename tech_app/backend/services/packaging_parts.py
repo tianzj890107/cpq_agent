@@ -4040,6 +4040,7 @@ def business_parts_document(reference: Any, geometry: Any, *,
     "还没有业务部件清单"，而不是把几百个分量冒充成零件。
     """
     authority_doc = reference if isinstance(reference, dict) else {}
+    from . import packaging_layout
     rows = [row for row in (authority_doc.get("parts") or []) if isinstance(row, dict)]
     evidence = geometry_evidence_of(geometry)
     plan = bindings if isinstance(bindings, dict) else bind_geometry(rows, evidence["components"])
@@ -4076,6 +4077,8 @@ def business_parts_document(reference: Any, geometry: Any, *,
         business_parts.append({
             "business_part_code": code,
             "name": _text(row.get("name")),
+            "declared_sections": [dict(item) for item in (row.get("declared_sections") or [])
+                                  if isinstance(item, dict)],
             # 事实档（Spec `packaging-business-truth-state-disclosure.md` §2.1）：三档判定仍在
             # 解析器里，这里只搬运。**不是**从图纸推导的清单给 `""` —— 那种行没有
             # "识别 / 推断 / 待确认"可言，不许伪称"图上识别"。
@@ -4086,6 +4089,8 @@ def business_parts_document(reference: Any, geometry: Any, *,
             REFERENCE_BLOCK_KEY: dict(reference_block),
             LEGACY_REFERENCE_BLOCK_KEY: dict(reference_block),
             "geometry_binding": binding,
+            "cad_fragments": packaging_layout.part_fragments(
+                binding.get("component_ids"), evidence.get("components")),
             # 部件图引用（Spec §C4）：图本体在 blob 里，这里只有 ref / sha256 / 类型 / 字节数。
             "thumbnail": _business_part_thumbnail(
                 row, thumb_by_ref,
@@ -4097,6 +4102,9 @@ def business_parts_document(reference: Any, geometry: Any, *,
     authority_source = authority_doc.get("source") if isinstance(authority_doc.get("source"), dict) else {}
     doc: Dict[str, Any] = {
         "engine_version": BUSINESS_ENGINE_VERSION,
+        "layout_rows": [dict(row) for row in (authority_doc.get("layout_rows") or [])
+                        if isinstance(row, dict)],
+        "scheme_labels": list(authority_doc.get("scheme_labels") or []),
         "business_parts": business_parts,
         "geometry_evidence": evidence,
         "stats": stats,
@@ -4515,6 +4523,8 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
                                        else "review_needed"), "reasons": reasons},
             "candidates": previous_candidates,
         }
+        from . import packaging_layout
+        row["cad_fragments"] = packaging_layout.part_fragments(known, evidence.get("components"))
         previous_size = row.pop("confirmed_size", None)
         if isinstance(previous_size, dict) and previous_size:
             row.setdefault("confirmed_size_history", []).append(dict(previous_size))
