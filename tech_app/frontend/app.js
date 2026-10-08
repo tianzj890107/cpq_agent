@@ -3517,23 +3517,34 @@ function packagingBusinessPartSizeText(row) {
   const block = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
   const reference = block(row && row.reference) || block(row && row["author" + "ity"]) || {};
   const binding = block(row && row.geometry_binding) || {};
-  if (Array.isArray(row && row.sections) && row.sections.length > 1) {
+  if (Array.isArray(row && row.sections) && row.sections.length &&
+      (row.sections.length > 1 || row.sections.some(s => Number((s.confirmed_size || s.estimated_size || {}).length_mm) > 0 || Number((s.estimated_size || {}).length_mm) > 0)) &&
+      (row.sections.length > 1 || !Object.keys(block(row && row.confirmed_size) || {}).length)) {
     return row.sections.map(section => {
       const size = section.confirmed_size && Object.keys(section.confirmed_size).length
-        ? section.confirmed_size : section.estimated_size || {};
+        ? section.confirmed_size : (row.sections.length === 1 && reference.length_mm && reference.width_mm
+          ? reference : section.estimated_size || {});
       return `${mm(size.length_mm)} × ${mm(size.width_mm)} mm`;
     }).join('；');
   }
   const confirmed = block(row && row.confirmed_size) || {};
-  const length = confirmed.length_mm ?? reference.length_mm ?? binding.length_mm;
-  const width = confirmed.width_mm ?? reference.width_mm ?? binding.width_mm;
+  const candidates = Array.isArray(binding.candidates) ? binding.candidates : [];
+  const index = typeof packagingCandidateSelectionIndex === 'function'
+    ? packagingCandidateSelectionIndex(candidates, binding.candidate_id) : 0;
+  const candidate = candidates[index] || {};
+  const box = Array.isArray(candidate.bbox) && candidate.bbox.length >= 4 ? candidate.bbox.map(Number) : [];
+  const length = confirmed.length_mm ?? reference.length_mm ?? binding.length_mm ?? (box.length ? Math.abs(box[2]-box[0]) : null);
+  const width = confirmed.width_mm ?? reference.width_mm ?? binding.width_mm ?? (box.length ? Math.abs(box[3]-box[1]) : null);
   return `${mm(length)} × ${mm(width)} mm`;
 }
 
 function packagingBusinessPartSizeBasis(row) {
+  const sections = Array.isArray(row && row.sections) ? row.sections : [];
+  if (sections.length && sections.every(s => ['verified_cad_dimension', 'manual_confirmed_drawing'].includes((s.confirmed_size || {}).source))) return '尺寸有独立图纸证据';
   const reference = (row && (row.reference || row["author" + "ity"])) || {};
   if (String(reference.size_quality || "") === "bbox_only") return "仅几何包围估算，尺寸待确认";
   if (String(reference.size_quality || "") === "unfolded") return "尺寸有独立图纸证据";
+  if (sections.some(s => Object.keys(s.estimated_size || {}).length) || ((row || {}).geometry_binding || {}).candidates?.length) return '参考尺寸（CAD 图形范围）';
   return "";
 }
 
@@ -4113,6 +4124,36 @@ function bindPackagingSectionsEditor(row, editable) {
   });
 }
 
+function packagingCandidateSourceText(candidate) {
+  const item = candidate || {};
+  const names = {compound_name_anchor:'名称锚点组合', shared_block_instance:'同一 CAD 块',
+    layout_frame:'排版区域', raw_cad_entities:'原始 CAD 图元',
+    single_connected_fragment:'连通图形', cut_lines_complementary:'互补刀线组合',
+    spatial_neighborhood:'空间邻近', layout_frame_unavailable:'无排版区域证据'};
+  Object.assign(names,{spatial_bbox_cluster:'相邻图形聚合',same_view:'同一方案区域',same_boundary_role:'同类刀线轮廓'});
+  const reasons = (item.evidence_reasons || []).map(key => names[key] || `证据：${key}`);
+  if (item.dimension_spatial) reasons.push('尺寸标注空间吻合');
+  if (item.anchor_in_region) reasons.push('件名位于图形范围');
+  if (item.layers?.length) reasons.push('图层：' + item.layers.join('、'));
+  return reasons.length ? reasons.join('；') : '来源未标记（仅有 CAD 候选记录）';
+}
+
+function packagingCandidateGalleryMarkup(candidates, selectedIndex, plan) {
+  if (!Array.isArray(candidates) || !candidates.length) return '';
+  return '<details class="packaging-candidate-gallery"><summary>查看全部候选图片（' + candidates.length + '）</summary>'
+    + '<div class="packaging-part-note">这是不同证据生成的备选组合，不是新增零件；查看不修改归属，下拉选用才保存。</div>'
+    + '<div class="packaging-candidate-grid">' + packagingRankedCandidates(candidates).map(entry => {
+      const item = entry.candidate || {};
+      const svg = packagingPartSceneSvg({...item,bbox:null,exact_entities:true},plan,{includeAnnotations:false});
+      const size = packagingBusinessPartSizeText({geometry_binding:{candidates:[item]}});
+      return `<article class="packaging-candidate-tile${entry.index === selectedIndex ? ' is-selected' : ''}">`
+        + `<button class="packaging-candidate-preview" type="button" data-qq-preview-candidate="${entry.index}" aria-label="查看候选 ${entry.index+1}">`
+        + (svg || '<span>候选坐标暂不可用</span>') + '</button>'
+        + `<div>候选 ${entry.index+1} · 证据排序 ${entry.confidence}%</div><div>${esc(size)}</div>`
+        + `<div class="packaging-candidate-source">${esc(packagingCandidateSourceText(item))}</div></article>`;
+    }).join('') + '</div></details>';
+}
+
 function openPackagingBusinessPart(code, requestedCandidateIndex) {
   const wanted = String(code || "");
   const rows = packagingBusinessPartRows(currentPackagingBusinessParts);
@@ -4136,6 +4177,7 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
     || (binding.status === "bound" ? binding.candidate_id : "") || "");
   const candidateIndex = packagingCandidateSelectionIndex(candidates, manualId, requestedCandidateIndex);
   const candidate = candidates[candidateIndex] || null;
+  const previewingCandidate = Number.isInteger(requestedCandidateIndex) && candidateIndex === requestedCandidateIndex;
   const candidateConfidence = candidate ? packagingCandidateConfidence(candidate) : null;
   const candidateEntityIds = candidate && Array.isArray(candidate.entity_ids)
     ? candidate.entity_ids : [];
@@ -4155,7 +4197,8 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
   const sections = Array.isArray(row.sections) ? row.sections : [];
   const sectionKey = `${currentProject}:${wanted}`;
   const viewedSection = sections.find(s=>s.section_id === packagingSectionViews.get(sectionKey));
-  if (viewedSection) figureBinding = {...viewedSection,bbox:null,exact_entities:true};
+  if (previewingCandidate && candidateBinding) figureBinding = {...candidateBinding,exact_entities:true};
+  else if (viewedSection) figureBinding = {...viewedSection,bbox:null,exact_entities:true};
   else if (sections.length > 1) figureBinding = {...binding,bbox:null,exact_entities:true};
   const block = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
   const reference = block(row.reference) || block(row["author" + "ity"]) || {};
@@ -4201,32 +4244,42 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
       // `pendingPackagingShapePartCode`，证据一到重画同一件；其余给原因文案（§C7）。
       figureHost.setAttribute("data-qq-part-shape", "ready");
       pendingPackagingShapePartCode = "";
-      figureHost.innerHTML = `<div class="packaging-part-shape-viewport"`
-        + ` data-qq-shape-viewport="1">`
-        + (candidate ? `<div class="packaging-part-note" data-qq-candidate-warning="1">`
+      figureHost.innerHTML = (candidate ? `<div class="packaging-part-note" data-qq-candidate-warning="1">`
           + `候选图形 ${candidateIndex + 1}/${candidates.length} · 置信度 ${candidateConfidence}%：`
-          + `${binding.status === "bound" ? "归属已保存" : "归属证据尚不完整"}；`
-          + `分数仅反映 CAD 证据强弱，不是正确概率；尺寸仍须单独确认。</div>` : "")
+          + `${previewingCandidate ? "仅预览，未修改归属" : binding.status === "bound" ? "归属已保存" : "归属证据尚不完整"}；`
+          + `${esc(packagingCandidateSourceText(candidate))}。尺寸仍须单独确认。</div>` : "")
+        + `<div class="packaging-part-shape-viewport" data-qq-shape-viewport="1">`
         + figureHtml
+        + `</div>`
         + `<div class="packaging-part-shape-bar">`
-        + `<span class="packaging-part-shape-zoom" data-qq-shape-zoom-label="1">100%</span>`
+        + `<span class="packaging-part-shape-zoom" data-qq-shape-zoom-label="1">适应窗口 · 100%</span>`
         + (sections.length ? `<select id="packagingSectionViewSelect" aria-label="查看组成部分"><option value="">全部组成</option>`
           + sections.map(s=>`<option value="${esc(s.section_id)}"${viewedSection && viewedSection.section_id === s.section_id ? ' selected' : ''}>${esc(s.name)}</option>`).join('')+`</select>` : '')
         + (candidates.length > 1 ? `<select id="packagingPartCandidateSelect"`
           + `${canEditCandidates ? "" : " disabled"}`
           + ` aria-label="切换候选图形">`
           + rankedCandidates.map(entry => `<option value="${entry.index}"${entry.index === candidateIndex ? " selected" : ""}>`
-            + `候选 ${entry.index + 1} · 置信度 ${entry.confidence}%</option>`).join("")
+            + `候选 ${entry.index + 1} · ${entry.confidence}% · ${esc(packagingCandidateSourceText(entry.candidate))}</option>`).join("")
           + `</select>` : "")
+        + (previewingCandidate && canEditCandidates && candidates.length > 1 ? `<button id="packagingCandidateUse" class="part-row-action" type="button">选用当前候选</button>` : '')
         + `<button id="packagingPartReset" class="part-row-action" type="button">适应窗口</button>`
         + `</div>`
-        + `</div>` + PACKAGING_CAD_RULE_LEGEND;
+        + packagingCandidateGalleryMarkup(candidates,candidateIndex,currentPackagingCadPlan) + PACKAGING_CAD_RULE_LEGEND;
       bindPackagingPartShapeInteractions(figureHost);
+      const scrollColumn = figureHost.closest('.drawing-model-column');
+      if (scrollColumn) scrollColumn.scrollTop = 0;
+      figureHost.querySelectorAll('[data-qq-preview-candidate]').forEach(button => button.addEventListener('click', () => {
+        openPackagingBusinessPart(wanted,Number(button.dataset.qqPreviewCandidate));
+        const gallery = figureHost.querySelector('.packaging-candidate-gallery');
+        if (gallery) gallery.open = true;
+      }));
       const sectionSelector = $('packagingSectionViewSelect');
       if (sectionSelector) sectionSelector.addEventListener('change',()=>{
         packagingSectionViews.set(sectionKey,sectionSelector.value); openPackagingBusinessPart(wanted);
       });
       const selector = $("packagingPartCandidateSelect");
+      const useCandidate = $('packagingCandidateUse');
+      if (selector && useCandidate) useCandidate.addEventListener('click', () => selector.dispatchEvent(new Event('change')));
       if (selector) selector.addEventListener("change", async () => {
         const selectedIndex = Number(selector.value);
         const selected = candidates[selectedIndex];
@@ -8110,8 +8163,8 @@ function bindPackagingPartShapeInteractions(host) {
     viewport.setAttribute("data-qq-shape-pan",
       packagingPartShapeNumberText(state.tx) + "," + packagingPartShapeNumberText(state.ty));
     shape.style.transform = packagingPartShapeTransformCss(state);
-    const label = viewport.querySelector("[data-qq-shape-zoom-label]");
-    if (label) label.textContent = packagingPartShapeZoomLabel(state);
+    const label = viewport.querySelector("[data-qq-shape-zoom-label]") || host.querySelector("[data-qq-shape-zoom-label]");
+    if (label) label.textContent = (state.k === 1 && state.tx === 0 && state.ty === 0 ? '适应窗口 · ' : '') + packagingPartShapeZoomLabel(state);
   };
   const onBar = (event) => {
     const target = event && event.target;
@@ -8161,7 +8214,7 @@ function bindPackagingPartShapeInteractions(host) {
     });
     paint();
   }, { passive: false });
-  const reset = viewport.querySelector("#" + PACKAGING_PART_SHAPE_RESET_ID);
+  const reset = viewport.querySelector("#" + PACKAGING_PART_SHAPE_RESET_ID) || host.querySelector("#" + PACKAGING_PART_SHAPE_RESET_ID);
   if (reset) {
     reset.addEventListener("click", event => {
       if (typeof event.preventDefault === "function") event.preventDefault();

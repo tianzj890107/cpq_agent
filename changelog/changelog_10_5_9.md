@@ -133,6 +133,14 @@
   `node --check`、改动/新增 Python `py_compile` 全过。
 - 状态：本地提交 + 双远端推送 + 34 部署（详见 `## 529`）。
 
+## 530. 零件首屏尺寸、候选来源图集与预览布局（10-8，本地）
+
+- 新增 Spec `packaging-candidate-gallery-initial-size.md` 与 6 项测试；初始四项红测失败后实现。修复单组成尺寸显示遗漏，候选未重选也能显示既有尺寸/参考范围，保留两位小数；没有将估算写成确认尺寸。
+- 候选下拉附真实证据来源，下面可展开全部候选 CAD 缩略图、尺寸、证据排序与来源；点图只预览，另有“选用当前候选”保存，预览不会被旧绑定覆盖，只读角色仍可看图。
+- 提示/工具条移出正方形 SVG，包装主图按窗口高度约束居中适配，100% 明示为适应窗口的相对倍率；切换零件重置右栏滚动，包装 modelPanes 不再 flex 撑满挤压图形，其他行业不变。
+- 相关 13 个模块 184 项通过；随后新增的复位按钮测试与新模块共 6 项复跑通过（有重叠，不相加）；模块语法及 diff 检查通过。
+- 本地修改，未提交/推送/部署，未启动服务或做浏览器视觉验收；无后端/生产数据修改，保留用户未跟踪文件。
+
 ## 529. `## 526`–`## 528` 的提交、双远端推送与 34 部署记录（10-8）
 
 - 提交 `2c5a386`（`## 526-528 一个业务件多组成部分闭环、报价工作区结构化展示与全量回归收口`），
@@ -154,3 +162,20 @@
   `app.js` 含 **9** 处 `packaging-business-parts/`（与 `## 528` 重指后的护栏一致）。
 - 能力声明不变：**DWG 编排能力完成，真实转换能力未验收**；门禁两项人工项未代签。多组成闭环在真实
   图纸上仍需逐件复验（本批只读诊断：圆盘盒 5 条多组成业务行），不构成客户正式报价授权。
+
+## 531. 收口 `## 530`：全量回归暴露的 2 条红（10-8，Codex）
+
+- `## 530` 只跑了「相关 13 个模块 184 项」，标了「未全仓测试」。本轮全量
+  `unittest discover -s tests -p 'test_*.py'` → `Ran 6961 … FAILED (failures=2, skipped=28)`，
+  两条都在本批改动的文件里，**都不是既有挂账**：
+  - `test_global_brand_color_red::test_no_legacy_purple_or_competing_blue_brand_literals`：
+    新增的候选图集样式把 `var(--color-primary, #2563eb)` / `var(--color-primary-light, #eff6ff)`
+    当兜底值，`#2563eb` 是品牌守卫点名的竞争蓝。按本文件既有约定改为
+    `var(--color-primary, #0060E6)` 与 `var(--color-primary-light, #E6F0FD)`。
+  - `test_packaging_all_parts_visual_adjudication_red::test_frontend_marks_candidate_as_unconfirmed_and_exposes_manual_review`：
+    候选提示改写时把「尺寸仍须单独确认」丢了。该句是「候选 ≠ 已确认」的真话护栏，**改实现补回**
+    （`…；证据来源…。尺寸仍须单独确认。`），没有动那条断言。
+- Spec 留痕：给 `packaging-2-1-right-pane-single-part-figure.md` 补附录 A，写明其
+  「右栏同时至多一个 `svg`」的字面数量限制已被 `packaging-candidate-gallery-initial-size.md` 取代，
+  而「只有一个可交互主图 / 主图出自纯函数 / 别件图元不进这张图 / 缩略图不共享拖拽绑定」照旧。
+- 验证：全量复跑 → **`Ran 6961 … OK (skipped=28)`**；`git diff --check`、`node --check app.js` 通过。
