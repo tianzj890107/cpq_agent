@@ -179,3 +179,23 @@
   「右栏同时至多一个 `svg`」的字面数量限制已被 `packaging-candidate-gallery-initial-size.md` 取代，
   而「只有一个可交互主图 / 主图出自纯函数 / 别件图元不进这张图 / 缩略图不共享拖拽绑定」照旧。
 - 验证：全量复跑 → **`Ran 6961 … OK (skipped=28)`**；`git diff --check`、`node --check app.js` 通过。
+
+## 532. `## 530`–`## 531` 的提交、双远端推送与 34 部署记录（10-8）
+
+- 提交 `a3ed335`（`## 530-531 零件首屏尺寸、候选来源图集与预览布局；全量回归收口`），入库 6 个文件：
+  新 Spec `packaging-candidate-gallery-initial-size.md` 与其 6 项测试、`app.js`、`drawing-flow.css`、
+  `packaging-2-1-right-pane-single-part-figure.md` 附录与 changelog。不入库未跟踪项不变。
+- 提交前复跑：全量 → **`Ran 6961 … OK (skipped=28)`**；`node --check app.js`、`git diff --check`、
+  `py_compile` 通过。
+- 双远端：GitLab 与 GitHub 的 `ytbz` 均回读为 `a3ed335c9898d2c37aa08e138a07a10a320e006b`
+  （`903622c..a3ed335`），与本地 HEAD 三方一致。
+- 34 部署：`bash scripts/deploy_34_bare.sh ytbz`，`2c5a386 → a3ed335`（纯快进）；
+  `build.commit=a3ed335c9898d2c37aa08e138a07a10a320e006b`、`deployed_at=2026-10-08T15:59:53+0800`，
+  8010 pid=`3648762`，`/api/health` 200。
+- 部署后核对：ODA 27.1 主转换器直出、`fallback_used=false`（酒盒 6711 / 8 层，圆盘盒 3457 / 32 层）；
+  隔离端到端自检 `verdict=ok`（酒盒 263 件 `closed_ratio=0.510`、可挤出 13；圆盘盒 312 件
+  `closed_ratio=0.840`、可挤出 262；两条权威实样路线 confirmed；未写运行目录 78 → 78）。
+- 部署后核对（只读）：8010 `/` 200；8012 下发的 `drawing-flow.css` 含候选图集样式且
+  **`#2563eb` 归零**，`app.js` 含「尺寸仍须单独确认」——与本次提交逐字一致。
+- 能力声明不变：**DWG 编排能力完成，真实转换能力未验收**；本批全部是前端展示与交互，
+  未做浏览器视觉验收（真实页面观感仍须人工确认），不构成客户正式报价授权。
