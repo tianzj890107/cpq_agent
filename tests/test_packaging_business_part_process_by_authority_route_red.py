@@ -556,10 +556,12 @@ class FGuardrails(unittest.TestCase):
         # 候选的 geometry-binding PUT，计数精确重指为 6，不是无约束放宽。
         src = _source(APP_JS)
         # 图纸尺寸人工确认单列 size-confirm PUT，总数精确重指为 7。
-        self.assertEqual(8, src.count("packaging-business-parts/"),
-                         "新增入口只能是 geometry-binding、size-confirm 与 auto-bind-candidates")
+        # 本轮多组成 Spec 明确新增共用 sections 写入，精确枚举而非取消护栏。
+        self.assertEqual(9, src.count("packaging-business-parts/"),
+                         "额外入口仅限 sections 写入")
+        self.assertIn('/sections${suffix}',src)
         self.assertEqual(1, src.count("/geometry-binding"))
-        self.assertEqual(1, src.count("/size-confirm"))
+        self.assertEqual(2, src.count("/size-confirm"))  # 整件兼容入口 + 逐部分入口
         self.assertEqual(1, src.count("/auto-bind-candidates"))
 
     def test_f5_business_cost_route_is_untouched(self):

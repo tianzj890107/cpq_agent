@@ -358,6 +358,21 @@
   cursor: not-allowed;
 }
 
+.packaging-sections { width: 100%; min-width: 0; }
+.packaging-sections summary { cursor: pointer; padding: 6px 0; }
+.packaging-sections summary:hover { background: var(--color-primary-light, #E6F0FD); }
+.packaging-sections fieldset {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  min-width: 0; margin: 8px 0; padding: 10px;
+  border: 1px solid var(--color-primary-border, #B4D0F8); border-radius: 6px;
+}
+.packaging-sections label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.packaging-sections input { min-width: 0; width: 100px; max-width: 100%; }
+.packaging-sections [data-section-name], .packaging-sections [data-section-note] { width: 180px; }
+.packaging-sections select { min-width: 0; max-width: 100%; }
+.packaging-part-shape-bar { max-width: 100%; flex-wrap: wrap; justify-content: flex-end; }
+.packaging-part-shape-bar select { max-width: 150px; }
+
 /* 零件树子动作（工艺推荐 / 单件成本）：与 `.part-row-action` 同一尺寸体系，不再是页面级大按钮。 */
 .part-subaction-process,
 .part-subaction-cost {

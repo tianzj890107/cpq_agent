@@ -1556,9 +1556,12 @@
       border: 1px solid var(--color-primary-border); border-radius: var(--radius-full); cursor: pointer;
       transition: background var(--transition-fast); }
     .quote-mode-entry:hover { background: #DCE9FB; }
-    .quote-mode-entry--quick { color: #FFFFFF; background: var(--color-primary);
+    .quote-mode-entry--active { color: #FFFFFF; background: var(--color-primary);
       border-color: var(--color-primary); }
-    .quote-mode-entry--quick:hover { background: var(--color-primary-hover); }
+    .quote-mode-entry--active:hover { background: var(--color-primary-hover); }
+    body.quick-workspace-page .chat-container > :not(#quickQuoteWorkspace) { display: none !important; }
+    body:not(.quick-workspace-page) #quickQuoteWorkspace { display: none !important; }
+    body.quick-workspace-page #quickQuoteWorkspace { width: 100%; min-height: 70vh; background: white; }
     /* 快速报价面板（quick-quote-panel.js 的容器） */
     .qq-mask { position: fixed; inset: 0; z-index: 300; background: rgba(17, 24, 39, .45);
       display: flex; align-items: center; justify-content: center; padding: 24px; }
@@ -1943,7 +1946,7 @@
             : '使用模型：<span>' + escH(s.model || '—') + '</span>';
       const title = s.title || '未命名会话';
       const date = (s.updated || s.created || '').replace('T', ' ').slice(0, 16);
-      const quickTag = (mode === 'quote' && quickQuoteKnownIds().indexOf(String(s.id)) !== -1)
+      const quickTag = (mode === 'quote' && (s.quote_mode === 'quick' || quickQuoteKnownIds().indexOf(String(s.id)) !== -1))
         ? '<span class="request-tag request-tag--quick">快速报价</span>' : '';
       return '<div class="request-card" data-id="' + escH(s.id) + '">' +
         '<div class="request-card-header"><span class="request-id">' + escH(quoteNo(mode, s)) + '</span>' +
@@ -2165,6 +2168,7 @@
             /* 报价卡片：quote_mode 以服务端实例为准（Spec §2 末句）—— 快速卡片回快速工作区，
                不能重放精准 Agent 历史；不是快速实例时由 openQuickQuoteCard 走既有精准入口。 */
             if (mode === 'quote') {
+              if ((pageRows[i] || {}).quote_mode === 'quick') rememberQuickQuoteSession(card.dataset.id);
               openQuickQuoteCard(card.dataset.id).catch(() => {});
               return;
             }
@@ -2195,6 +2199,7 @@
        precise|quick 闭集，随业务实例存服务端（建实例时带 quote_mode），本地键只用于刷新恢复。 */
     let activeQuoteMode = 'precise';
     let quickQuoteExtractView = null;   // 最近一次需求抽取视图（Spec §4：必须上屏给用户核对）
+    let quickQuoteCreating = false;
 
     const fileInput = document.getElementById('fileInput');
     const uploadSection = document.getElementById('uploadSection');
@@ -2378,7 +2383,7 @@
     /* 刷新 / 返回首页：先按本地恢复键把模式与徽标摆正（实例里的 quote_mode 是服务端权威，
        打开卡片时再以它为准覆盖）。 */
     function restoreActiveQuoteMode() {
-      return setActiveQuoteMode(storedQuoteMode(), {keepWorkspace: false});
+      return setActiveQuoteMode(techIndustry() === 'packaging' ? storedQuoteMode() : 'precise', {keepWorkspace: false});
     }
     /* 首页提交的唯一分流（Spec §3）：报价页的 quick 留在首页快速工作区，其余走既有路径。 */
     function routeQuoteSubmission(intent, requirement) {
@@ -2489,9 +2494,7 @@
         el.addEventListener('click', () => {
           const mode = el.getAttribute('data-quote-mode') === 'quick' ? 'quick' : 'precise';
           setActiveQuoteMode(mode);   // 先存模式，再展开工作区 / 进精准（Spec §2）
-          // 快速路径就地展开首页工作区（Spec §4.1：不弹遮罩）；精准走既有跳转。
-          if (mode === 'quick') openQuickQuoteHomeWorkspace();
-          else requestNavigate('quote', (textarea && textarea.value.trim()) || '');
+          // 这里只选择新建路线；提交/卡片才进入实例页面。
         });
       });
       restoreActiveQuoteMode();
@@ -2562,6 +2565,7 @@
     function quickQuoteInputs(text) {
       const raw = String(text === undefined || text === null
         ? ((textarea && textarea.value) || '') : text);
+      if (!raw.trim()) return Object.assign({}, (quickQuotePanelApi() || {}).workspaceState?.inputs || {});
       const view = structuredQuickQuoteInputs(raw);
       return (view && view.inputs) || {};   // 面板没加载时返回空字段集，绝不回落成 requirement_text
     }
@@ -3147,10 +3151,10 @@
         : page;
     }
 
-    /* 快速报价提交（Spec §3）：**不跳页**、不进六步精准工作台、不启动精准 Agent。
-       顺序固定：建/复用实例 → 抽取结构化字段 → 送匹配 → 展示候选与逐字段证据；
-       后面三步（选基准 / 改字段重算 / 确认保存）复用工作区既有命令与按钮。 */
+    /* 新 Spec packaging-quote-workspace-render-routing：先建实例再跳专属页面，
+       匹配/改参数/出价只在实例页执行，不进入六步精准 Agent。 */
     async function submitQuickQuoteRequirement(text) {
+      if (quickQuoteCreating) return null;
       const panel = quickQuotePanelApi();
       const raw = String(text || '');
       if (!panel) {
@@ -3158,36 +3162,35 @@
         return null;
       }
       setActiveQuoteMode('quick');
-      const box = quickQuoteWorkspaceBox();
-      if (box) box.hidden = false;
       quickQuoteStatus('正在建快速报价实例…');
       let opened = null;
+      quickQuoteCreating = true;
       try {
+        // 首页提交是新项目，不复用前一次点击卡片残留的实例身份。
+        panel.workspaceState.quick_quote_session_id = '';
         opened = await panel.openQuickQuoteSession({
           industry: techIndustry(), quoteMode: 'quick',
           title: raw.slice(0, 40) || '快速报价',
         });
       } catch (exc) {
         quickQuoteStatus('建快速报价实例失败：' + ((exc && exc.message) || exc), true);
+        alert('建快速报价实例失败：' + ((exc && exc.message) || exc));
         return null;
+      } finally {
+        quickQuoteCreating = false;
       }
       const sid = (opened && opened.quick_quote_session_id) || panel.quickQuoteSessionId();
       if (!sid || (opened && opened.ok === false)) {
         quickQuoteStatus((opened && opened.error) || '建快速报价实例失败。', true);
+        alert((opened && opened.error) || '建快速报价实例失败。');
         return opened;
       }
       rememberQuickQuoteSession(sid);
-      quickQuoteExtractView = structuredQuickQuoteInputs(raw);
-      quickQuoteStatus('正在按结构化字段匹配标准案例…');
-      const out = await panel.matchQuickQuoteCases(
-        (quickQuoteExtractView && quickQuoteExtractView.inputs) || {});
-      const failed = !!(out && out.ok === false);
-      quickQuoteStatus(failed ? (out.error || '匹配失败') : '已按当前输入匹配候选案例。', failed);
-      renderQuickQuoteWorkspace();
-      return out;
+      try { sessionStorage.setItem('cpq:quickRequirement:' + sid, raw); } catch (e) {}
+      navigateQuickQuoteWorkspace(sid);
+      return opened;
     }
-    /* 首页卡片按 quote_mode 恢复（Spec §2/§6）：先问服务端这份实例是什么模式 —— 是快速就地
-       打开快速工作区（不跳页、不重放精准 Agent），不是则走既有精准入口。 */
+    /* 卡片以服务端 quote_mode 为准，快速跳实例页，精准走原有工作台。 */
     async function openQuickQuoteCard(sessionId) {
       const id = String(sessionId || '');
       if (!id) return null;
@@ -3198,15 +3201,100 @@
         if (state && state.ok !== false && String(state.quote_mode || '') === 'quick') {
           rememberQuickQuoteSession(id);
           setActiveQuoteMode('quick');
-          quickQuoteExtractView = null;      // 抽取视图是本次输入的，刷新回来以服务端工作区为准
-          renderQuickQuoteWorkspace();
+          navigateQuickQuoteWorkspace(id);
           return state;
         }
+      }
+      if (quickQuoteKnownIds().indexOf(id) !== -1) {
+        alert((state && state.error) || '快速报价读取失败，请重试。');
+        return null;
       }
       try { sessionStorage.setItem(OPEN_KEYS.quote, id); } catch (e) {}
       window.location.href = encodeURI(PAGES.quote);
       return null;
     }
+    function navigateQuickQuoteWorkspace(id) {
+      const url = new URL(window.location.href);
+      url.search = '';
+      url.searchParams.set('workspace', 'quick');
+      url.searchParams.set('session', String(id));
+      window.location.href = url.href;
+    }
+    async function initQuickQuoteWorkspacePage() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('workspace') !== 'quick') return;
+      document.body.classList.add('quick-workspace-page');
+      document.title = '快速报价工作区';
+      const box = quickQuoteWorkspaceBox();
+      box.hidden = false;
+      const industry = document.getElementById('techIndustry');
+      if (industry) industry.value = 'packaging';
+      setActiveQuoteMode('quick');
+      const id = params.get('session');
+      const panel = quickQuotePanelApi();
+      const back = document.createElement('a');
+      back.href = window.location.pathname;
+      back.textContent = '← 返回报价清单';
+      box.prepend(back);
+      const input = document.createElement('textarea');
+      input.className = 'unified-textarea';
+      input.placeholder = '输入包装需求，点击匹配案例';
+      input.setAttribute('aria-label', '快速报价需求');
+      box.insertBefore(input, document.getElementById('qqWorkspaceBody'));
+      // 既有命令从首页 textarea 读取；专属页面使用自己的需求框。
+      input.addEventListener('input', () => { if (textarea) textarea.value = input.value; });
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault(); runQuickQuoteWorkspaceCommand('match');
+        }
+      });
+      const parseHost = document.createElement('div');
+      box.insertBefore(parseHost, document.getElementById('qqWorkspaceBody'));
+      if (panel) parseHost.appendChild(panel.renderParseEntry(null, {
+        onParsed: async (result) => {
+          quickQuoteExtractView = {inputs: result.inputs || {}, evidence: []};
+          input.value = '';
+          if (textarea) textarea.value = '';
+          const out = await panel.matchQuickQuoteCases(result.inputs || {});
+          quickQuoteStatus(out && out.ok === false ? (out.error || '匹配失败') : '已按图纸字段匹配案例。', !!(out && out.ok === false));
+          syncQuickQuoteWorkflowState(); renderQuickQuoteWorkspace();
+        }
+      }));
+      const load = async () => {
+        box.querySelectorAll('button,input,textarea').forEach(el => { el.disabled = true; });
+        try {
+          if (!id || !panel) throw new Error('缺少实例或快速报价组件');
+          const state = await panel.openQuickQuoteWorkspace(id);
+          if (!state || state.ok === false || state.quote_mode !== 'quick') throw new Error((state || {}).error || '不是可读取的快速报价实例');
+          rememberQuickQuoteSession(id);
+          let raw = '';
+          try { raw = sessionStorage.getItem('cpq:quickRequirement:' + id) || ''; } catch (e) {}
+          input.value = raw;
+          if (textarea) textarea.value = raw;
+          quickQuoteExtractView = {inputs: state.inputs || {}, evidence: []};
+          if (raw && !(state.match || {}).candidates && !state.baseline) {
+            quickQuoteExtractView = structuredQuickQuoteInputs(raw);
+            const result = await panel.matchQuickQuoteCases(quickQuoteExtractView.inputs || {});
+            if (result && result.ok === false) throw new Error(result.error || '匹配失败');
+          }
+          syncQuickQuoteWorkflowState();
+          renderQuickQuoteWorkspace();
+          input.disabled = false;
+          const library = document.getElementById('qqOpenCaseLibrary');
+          if (library) library.disabled = false;
+          parseHost.querySelectorAll('button,input').forEach(el => { el.disabled = false; });
+          quickQuoteStatus('已读取快速报价实例：' + id);
+        } catch (e) { quickQuoteStatus('读取失败：' + e.message + '。请重试，不会创建新实例。', true); }
+        finally { retry.disabled = false; }
+      };
+      const retry = document.createElement('button');
+      retry.type = 'button'; retry.className = 'qq-ws-btn'; retry.textContent = '重新读取';
+      retry.addEventListener('click', load); box.prepend(retry);
+      const sessionButton = document.getElementById('qqWorkspaceSession');
+      if (sessionButton) sessionButton.hidden = true;
+      await load();
+    }
+    document.addEventListener('DOMContentLoaded', initQuickQuoteWorkspacePage);
     async function submitRequirement() {
       const text = (textarea && textarea.value.trim()) || '';
       if (!text && !pickedFiles.length) { if (textarea) textarea.focus(); return; }
@@ -3219,7 +3307,7 @@
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitRequirement(); }
     });
     // 「新建…」按钮 = 先弹项目信息确认框，确认后再进入当前模式的空白单
-    if (newQuoteBtn) newQuoteBtn.addEventListener('click', () => requestNavigate(currentMode, ''));
+    if (newQuoteBtn) newQuoteBtn.addEventListener('click', () => routeQuoteSubmission(currentMode, ''));
 
     /* ===== 已有报价单查询（客户名 / 创建人 / 标题 / 单号）+ 我的/全部 切换 ===== */
     const searchInput = document.querySelector('.search-input');

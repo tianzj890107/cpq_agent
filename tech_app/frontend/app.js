@@ -2126,7 +2126,7 @@ function packagingPartSceneEntities(binding, doc) {
     const own = Array.isArray(raw && raw.bbox) ? raw.bbox.slice(0, 4).map(Number) : null;
     const inside = hasBox && own && own.length === 4 && own.every(Number.isFinite)
       && own[0] >= box[0] && own[1] >= box[1] && own[2] <= box[2] && own[3] <= box[3];
-    if (!id || (!ids[id] && !(inside && !foreign[id])) || annotations[id] || seen[id]) return;
+    if (!id || (!ids[id] && !(inside && !foreign[id] && !row.exact_entities)) || annotations[id] || seen[id]) return;
     seen[id] = true;
     rows.push(raw);
   });
@@ -2217,7 +2217,7 @@ function packagingPartSceneSvg(binding, doc, options) {
       const own = list((raw || {}).bbox).slice(0, 4).map(Number);
       const inside = hasBox && own.length === 4 && own.every(Number.isFinite)
         && own[0] >= box[0] && own[1] >= box[1] && own[2] <= box[2] && own[3] <= box[3];
-      if (!id || (!ids[id] && !(inside && !foreign[id])) || annotations[id] || seen[id]) return;
+      if (!id || (!ids[id] && !(inside && !foreign[id] && !bind.exact_entities)) || annotations[id] || seen[id]) return;
       seen[id] = true;
       rows.push(raw);
     });
@@ -3247,6 +3247,10 @@ function packagingBusinessPartRows(doc) {
 // 能算才给按钮 —— 绑不到 / 绑到的件没闭合一律说清"为什么不能算、下一步做什么"，绝不猜一个几何件。
 // 纯函数：吃两个已在内存里的文档，不读库、不写状态；体内无 DOM / `fetch(` / `localStorage`。
 function packagingBusinessPartDownstreamTarget(row, partsDoc) {
+  if ((Array.isArray(row && row.sections) && row.sections.length > 1) || (row && row.sections_source === 'manual')) {
+    return {ok:false,part_code:row.business_part_code,code:'multipart_business_route_required',
+            message:'此零件包含多个组成部分，请按全部组成推荐工艺或测算成本。'};
+  }
   const part = (row && typeof row === "object") ? row : {};
   const code = String(part.business_part_code || "").trim();
   if (!code) {
@@ -3304,6 +3308,11 @@ function packagingBusinessPartSizeCostTarget(row, partsDoc) {
             message: "这一件没有业务部件编码，不能算材料费。"};
   }
   if (partsDoc && partsDoc.derived_from_drawing) {
+    if ((Array.isArray(part.sections) && part.sections.length > 1) || part.sections_source === 'manual') {
+      return packagingSectionsReady(part)
+        ? {ok:true,code:'',message:'',part_code:code}
+        : {ok:false,code:'section_size_not_confirmed',part_code:code,message:'请核对全部组成的归属、尺寸和用量，不能只计算第一部分。'};
+    }
     const binding = part.geometry_binding || {};
     const confirmed = part.confirmed_size || {};
     if (binding.status !== "bound" || !["manual", "auto"].includes(binding.bound_by)
@@ -3341,6 +3350,12 @@ function packagingBusinessPartProcessTarget(row, partsDoc) {
             message: "这一件没有业务部件编码，不能排工艺。"};
   }
   if (partsDoc && partsDoc.derived_from_drawing) {
+    if ((Array.isArray(part.sections) && part.sections.length > 1) || part.sections_source === 'manual') {
+      if (!packagingSectionsReady(part)) return {ok:false,code:'section_size_not_confirmed',part_code:code,message:'请核对全部组成的归属、尺寸和用量。'};
+      if (!text(reference.material_text) && !text(part.material)
+          && !(part.sections || []).every(s=>text(s.material_text))) return {ok:false,code:'material_missing',part_code:code,message:'补上各组成材料后再排工艺。'};
+      return {ok:true,code:'',message:'',part_code:code};
+    }
     const binding = part.geometry_binding || {};
     const confirmed = part.confirmed_size || {};
     if (binding.status !== "bound" || !["manual", "auto"].includes(binding.bound_by)
@@ -3502,6 +3517,13 @@ function packagingBusinessPartSizeText(row) {
   const block = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
   const reference = block(row && row.reference) || block(row && row["author" + "ity"]) || {};
   const binding = block(row && row.geometry_binding) || {};
+  if (Array.isArray(row && row.sections) && row.sections.length > 1) {
+    return row.sections.map(section => {
+      const size = section.confirmed_size && Object.keys(section.confirmed_size).length
+        ? section.confirmed_size : section.estimated_size || {};
+      return `${mm(size.length_mm)} × ${mm(size.width_mm)} mm`;
+    }).join('；');
+  }
   const confirmed = block(row && row.confirmed_size) || {};
   const length = confirmed.length_mm ?? reference.length_mm ?? binding.length_mm;
   const width = confirmed.width_mm ?? reference.width_mm ?? binding.width_mm;
@@ -3931,6 +3953,7 @@ function packagingCandidateConfidence(candidate) {
   if (item.anchor_in_region === true) score += 0.20;
   if (item.dimension_spatial === true) score += 0.20;
   if (item.geometry_status === "supported") score += 0.10;
+  if (item.name_anchor_entity_id && (item.evidence_reasons || []).includes('compound_name_anchor')) score += 0.25;
   const box = Array.isArray(item.bbox) ? item.bbox.map(Number) : [];
   const hasDistance = item.distance_mm !== null && item.distance_mm !== undefined
     && String(item.distance_mm).trim() !== "";
@@ -3976,6 +3999,120 @@ function packagingAutoSelectionReason(binding) {
   })[String(blocked.reason || "")] || "";
 }
 
+const packagingSectionViews = new Map();
+
+function packagingSectionsReady(row) {
+  const sections = Array.isArray(row && row.sections) ? row.sections : [];
+  if (!row.sections_complete || !sections.length || (row.geometry_binding || {}).status !== 'bound') return false;
+  const used = new Set();
+  const positive = v => v !== null && v !== '' && typeof v !== 'boolean' && Number.isFinite(Number(v)) && Number(v) > 0;
+  for (const s of sections) {
+    const size = s.confirmed_size || {};
+    const ids = Array.isArray(s.entity_ids) ? s.entity_ids.map(String) : [];
+    const proof = new Set((size.entity_ids || []).map(String));
+    if (s.status !== 'bound' || !ids.length || !positive(s.quantity)
+        || !positive(size.length_mm) || !positive(size.width_mm)
+        || !['manual_confirmed_drawing','verified_cad_dimension'].includes(size.source)
+        || proof.size !== ids.length || ids.some(id => !proof.has(id) || used.has(id))) return false;
+    if (size.source === 'manual_confirmed_drawing' && (!size.confirmed_by || !size.note)) return false;
+    ids.forEach(id => used.add(id));
+  }
+  const bound = new Set(((row.geometry_binding || {}).entity_ids || []).map(String));
+  return bound.size === used.size && [...used].every(id => bound.has(id));
+}
+
+function packagingSectionsMarkup(row, doc, editable) {
+  const sections = Array.isArray(row.sections) ? row.sections : [];
+  const components = ((doc || {}).geometry_evidence || {}).components || [];
+  const mm = v => Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v).toFixed(2) : '—';
+  const options = selected => components.map((c,index) => {
+    const box = c.drawing_bbox || c.bbox || [];
+    const label = `图形 ${index+1} · ${mm(box[2]-box[0])} × ${mm(box[3]-box[1])} mm`;
+    return `<option value="${esc(c.component_id)}"${selected.includes(c.component_id) ? ' selected' : ''}>${esc(label)}</option>`;
+  }).join('');
+  return `<details class="packaging-sections" open><summary>组成部分（${sections.length}）</summary>`
+    + ((row.section_gaps || []).length ? `<div class="packaging-part-note">嵌套轮廓可能是孔或独立材料，请核对并保存组成，不能自动重复计算材料。</div>` : '')
+    + (Array.isArray(row.declared_sections) && row.declared_sections.length > 1
+      ? `<div class="packaging-part-note">图纸声明：${row.declared_sections.map(s=>esc(s.name)).join('、')}；各图形的具体名称可在此核对修改。</div>` : '')
+    + `<div id="packagingSectionsEditor">` + sections.map((s,index) => {
+      const size = s.confirmed_size || {}, estimate = s.estimated_size || {};
+      const shown = Object.keys(size).length ? size : estimate;
+      return `<fieldset data-section-row="${index}" data-section-id="${esc(s.section_id)}">`
+        + `<legend>${esc(s.name)} · ${mm(shown.length_mm)} × ${mm(shown.width_mm)} mm</legend>`
+        + (editable ? `<label>名称 <input data-section-name value="${esc(s.name)}"></label> `
+          + `<label>材料 <input data-section-material placeholder="未填则继承零件材料" value="${esc(s.material_text || '')}"></label> `
+          + `<label>每件用量 <input data-section-quantity type="number" min="0.001" step="0.001" value="${esc(s.quantity)}"></label>`
+          + `<label>组成图形（可多选）<select data-section-components multiple size="3">${options(s.component_ids || [])}</select></label>`
+          + `<label>长(mm) <input data-section-length type="number" min="0.001" step="0.01" value="${esc(size.length_mm || '')}"></label> `
+          + `<label>宽(mm) <input data-section-width type="number" min="0.001" step="0.01" value="${esc(size.width_mm || '')}"></label> `
+          + `<input data-section-note placeholder="图纸标注/测量依据" value="${esc(size.note || '')}"> `
+          + `<button class="part-row-action" data-section-confirm type="button">确认本部分尺寸</button> `
+          + `<button class="part-row-action" data-section-remove type="button">移除本部分</button>`
+          : `<div>用量 ${esc(s.quantity)} · ${s.status === 'bound' ? '已归属' : '待归属'}</div>`)
+        + `</fieldset>`;
+    }).join('') + `</div>`
+    + (editable ? `<button id="packagingAddSection" class="part-row-action" type="button">添加组成部分</button> `
+      + `<button id="packagingSaveSections" class="part-row-action" type="button">保存全部组成</button>` : '')
+    + `</details>`;
+}
+
+async function packagingSectionsWrite(code, suffix, body) {
+  const url = `${API}/api/projects/${encodeURIComponent(currentProject)}/requirement/packaging-business-parts/${encodeURIComponent(code)}/sections${suffix}`;
+  const response = await fetch(url, {method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({...body,business_parts_hash:(currentPackagingBusinessParts || {}).business_parts_hash || ''})});
+  const result = await response.json();
+  if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail || result));
+  currentPackagingBusinessParts = result;
+  renderTree(currentIR || {});
+  openPackagingBusinessPart(code);
+  status('组成已保存；旧 BOM、工艺和成本须按新版本更新。',true);
+}
+
+function packagingConfirmSectionSize(code, sectionId, body) {
+  return packagingSectionsWrite(code,`/${encodeURIComponent(sectionId)}/size-confirm`,body);
+}
+
+function bindPackagingSectionsEditor(row, editable) {
+  const host = $('packagingSectionsEditor');
+  if (!host || !editable) return;
+  const read = line => ({section_id:line.dataset.sectionId,
+    name:line.querySelector('[data-section-name]').value.trim(),
+    material_text:line.querySelector('[data-section-material]').value.trim(),
+    quantity:Number(line.querySelector('[data-section-quantity]').value),
+    component_ids:Array.from(line.querySelector('[data-section-components]').selectedOptions).map(o=>o.value)});
+  host.querySelectorAll('[data-section-remove]').forEach(button => button.addEventListener('click', () => button.closest('fieldset').remove()));
+  host.querySelectorAll('[data-section-confirm]').forEach(button => button.addEventListener('click', async () => {
+    const line = button.closest('fieldset'), edit = read(line);
+    const original = (row.sections || []).find(s=>s.section_id === edit.section_id);
+    if (!original || JSON.stringify([...edit.component_ids].sort()) !== JSON.stringify([...(original.component_ids || [])].sort())
+        || edit.quantity !== Number(original.quantity) || edit.name !== original.name
+        || edit.material_text !== String(original.material_text || '')) {
+      status('请先保存组成修改，再确认本部分尺寸。',false); return;
+    }
+    button.disabled = true;
+    try { await packagingConfirmSectionSize(row.business_part_code,edit.section_id,{
+      length_mm:Number(line.querySelector('[data-section-length]').value),
+      width_mm:Number(line.querySelector('[data-section-width]').value),
+      note:line.querySelector('[data-section-note]').value.trim()}); }
+    catch (error) { button.disabled=false; status(error.message,false); }
+  }));
+  const add = $('packagingAddSection'), save = $('packagingSaveSections');
+  if (add) add.addEventListener('click', () => {
+    const next = {section_id:'',name:'新增部分',quantity:1,component_ids:[],estimated_size:{},confirmed_size:{}};
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = packagingSectionsMarkup({sections:[next]},currentPackagingBusinessParts,true);
+    const line = wrapper.querySelector('fieldset');
+    host.appendChild(line);
+    line.querySelector('[data-section-remove]').addEventListener('click',()=>line.remove());
+    line.querySelector('[data-section-confirm]').disabled=true;
+  });
+  if (save) save.addEventListener('click', async () => {
+    save.disabled=true;
+    try { await packagingSectionsWrite(row.business_part_code,'',{sections:Array.from(host.querySelectorAll('fieldset')).map(read)}); }
+    catch (error) { save.disabled=false; status(error.message,false); }
+  });
+}
+
 function openPackagingBusinessPart(code, requestedCandidateIndex) {
   const wanted = String(code || "");
   const rows = packagingBusinessPartRows(currentPackagingBusinessParts);
@@ -4010,11 +4147,16 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
     entity_ids: candidateEntityIds,
     bbox: candidateEntityIds.length ? null : (candidate.bbox || null),
   } : null;
-  const figureBinding = (String(binding.status || "") === "bound"
+  let figureBinding = (String(binding.status || "") === "bound"
     || (String(binding.status || "") === "partial" && binding.candidate_id
         && Array.isArray(binding.entity_ids) && binding.entity_ids.length))
     ? (binding.candidate_id ? Object.assign({}, binding, {bbox: null, component_ids: []}) : binding)
     : (candidateBinding || binding);
+  const sections = Array.isArray(row.sections) ? row.sections : [];
+  const sectionKey = `${currentProject}:${wanted}`;
+  const viewedSection = sections.find(s=>s.section_id === packagingSectionViews.get(sectionKey));
+  if (viewedSection) figureBinding = {...viewedSection,bbox:null,exact_entities:true};
+  else if (sections.length > 1) figureBinding = {...binding,bbox:null,exact_entities:true};
   const block = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
   const reference = block(row.reference) || block(row["author" + "ity"]) || {};
   const disclosures = packagingAuthorityDisclosureLines(currentPackagingBusinessParts || {});
@@ -4068,6 +4210,8 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
         + figureHtml
         + `<div class="packaging-part-shape-bar">`
         + `<span class="packaging-part-shape-zoom" data-qq-shape-zoom-label="1">100%</span>`
+        + (sections.length ? `<select id="packagingSectionViewSelect" aria-label="查看组成部分"><option value="">全部组成</option>`
+          + sections.map(s=>`<option value="${esc(s.section_id)}"${viewedSection && viewedSection.section_id === s.section_id ? ' selected' : ''}>${esc(s.name)}</option>`).join('')+`</select>` : '')
         + (candidates.length > 1 ? `<select id="packagingPartCandidateSelect"`
           + `${canEditCandidates ? "" : " disabled"}`
           + ` aria-label="切换候选图形">`
@@ -4078,6 +4222,10 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
         + `</div>`
         + `</div>` + PACKAGING_CAD_RULE_LEGEND;
       bindPackagingPartShapeInteractions(figureHost);
+      const sectionSelector = $('packagingSectionViewSelect');
+      if (sectionSelector) sectionSelector.addEventListener('change',()=>{
+        packagingSectionViews.set(sectionKey,sectionSelector.value); openPackagingBusinessPart(wanted);
+      });
       const selector = $("packagingPartCandidateSelect");
       if (selector) selector.addEventListener("change", async () => {
         const selectedIndex = Number(selector.value);
@@ -4214,18 +4362,18 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
              + `${esc((currentPackagingBusinessParts || {}).derived_from_drawing
                ? "按人工确认的图纸尺寸算材料费。" : "这一件没有几何：按对照表的尺寸算材料费。")}</div>`
              + `<button id="packagingBusinessPartCostBySize" class="part-row-action"`
-             + ` type="button">按清单尺寸算材料费</button>`
+             + ` type="button">${sections.length > 1 ? '按全部组成算材料费' : '按清单尺寸算材料费'}</button>`
            : "")
         + (processTarget.ok
            ? `<div class="packaging-part-note" data-qqBusinessProcess="1">`
              + `${esc((currentPackagingBusinessParts || {}).derived_from_drawing
                ? "按人工确认的图纸尺寸与材料原文排工序。" : "这一件没有几何：按对照表的原文与尺寸排工序。")}</div>`
              + `<button id="packagingBusinessPartProcessByAuthority" class="part-row-action"`
-             + ` type="button">工艺推荐（按对照表）</button>`
+             + ` type="button">${sections.length > 1 ? '工艺推荐（全部组成）' : '工艺推荐（按对照表）'}</button>`
            : "");
     const manualBinding = binding.status === "bound" && ["manual", "auto"].includes(binding.bound_by);
     const confirmedSize = row.confirmed_size || {};
-    const sizeAction = canEditCandidates && manualBinding
+    const sizeAction = canEditCandidates && manualBinding && sections.length <= 1 && row.sections_source !== 'manual'
       ? `<div class="packaging-part-note">按原 CAD 标注逐件核对尺寸；确认后才能进入 BOM，不能照候选包围盒直接填。</div>`
         + `<label>长(mm) <input id="packagingConfirmedLength" type="number" min="0.001" step="0.001"`
         + ` value="${esc(String(confirmedSize.length_mm || ""))}" style="width:90px"></label> `
@@ -4235,7 +4383,8 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
         + ` value="${esc(String(confirmedSize.note || ""))}" style="max-width:240px"> `
         + `<button id="packagingConfirmSize" class="part-row-action" type="button">确认尺寸</button>`
       : "";
-    actions.innerHTML = downstream + note + sizeAction;
+    actions.innerHTML = downstream + note + sizeAction + packagingSectionsMarkup(row,currentPackagingBusinessParts,canEditCandidates);
+    bindPackagingSectionsEditor(row,canEditCandidates);
     const confirmSize = $("packagingConfirmSize");
     if (confirmSize) confirmSize.addEventListener("click", async () => {
       const length = Number(($('packagingConfirmedLength') || {}).value);

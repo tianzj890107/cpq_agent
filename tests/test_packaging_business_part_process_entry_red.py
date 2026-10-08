@@ -249,10 +249,12 @@ class CGuardrails(unittest.TestCase):
         # 视觉复核新增人工确认候选的 geometry-binding PUT；图纸尺寸人工确认再新增
         # size-confirm PUT。两条都是明确的写入口，计数重指为 7。
         src = _source(APP_JS)
-        self.assertEqual(8, src.count("packaging-business-parts/"),
-                         "新增入口只能是 geometry-binding、size-confirm 与 auto-bind-candidates")
+        # 多组成闭环 Spec 新增一个共用 sections 写入入口（组成与逐部分尺寸），其余冻结不变。
+        self.assertEqual(9, src.count("packaging-business-parts/"),
+                         "额外入口仅限本轮声明的 sections 写入")
+        self.assertIn('/sections${suffix}',src)
         self.assertEqual(1, src.count("/geometry-binding"))
-        self.assertEqual(1, src.count("/size-confirm"))
+        self.assertEqual(2, src.count("/size-confirm"))  # 整件兼容 + 逐部分确认
         self.assertEqual(1, src.count("/auto-bind-candidates"))
         red = _source(COST_ENTRY_RED)
         self.assertIn("重指", red, "`## 412` 的 E4 必须写明重指而不是偷偷放宽（Spec §C4）")

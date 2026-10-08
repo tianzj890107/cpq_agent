@@ -255,7 +255,11 @@ if(!copy.includes('无需导入对照表')||!copy.includes('CAD'))throw Error(co
         src=(ROOT/'确认需求解析结果.html').read_text()
         script='''const currentSessionId='same'; let LAST_PACKAGING_PACKAGE=null;
 let LAST_PACKAGING_QUOTE={gross_margin_rate:0};let PACKAGING_RESTORED_RATE=0;
-const PACKAGING_PANEL_KEY='BOX|v1|12|0';const window={PackagingQuotePanel:{}};
+const PACKAGING_PANEL_KEY='BOX|v1|12|0';const window={PackagingQuotePanel:{renderPackage:()=>{}}};
+// 2026-10-08：缓存命中分支现在也把结构化快照画进 `#packagingPackageContent`
+// （Spec `packaging-quote-workspace-render-routing.md`），补最小 DOM 桩；
+// `applied!==1` 的断言一个字没动。
+const document={getElementById:()=>null};
 let applied=0;function applyPackagingQuoteRows(){applied++;}
 function restorePackagingPricing(){} function packagingMarginRate(){return 0;}
 '''+'async '+js_function(src,'renderPackagingQuotePanel')+'''

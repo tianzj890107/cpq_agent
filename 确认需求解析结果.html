@@ -4324,6 +4324,7 @@
                    ((pkg.cost || {}).total_cost === undefined ? '' : (pkg.cost || {}).total_cost),
                    (rate === null ? '' : rate)].join('|');
       if (key === PACKAGING_PANEL_KEY && LAST_PACKAGING_QUOTE) {
+        window.PackagingQuotePanel.renderPackage(document.getElementById('packagingPackageContent'), pkg);
         applyPackagingQuoteRows(LAST_PACKAGING_QUOTE);
         return null;
       }
@@ -4341,6 +4342,7 @@
           '<span class="readonly-chip" id="packagingPanelChip">系统计算</span></div>' +
           '<i class="ti ti-chevron-down collapse-arrow"></i>' +
         '</div><div class="collapse-content">' +
+          '<div id="packagingPackageContent"></div>' +
           '<label for="packagingMarginInput">毛利率（%）</label> ' +
           '<input id="packagingMarginInput" type="number" min="0" max="99.99" step="0.01"' +
           ' value="' + (rate === null ? '' : String((rate * 100).toFixed(2))) + '"' +
@@ -4353,6 +4355,7 @@
         renderPackagingQuotePanel({ packaging_package: LAST_PACKAGING_PACKAGE });
       });
       const content = document.getElementById('packagingQuoteContent');
+      window.PackagingQuotePanel.renderPackage(document.getElementById('packagingPackageContent'), pkg);
       const options = { base: AGENT_URL };
       if (rate === null) {
         content.textContent = '请先输入明确的毛利率，再点“按此毛利率重算”；系统不会默认填入费率。';

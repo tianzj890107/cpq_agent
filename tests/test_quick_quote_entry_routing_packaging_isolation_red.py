@@ -50,12 +50,17 @@ class QuoteModeRoutingRed(unittest.TestCase):
         self.assertTrue("submitQuickQuoteRequirement" in HOME,
                         "缺少文本输入直接驱动快速报价的入口")
 
-    def test_quick_submission_stays_on_homepage(self):
+    def test_quick_submission_enters_instance_workspace(self):
+        # 新 Spec packaging-quote-workspace-render-routing §2 替代留在首页的旧口径。
         body = js_function(HOME, "submitQuickQuoteRequirement")
         self.assertTrue(body, "缺少 submitQuickQuoteRequirement()")
         self.assertNotIn("确认需求解析结果.html", body)
-        for token in ("openQuickQuoteSession", "matchQuickQuoteCases"):
+        for token in ("openQuickQuoteSession", "navigateQuickQuoteWorkspace"):
             self.assertIn(token, body, f"快速提交没有调用 {token}")
+        self.assertNotIn('matchQuickQuoteCases(', body)
+        workspace = js_function(HOME, 'initQuickQuoteWorkspacePage')
+        self.assertIn('openQuickQuoteWorkspace', workspace)
+        self.assertIn('matchQuickQuoteCases', workspace)
 
     def test_quote_mode_is_persisted_with_session(self):
         create = py_function(SERVER, "_handle_quick_quote_session_create")
@@ -121,4 +126,3 @@ class ConversationRed(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

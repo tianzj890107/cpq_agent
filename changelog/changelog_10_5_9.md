@@ -63,6 +63,22 @@
   不入库的未跟踪项：`拆分程序/`（独立拆分程序与酒盒拆分方法说明，仓库运行路径无引用）、
   `.~南京锂能DA梳理.xlsx`（Excel 锁文件）。
 
+## 527. 包装报价结构化展示、快速卡片路由及选中态（10-8，本地）
+
+- 新增 Spec `packaging-quote-workspace-render-routing.md` 与 6 项测试，初始四项红测实测失败后实现；补实际执行的卡片/创建跳转、URL 编码、刷新与读取失败保护。
+- 首页只选择精准/快速路线；提交创建快速实例后跳专属 URL，卡片回到同一实例页面，不在首页展开操作。复用已有命令/费率引擎；读失败不新建，提供重试，刷新恢复服务端工作区。
+- 修正快速按钮永久选中样式，互斥选中态以实际模式为准。包装精准报价结构化展示完整快照及嵌套组成/尺寸/材料/用量，未填毛利率也可查看；定价表按真实列渲染，保留零值、false 与新增字段，不丢数据。
+- 快速报价 489 项通过（跳过 3 项），包装报价 168 项通过；两页面内联 JS、两个组件语法及 diff 检查通过。旧“留在首页”测试按用户本轮路由要求更新。
+- 未提交、未推送、未部署、未启动服务、未浏览器视觉验收；无后端协议/数据库更改。上一批多组成实现及用户未跟踪文件均保留。
+
+## 526. 包装一个业务零件多组成部分闭环（10-8，本地）
+
+- 用户要求直接完成 Spec、红测、实现；新增 `docs/specs/packaging-multipart-business-part-complete.md` 和 30 项红测，落实组成保存、独立尺寸/用量/材料、版本证据、整体及单部分 CAD 预览。
+- 普通单个名称也可对应多个真实闭合图形；补单实体圆候选、排模副本隔离及负坐标平移测试。内部孔/工艺线按轮廓和角色归属；嵌套刀线存在组成歧义时不自动重复计材。
+- 工艺、材料成本实际任务和 BOM 消费全部组成，保持父业务编码；缺组成/尺寸/费率不伪造完整总额。工艺合并保留组成归属并重编号依赖，成本按实际用量计入。
+- 相关 22 个模块 323 项测试全部通过（53.979 秒）；前端模块语法、`git diff --check` 通过。四个旧接口/件数冻结测试按新 Spec 更新，保留 CAD 证据检查。
+- 真实旧缓存只读诊断圆盘盒有 5 个多组成业务行，不等于所有件已拆准。无 BOM 输入、无生产库写入；本批未全仓测试、未提交、未推送、未部署，保留用户 Excel 锁文件与 `拆分程序/`。
+
 ## 525. `## 522`–`## 524` 的提交、双远端推送与 34 部署记录（10-8）
 
 - 提交 `7b16541`（`## 522-524 包装线上验收记录、曲线/零件尺寸修复与全量回归收口`），入库 46 个
@@ -91,3 +107,28 @@
 - 能力声明不变：**DWG 编排能力完成，真实转换能力未验收**；门禁两项人工项
   （`converter_license`、`real_samples_e2e_passed`）未代签。真实样图的整件边界 / 尺寸准确率与
   线上页面视觉仍须另行实图验收，本批不构成客户正式报价授权。
+
+## 528. 收口 `## 526`/`## 527`：全量回归补齐 3 条漏改并落实「精确重指」（10-8，Codex）
+
+- 触发：`## 526`（多组成闭环）与 `## 527`（报价结构化展示与快速卡片路由）各自只跑了相关模块
+  （22 模块 323 项 / 489 + 168 项），都标了「未全仓测试」。本轮跑全量
+  `unittest discover -s tests -p 'test_*.py'` → `Ran 6955 … FAILED (failures=3, skipped=28)`。
+- 3 条红全部是同一类「路由计数冻结」与一处 DOM 桩缺口，**没有**业务口径回归：
+  - `test_packaging_business_part_basis_in_panel_red::test_c6`、
+    `test_packaging_authority_workbook_upload_red::test_d3`：`packaging-business-parts/` 8 → 9、
+    `/size-confirm` 1 → 2 —— 与 `## 526` 已重指的另外三份逐字一致，只是当时漏了这两份；
+  - `test_packaging_online_business_closure_red::test_cached_quote_repopulates_new_step_tables`：
+    缓存命中分支现在也把结构化快照画进 `#packagingPackageContent`，评测串缺 `document` 与
+    `renderPackage` 最小桩（`applied!==1` 的断言本身一个字没动）。
+- 纠一处**判据放宽**：`## 526` 把
+  `test_packaging_business_part_size_must_be_confirmed_by_dimension_red::test_e1` 的
+  「derived / sized 件数**精确相等**」改成了 `assertGreaterEqual` 下限。下限不是重指，本轮改回
+  `assertEqual` 并按新 Spec 精确填写实测值：圆盘盒 **36 → 46**（derived 与 sized 都是 46），
+  酒盒 26 不变；新 Spec §1 允许的单实体闭合圆正是这 10 件。原有的
+  `component_ids` 与 `geometry_region` 证据断言保留。
+- Spec 留痕：给 `packaging-business-part-size-must-be-confirmed-by-dimension.md` 补附录 A
+  （36 → 46 的授权与「仍是精确相等」），给 `packaging-multipart-business-part-complete.md` 补
+  附录 A 汇总本批同步的**全部**旧冻结值（含本轮补的 3 份），逐条写明哪份 Spec 授权。
+- 验证：全量复跑 → **`Ran 6955 … OK (skipped=28)`**（零红）；`git diff --check`、改动 JS
+  `node --check`、改动/新增 Python `py_compile` 全过。
+- 状态：本地提交 + 双远端推送 + 34 部署（详见 `## 529`）。

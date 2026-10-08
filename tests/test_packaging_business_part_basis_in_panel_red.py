@@ -380,9 +380,12 @@ class CTaskResultsCarryTheBasis(unittest.TestCase):
         # 批次级冻结**重指**为 5：多出来的那一条是按图纸补推导（`…/packaging-business-parts/derive`）。
         # 视觉复核新增人工确认候选的 geometry-binding PUT，计数精确重指为 6。
         # 图纸尺寸人工确认单列 size-confirm PUT，冻结总数从 6 重指为 7。
-        self.assertEqual(8, _source(APP_JS).count("packaging-business-parts/"))
+        # 2026-10-08：多组成闭环 Spec `packaging-multipart-business-part-complete.md` 新增共用
+        # sections 写入与逐部分尺寸确认两个入口，计数精确重指为 9 / size-confirm 2，逐条点名。
+        self.assertEqual(9, _source(APP_JS).count("packaging-business-parts/"))
+        self.assertIn('/sections${suffix}', _source(APP_JS))
         self.assertEqual(1, _source(APP_JS).count("/geometry-binding"))
-        self.assertEqual(1, _source(APP_JS).count("/size-confirm"))
+        self.assertEqual(2, _source(APP_JS).count("/size-confirm"))
         self.assertEqual(1, _source(APP_JS).count("/auto-bind-candidates"))
 
 

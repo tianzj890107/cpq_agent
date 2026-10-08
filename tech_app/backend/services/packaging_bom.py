@@ -584,6 +584,39 @@ def business_part_rows(business_doc: Any) -> list:
         if not code or code in seen:
             continue
         seen.add(code)
+        if len(row.get('sections') or []) > 1 or row.get('sections_source') == 'manual':
+            from . import packaging_sections
+            reference = _reference_block(row)
+            usage = _positive_number(reference.get('quantity'))
+            for section in row.get('sections') or []:
+                size = section.get('confirmed_size') or {}
+                valid = (section.get('status') == 'bound' and section.get('entity_ids')
+                         and set(size.get('entity_ids') or []) == set(section['entity_ids'])
+                         and size.get('source') in ('manual_confirmed_drawing','verified_cad_dimension'))
+                if size.get('source') == 'manual_confirmed_drawing' and not (size.get('confirmed_by') and size.get('note')):
+                    valid = False
+                length = _positive_number(size.get('length_mm')) if valid else None
+                width = _positive_number(size.get('width_mm')) if valid else None
+                if not row.get('sections_complete'):
+                    length = width = None  # 组成解释尚有歧义，不能以一部分已确认尺寸偷跑成本。
+                missing = [name for name,value in (('length_mm',length),('width_mm',width)) if value is None]
+                if not row.get('sections_complete'):
+                    missing.append('section_composition')
+                sid = str(section.get('section_id') or '')
+                child_reference = dict(reference, length_mm=length, width_mm=width,
+                    quantity=usage*packaging_sections.positive(section.get('quantity')) if usage and packaging_sections.positive(section.get('quantity')) else None)
+                if section.get('material_text'):
+                    child_reference['material_text'] = section['material_text']
+                child_rows = business_part_rows({'derived_from_drawing':False,'business_parts_id':doc_id,
+                    'business_parts_hash':doc_hash,'business_parts':[{'business_part_code':code+'::'+sid,
+                    'name':section.get('name'),'reference':child_reference}]})
+                for child in child_rows:
+                    child['missing_variables'], child['status'] = missing, 'needs_input' if missing else 'computed'
+                    child['size_source_json'] = _json_text({'kind':size.get('source') or 'unconfirmed_section',
+                        'parent_part_code':code,'section_id':sid,'entity_ids':section.get('entity_ids') or [],
+                        'business_parts_id':doc_id,'business_parts_hash':doc_hash})
+                    out.append(child)
+            continue
         reference = _reference_block(row)
         confirmed_size = row.get("confirmed_size") if isinstance(row.get("confirmed_size"), dict) else {}
         binding = row.get("geometry_binding") if isinstance(row.get("geometry_binding"), dict) else {}
@@ -670,6 +703,10 @@ def business_material_rows(business_doc: Any, *, materials: Any = None,
         text = _text(reference.get("material_text"))
         if text and text not in texts:
             texts.append(text)
+        for section in row.get('sections') or []:
+            text = _text(section.get('material_text'))
+            if text and text not in texts:
+                texts.append(text)
     if not texts:
         return []
     index = materials if isinstance(materials, list) else []

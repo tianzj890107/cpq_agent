@@ -4153,6 +4153,9 @@ def business_parts_document(reference: Any, geometry: Any, *,
     doc["business_parts_hash"] = ""
     if doc["derived_from_drawing"]:
         doc = auto_bind_business_candidates(doc)
+        from . import packaging_sections
+        doc['business_parts'] = [packaging_sections.hydrate_part(row, evidence.get('components') or [])
+                                 for row in doc['business_parts']]
     doc["business_parts_id"], doc["business_parts_hash"] = _business_identity(doc)
     return doc
 
@@ -4531,6 +4534,8 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
             "bound_at": "" if source == "auto" else _stamp(),
             "rule_id": BUSINESS_BINDING_RULE_ID, "geometry_component_ref": known,
             "candidate_id": selected_id, "size_confirmed": False,
+            "section_dimension_evidence": copy.deepcopy(selected.get('section_dimension_evidence') or []),
+            "portion_component_groups": ([known] if 'cut_lines_complementary' in (selected.get('evidence_reasons') or []) else []),
             "size_source": "none" if candidate_mismatch else "geometry_binding",
             "attribution": {"status": ("auto_selected" if status == "bound" and source == "auto" else
                                        "human_confirmed_candidate" if candidate_mismatch else
@@ -4540,6 +4545,9 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
         }
         from . import packaging_layout
         row["cad_fragments"] = packaging_layout.part_fragments(known, evidence.get("components"))
+        from . import packaging_sections
+        row.pop('sections_source', None)
+        row.update(packaging_sections.hydrate_part(row, evidence.get('components') or []))
         previous_size = row.pop("confirmed_size", None)
         if isinstance(previous_size, dict) and previous_size:
             row.setdefault("confirmed_size_history", []).append(dict(previous_size))
@@ -4575,6 +4583,8 @@ def candidate_confidence_percent(candidate: Any) -> int:
     score += 0.20 if item.get("anchor_in_region") is True else 0
     score += 0.20 if item.get("dimension_spatial") is True else 0
     score += 0.10 if item.get("geometry_status") == "supported" else 0
+    if item.get('name_anchor_entity_id') and 'compound_name_anchor' in (item.get('evidence_reasons') or []):
+        score += 0.25  # 该名字拥有完整多组成候选，优于只按距离拿一个轮廓。
     box = item.get("bbox")
     distance = _num(item.get("distance_mm"))
     if isinstance(box, (list, tuple)) and len(box) >= 4 and distance is not None and distance >= 0:
@@ -4597,7 +4607,10 @@ def auto_bind_business_candidates(doc: Any) -> Dict[str, Any]:
             continue
         code = _text(original.get("business_part_code"))
         binding = original.get("geometry_binding") if isinstance(original.get("geometry_binding"), dict) else {}
-        if not code or binding.get("status") == "bound" or binding.get("bound_by") == "manual":
+        has_multipart = any(c.get('name_anchor_entity_id') and c.get('member_total',1) > 1
+                            for c in binding.get('candidates') or [])
+        if (not code or binding.get('bound_by') == 'manual'
+                or (binding.get('status') == 'bound' and (not has_multipart or binding.get('bound_by') == 'auto'))):
             continue
         candidates = [item for item in (binding.get("candidates") or []) if isinstance(item, dict)]
         if not candidates:
@@ -4650,6 +4663,8 @@ def confirm_business_part_size(doc: Any, code: Any, length_mm: Any, width_mm: An
                    if isinstance(row, dict) and _text(row.get("business_part_code")) == _text(code)), None)
     if target is None:
         raise ValueError("business_part_code_not_found")
+    if len(target.get('sections') or []) > 1:
+        raise ValueError('section_size_confirmation_required')
     binding = target.get("geometry_binding") if isinstance(target.get("geometry_binding"), dict) else {}
     if (binding.get("status") != "bound" or binding.get("bound_by") not in ("manual", "auto")
             or not binding.get("component_ids")):
@@ -4673,6 +4688,17 @@ def verified_business_part_input_row(row: Any, doc: Any) -> Dict[str, Any]:
     """单件输入只用人工核对或空间关联 CAD 标注；自动候选/bbox 仍不得放行。"""
     result = copy.deepcopy(row) if isinstance(row, dict) else {}
     if not isinstance(doc, dict) or not doc.get("derived_from_drawing"):
+        return result
+    if not result.get('sections') and (result.get('geometry_binding') or {}).get('component_ids'):
+        from . import packaging_sections
+        result = packaging_sections.hydrate_part(result,(doc.get('geometry_evidence') or {}).get('components') or [])
+    if len(result.get('sections') or []) > 1 or result.get('sections_source') == 'manual':
+        from . import packaging_sections
+        result['sections'] = packaging_sections.verified_sections(result)
+        reference = dict(business_part_reference_block(result))
+        for key in ('length_mm', 'width_mm', 'product_size_text'):
+            reference.pop(key, None)
+        result[REFERENCE_BLOCK_KEY], result[LEGACY_REFERENCE_BLOCK_KEY] = reference, dict(reference)
         return result
     binding = result.get("geometry_binding") if isinstance(result.get("geometry_binding"), dict) else {}
     confirmed = result.get("confirmed_size") if isinstance(result.get("confirmed_size"), dict) else {}
@@ -4856,6 +4882,29 @@ def business_cost_inputs(row: Any, *, requirement: Any = None,
     绝不拿包围盒或几何轮廓冒充清单尺寸。
     """
     record = row if isinstance(row, dict) else {}
+    if len(record.get('sections') or []) > 1 or record.get('sections_source') == 'manual':
+        from . import packaging_sections
+        try:
+            children = packaging_sections.section_input_rows(record)
+        except ValueError as exc:
+            return {'ok':False,'code':str(exc),'message':'组成尺寸尚未核对：'+str(exc),
+                    'missing_variables':['section_dimensions'],'part_code':record.get('business_part_code')}
+        reference = business_part_reference_block(record)
+        usage = packaging_sections.positive(reference.get('quantity')) or 1
+        sections = []
+        for child in children:
+            value = business_cost_inputs(child, requirement=requirement, quantity=quantity)
+            if not value['ok']:
+                return dict(value, part_code=record.get('business_part_code'),
+                            message=child['name']+'：'+value['message'])
+            sections.append({**value,'section_id':child['section_id'],'name':child['name'],
+                             'quantity':child['quantity']*usage})
+        return {'ok':True,'part_code':record['business_part_code'],'name':record.get('name'),
+                'material_text':reference.get('material_text') or record.get('material'),
+                'variables':{},'sections':sections,'size_source':'section_dimensions',
+                'size_source_ref':'CAD sections','size_text':'；'.join(
+                    s['name']+' '+_mm_text(s['variables']['cut_length'])+'×'+_mm_text(s['variables']['cut_width'])+' mm'
+                    for s in sections),'missing_variables':[]}
     reference = business_part_reference_block(record)
     code = _text(record.get("business_part_code"))
     material_text = _text(reference.get("material_text")) or _text(record.get("material"))
@@ -4957,6 +5006,26 @@ def business_process_inputs(row: Any) -> Dict[str, Any]:
     由路由拼进既有 `process.outline_process()` 的 `note`。
     """
     record = row if isinstance(row, dict) else {}
+    if len(record.get('sections') or []) > 1 or record.get('sections_source') == 'manual':
+        from . import packaging_sections
+        try:
+            children = packaging_sections.section_input_rows(record)
+        except ValueError as exc:
+            return {'ok':False,'code':str(exc),'message':'组成尺寸尚未核对：'+str(exc),
+                    'missing_variables':['section_dimensions'],'part_code':record.get('business_part_code')}
+        sections = []
+        parent_usage = packaging_sections.positive(business_part_reference_block(record).get('quantity')) or 1
+        for child in children:
+            value = business_process_inputs(child)
+            if not value['ok']:
+                return dict(value,part_code=record.get('business_part_code'),message=child['name']+'：'+value['message'])
+            sections.append({**value,'section_id':child['section_id'],'name':child['name'],
+                             'row':child,'quantity':child['quantity']*parent_usage,'entity_ids':child['entity_ids']})
+        return {'ok':True,'part_code':record['business_part_code'],'name':record.get('name'),
+                'sections':sections,'size_source':'section_dimensions','size_source_ref':'CAD sections',
+                'size_text':'；'.join(s['name']+' '+_mm_text(s['size_length'])+'×'+_mm_text(s['size_width'])+' mm' for s in sections),
+                'grounding':'\n'.join(s['name']+'（用量 '+str(s['quantity'])+'）：'+s['grounding'] for s in sections),
+                'size_length':None,'size_width':None,'missing_variables':[]}
     reference = business_part_reference_block(record)
     code = _text(record.get("business_part_code"))
     material_text = _text(reference.get("material_text")) or _text(record.get("material"))

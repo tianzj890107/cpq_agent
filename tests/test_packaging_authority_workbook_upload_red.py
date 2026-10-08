@@ -412,10 +412,14 @@ class DWiring(unittest.TestCase):
         # 与 `test_packaging_business_part_{basis_in_panel,cost_by_authority_size,
         # process_by_authority_route,process_entry}_red` 的同一冻结逐字一致。
         # 图纸尺寸人工确认再新增一条 size-confirm PUT；计数仍精确冻结。
-        self.assertEqual(8, self.SOURCE.count("packaging-business-parts/"),
-                         "新增入口只能是 geometry-binding、size-confirm 与 auto-bind-candidates")
+        # 2026-10-08：多组成闭环 Spec `packaging-multipart-business-part-complete.md` 新增共用
+        # sections 写入与逐部分尺寸确认两个入口，计数精确重指为 9 / size-confirm 2（逐条点名，
+        # 不是放宽）。
+        self.assertEqual(9, self.SOURCE.count("packaging-business-parts/"),
+                         "新增入口只能是 sections、geometry-binding、size-confirm 与 auto-bind-candidates")
+        self.assertIn('/sections${suffix}', self.SOURCE)
         self.assertEqual(1, self.SOURCE.count("/geometry-binding"))
-        self.assertEqual(1, self.SOURCE.count("/size-confirm"))
+        self.assertEqual(2, self.SOURCE.count("/size-confirm"))
         self.assertEqual(1, self.SOURCE.count("/auto-bind-candidates"))
 
     def test_d4_pure_functions_have_no_dom_or_fetch(self):

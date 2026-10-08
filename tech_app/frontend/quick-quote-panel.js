@@ -996,6 +996,11 @@
         lastParseView = quickQuoteParseView(result);
         holder.innerHTML = "";
         holder.appendChild(renderParse(lastParseView, options));
+        if (result && result.ok === true && typeof options.onParsed === 'function') {
+          Promise.resolve(options.onParsed(result)).catch(function (exc) {
+            holder.appendChild(el('p', 'qq-error', '解析结果匹配失败：' + String(exc)));
+          });
+        }
       }).catch(function (exc) {
         lastParseView = quickQuoteParseView({ok: false, error: String(exc)});
         holder.innerHTML = "";

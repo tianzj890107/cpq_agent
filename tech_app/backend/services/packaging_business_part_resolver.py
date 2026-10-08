@@ -633,7 +633,9 @@ def _is_substantial(region: Dict[str, Any]) -> bool:
         return False
     if length * width < MIN_OUTLINE_AREA_MM2:
         return False
-    return int(region.get("entity_total") or 0) >= MIN_OUTLINE_ENTITIES
+    count = int(region.get('entity_total') or 0)
+    # A CIRCLE or closed polyline is a complete outline with one CAD entity.
+    return count >= MIN_OUTLINE_ENTITIES or (count >= 1 and region.get('outline_status') == 'closed')
 
 
 def _region_record(region_id: str, component_ids: Any, entity_ids: Any, bbox: Any,
@@ -1675,8 +1677,9 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
     rects = dimension_rects(ir)
     rows = _derived_rows(anchors)
     match = match_authority_parts(rows, anchors, regions, rects=rects)
+    from . import packaging_part_visual_review
+    match = packaging_part_visual_review.enrich_section_candidates(ir, rows, anchors, regions, rects, match)
     if use_model:
-        from . import packaging_part_visual_review
         match = packaging_part_visual_review.review_matches(
             ir, rows, anchors, regions, rects, match, reviewer=model_reviewer,
             progress=review_progress)

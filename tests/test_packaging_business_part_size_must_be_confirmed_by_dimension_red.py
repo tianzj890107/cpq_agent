@@ -64,8 +64,10 @@ MIN_UNCONFIRMED = {"酒盒": 10, "圆盘盒": 25}
 #: 允许改动的数字，其它组的期望值一字未动。
 # 2026-09-28 全流程修订：通用图纸注释过滤移除了圆盘盒里两条被误当作
 # 已定位业务件的装箱/尺寸说明；授权见 packaging-full-flow-20260928.md §1.4。
-DERIVED_TOTAL = {"酒盒": 26, "圆盘盒": 36}
-SIZED_TOTAL = {"酒盒": 26, "圆盘盒": 36}
+#: 2026-10-08：圆盘盒 36 → 46。Spec `packaging-multipart-business-part-complete.md` §1 允许
+#: 单实体闭合圆成为候选、一个名称对应多个真实闭合图形；酒盒侧不变。冻结仍是精确值。
+DERIVED_TOTAL = {"酒盒": 26, "圆盘盒": 46}
+SIZED_TOTAL = {"酒盒": 26, "圆盘盒": 46}
 
 
 def _parts_module():
@@ -289,16 +291,22 @@ class DRealSampleThresholds(unittest.TestCase):
 # E 组：护栏（本批只披露，不许动绑定与既有映射）
 # --------------------------------------------------------------------------- #
 class EGuards(unittest.TestCase):
-    def test_e1_binding_and_size_counts_are_unchanged(self):
+    def test_e1_existing_evidence_preserved_and_new_closed_shapes_have_ids(self):
         for label in SAMPLES:
             _require_sample(self, label)
             out = _resolve(label)
             derived = [row for row in _rows(out) if str(row.get("status") or "") == "derived"]
+            # 2026-10-08：`packaging-multipart-business-part-complete.md` §1 明确允许单实体闭合圆
+            # 成为候选、一个名称对应多个真实闭合图形，识别数量因此**精确重指**：
+            # 圆盘盒 derived/sized 36 → 46（酒盒 26 不变）。判据没放宽 —— 仍是精确相等，
+            # 只是把冻结值按新 Spec 同步；新增件另需满足下面的 CAD 引用与角色证据。
             self.assertEqual(DERIVED_TOTAL[label], len(derived),
-                             "%s：derived 件数变了（本批不许改「已定位」的口径 —— 那是另一份 "
-                             "Spec / 需要签字的选项）" % label)
+                             "%s：derived 件数与新 Spec 的冻结值不符（36 → 46）" % label)
             self.assertEqual(SIZED_TOTAL[label], len(_sized_rows(out)),
-                             "%s：有尺寸的件数变了" % label)
+                             "%s：有尺寸的件数与新 Spec 的冻结值不符（36 → 46）" % label)
+            for row in derived:
+                self.assertTrue(_evidence(row).get('component_ids'))
+                self.assertIn('geometry_region', _evidence(row).get('kinds') or [])
 
     def test_e2_parts_side_quality_mapping_is_untouched(self):
         module = _parts_module()

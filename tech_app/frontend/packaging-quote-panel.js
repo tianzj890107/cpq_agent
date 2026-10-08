@@ -114,7 +114,7 @@
         var dt = document.createElement("dt");
         dt.textContent = field.label || field.key || "";
         var dd = document.createElement("dd");
-        dd.textContent = field.value === undefined || field.value === null ? "" : String(field.value);
+        appendValue(dd, field.value);
         dl.appendChild(dt);
         dl.appendChild(dd);
       });
@@ -123,13 +123,21 @@
     if (rows.length) {
       var table = document.createElement("table");
       table.className = "pkg-quote-rows";
+      var keys = [];
+      rows.forEach(function (row) { Object.keys(row).forEach(function (key) {
+        if (keys.indexOf(key) < 0) keys.push(key);
+      }); });
+      var header = document.createElement("tr");
+      keys.forEach(function (key) {
+        var th = document.createElement("th"); th.textContent = key; header.appendChild(th);
+      });
+      table.appendChild(header);
       rows.forEach(function (row) {
         var tr = document.createElement("tr");
-        ["项目", "值", "公式", "来源"].forEach(function (key) {
-          if (row[key] === undefined) return;
+        keys.forEach(function (key) {
           var td = document.createElement("td");
           td.className = "pkg-quote-cell-" + key;
-          td.textContent = String(row[key]);
+          appendValue(td, row[key]);
           tr.appendChild(td);
         });
         if (tr.childNodes.length === 0) {
@@ -144,8 +152,72 @@
     return box;
   }
 
+  var FIELD_LABELS = {
+    requirement: '包装需求', bom: '零件与组成', items: '明细', sections: '组成部分',
+    route: '工艺路线', steps: '工艺步骤', cost: '成本测算', source: '来源与版本',
+    box_type: '盒型', name: '名称', material_text: '材料', material: '材料',
+    quantity: '用量', length_mm: '长度（mm）', width_mm: '宽度（mm）',
+    confirmed_size: '确认尺寸', estimated_size: '参考尺寸', total_cost: '总成本',
+    gaps: '待补项', status: '状态', item_key: '明细编号', parent_part_code: '父零件编码',
+    section_id: '组成编号', route_steps: '工艺步骤', bom_items: '零件明细',
+    cost_totals: '成本分项', cost_categories: '成本类别', version: '版本',
+    packaging_product_name: '包装产品名称', packaging_category: '包装类别',
+    box_type_code: '盒型编码', closure_type: '闭合方式', quote_quantity: '报价数量',
+    inner_length: '内长（mm）', inner_width: '内宽（mm）', inner_height: '内高（mm）',
+    face_paper_gsm: '面纸克重', v_groove: 'V 槽', customer_name: '客户',
+    part_code: '零件编码', part_name: '零件名称', bom_category: '明细类别',
+    unit: '单位', thickness_mm: '厚度（mm）', size_source_json: '尺寸来源',
+    unit_cost: '单位成本', amount: '金额', process_name: '工序名称',
+    step_no: '工序序号', dependencies: '前置工序', material_total: '材料费用',
+    process_total: '工艺费用', labor_total: '人工费用', tooling_total: '模具费用',
+    freight_total: '运输费用', packaging_total: '包装费用', other_total: '其他费用',
+    subtotal: '小计', loss_amount: '损耗费用', result_version: '结果版本',
+    evidence: '依据', sections_complete: '组成完整', section_gaps: '组成缺口'
+  };
+  function appendValue(target, value) {
+    if (value === undefined || value === null) { target.textContent = '—'; return; }
+    if (typeof value !== 'object') { target.textContent = String(value); return; }
+    if (Array.isArray(value)) {
+      if (!value.length) { target.textContent = '暂无明细'; return; }
+      value.forEach(function (item, index) {
+        var group = document.createElement('details');
+        group.open = value.length <= 4;
+        var title = document.createElement('summary');
+        title.textContent = (item && (item.name || item.part_name || item.title || item.item_key)) || ('明细 ' + (index + 1));
+        group.appendChild(title);
+        var content = document.createElement('div'); appendValue(content, item); group.appendChild(content);
+        target.appendChild(group);
+      }); return;
+    }
+    var dl = document.createElement('dl'); dl.className = 'pkg-quote-fields';
+    Object.keys(value).forEach(function (key) {
+      var dt = document.createElement('dt'); dt.textContent = FIELD_LABELS[key] || key;
+      var dd = document.createElement('dd'); appendValue(dd, value[key]);
+      dl.appendChild(dt); dl.appendChild(dd);
+    }); target.appendChild(dl);
+  }
+  function renderPackage(target, pkg) {
+    if (!target || !pkg) return null;
+    target.innerHTML = '';
+    Object.keys(pkg).forEach(function (key) {
+      var section = document.createElement('details'); section.className = 'pkg-quote-section';
+      section.open = ['requirement', 'bom', 'route', 'cost'].indexOf(key) >= 0;
+      var title = document.createElement('summary'); title.textContent = FIELD_LABELS[key] || key;
+      section.appendChild(title);
+      var content = document.createElement('div'); appendValue(content, pkg[key]); section.appendChild(content);
+      target.appendChild(section);
+    }); return target;
+  }
+  function ensureStyles() {
+    if (!document.head || document.getElementById('packagingQuoteStyles')) return;
+    var style = document.createElement('style'); style.id = 'packagingQuoteStyles';
+    style.textContent = '.pkg-quote-section{background:#fff;border:1px solid var(--color-border,#e5e7eb);border-radius:12px;padding:12px;margin:10px 0;overflow:auto}.pkg-quote-section summary{cursor:pointer;padding:8px;border-radius:6px}.pkg-quote-section summary:hover{background:var(--color-primary-light,#eff6ff)}.pkg-quote-fields{display:grid;grid-template-columns:minmax(100px,160px) minmax(0,1fr);gap:8px 12px}.pkg-quote-fields dt{color:var(--color-text-muted,#64748b)}.pkg-quote-fields dd{margin:0;overflow-wrap:anywhere}.pkg-quote-rows{width:100%;border-collapse:collapse}.pkg-quote-rows th,.pkg-quote-rows td{padding:8px;text-align:left;border-bottom:1px solid var(--color-border,#e5e7eb)}@media(max-width:640px){.pkg-quote-fields{grid-template-columns:1fr}.pkg-quote-fields dd{padding-bottom:8px}}';
+    document.head.appendChild(style);
+  }
+
   function render(target, payload) {
     if (!target) return null;
+    ensureStyles();
     target.innerHTML = "";
     var quote = (payload && payload.quote) || {};
     if (quote.draft || quote.publish_blocked) {
@@ -198,6 +270,7 @@
     isPackaging: isPackaging,
     price: price,
     render: render,
+    renderPackage: function (target, pkg) { ensureStyles(); return renderPackage(target, pkg); },
     renderCard: renderCard
   };
 })(typeof window !== "undefined" ? window : this);

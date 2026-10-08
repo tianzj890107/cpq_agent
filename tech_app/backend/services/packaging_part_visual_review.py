@@ -156,6 +156,10 @@ def _candidates(anchor: Tuple[float, float], regions: Any,
             "geometry_status": str(record.get("geometry_status") or ""),
             "view_id": str(record.get("view_id") or ""),
             "frame_id": str(record.get("frame_id") or ""),
+            "name_anchor_entity_id": str(record.get('name_anchor_entity_id') or ''),
+            "declared_section_names": list(record.get('declared_section_names') or []),
+            "portion_components": list(record.get('portion_components') or []),
+            "section_dimension_evidence": _section_dimension_proofs(record, regions, rects),
         })
     return out
 
@@ -877,10 +881,15 @@ def _compound_named_groups(ir: Any, regions: Any, views: Any, frames: Any) -> Li
     doc = ir if isinstance(ir, dict) else {}
     anchors = [row for row in resolver.extract_text_anchors(doc, layout_aware=True)
                if _point(row.get("position")) is not None and row.get("name") and not row.get("excluded")]
+    layout_points = [_point(row.get('position')) for row in packaging_layout.extract_layout_rows(doc)]
+    layout_x = [p[0] for p in layout_points if p is not None]
+    layout_edge = min(layout_x) if len(layout_x) >= 2 and packaging_layout.scheme_labels(doc) else None
     owners: Dict[str, List[Dict[str, Any]]] = {}
     for region in regions or []:
         box = _bbox(region.get("bbox"))
         if not region.get("substantial") or box is None:
+            continue
+        if layout_edge is not None and (box[0]+box[2])/2 >= layout_edge:
             continue
         frame_id = _frame_for_region(str(region.get("region_id") or ""), frames)
         frame = next((item for item in frames or [] if item.get("frame_id") == frame_id), {})
@@ -899,8 +908,10 @@ def _compound_named_groups(ir: Any, regions: Any, views: Any, frames: Any) -> Li
     for anchor in anchors:
         sections = packaging_layout.declared_sections(anchor.get("name"))
         members = owners.get(str(anchor.get("entity_id") or ""), [])
-        # 不将整个“最近名称区域”直接并成一件：仅为明确复合名称生成有限建议。
-        if len(sections) <= 1 or not (len(sections) <= len(members) <= MAX_GROUP_MEMBERS):
+        # 单一件名也可声明多个物理部分，但碎线不能据此变成部分。
+        if not (max(2,len(sections)) <= len(members) <= MAX_GROUP_MEMBERS):
+            continue
+        if len(sections) <= 1 and not all(row.get('outline_status') == 'closed' for row in members):
             continue
         frame_ids = {_frame_for_region(str(row.get("region_id") or ""), frames) for row in members}
         if len(frame_ids) > 1:
@@ -909,6 +920,7 @@ def _compound_named_groups(ir: Any, regions: Any, views: Any, frames: Any) -> Li
         group["evidence_reasons"].append("compound_name_anchor")
         group["name_anchor_entity_id"] = str(anchor.get("entity_id") or "")
         group["declared_section_names"] = [row["name"] for row in sections]
+        group['portion_components'] = [list(row.get('component_ids') or []) for row in members]
         out.append(group)
     return sorted(out, key=lambda row: row["candidate_id"])
 
@@ -948,6 +960,11 @@ def _combined_groups(ir: Any, regions: Any, views: Any,
     # proposal, never erase the weaker mechanism's distinct alternatives.
     by_members = {tuple(row["component_ids"]): row for row in groups}
     for row in _whole_part_groups(ir, regions, views, frames):
+        previous = by_members.get(tuple(row['component_ids'])) or {}
+        for key in ('name_anchor_entity_id','declared_section_names','portion_components'):
+            if previous.get(key):
+                row[key] = previous[key]
+        row['evidence_reasons'] = sorted(set(row.get('evidence_reasons') or []) | set(previous.get('evidence_reasons') or []))
         by_members[tuple(row["component_ids"])] = row
     return sorted(list(by_members.values()) + _raw_layout_groups(ir, regions, frames, views),
                   key=lambda row: row["candidate_id"])
@@ -1161,7 +1178,7 @@ def _default_reviewer(request: Dict[str, Any]) -> Dict[str, Any]:
                                                 "dimension_spatial", "anchor_in_region",
                                                 "member_total", "evidence_reasons",
                                                 "geometry_status", "frame_id", "view_id",
-                                                "nearby_texts")}
+                                                "nearby_texts", "portion_components", "declared_section_names")}
                for item in candidates]
     prompt = (
         "你只是在 CAD 图纸上复核件名与候选图形的归属，不是在算尺寸。"
@@ -1169,6 +1186,8 @@ def _default_reviewer(request: Dict[str, Any]) -> Dict[str, Any]:
         "候选格左上角 ID 与候选表对应。必须看候选图形与名称/视图证据；"
         "仅凭最近距离、相似尺寸或想象不能选。若图片不能证明归属，返回 none。"
         "只能选择候选表内已有的一个 id，绝不可发明 id、尺寸、材料或件名。"
+        "一个件名可以对应多个独立组成，请比较全部组成候选而不是只选一个圆；"
+        "孔和内部工艺线不应当作额外材料，右侧排模副本不是新增组成。"
         "先判断目标文字是件名、材料还是图例；材料和图例不许当件名。"
         "只输出 JSON，键必须是 selected_candidate_id、insufficient_evidence、reason、text_class；"
         "text_class 取 name/material/unknown；可以附 suggested_name、suggested_material，"
@@ -1200,7 +1219,9 @@ def _demote(binding: Dict[str, Any], candidates: List[Dict[str, Any]],
                         ("id", "component_ids", "bbox", "distance_mm", "layers",
                          "dimension_spatial", "anchor_in_region", "entity_ids",
                          "member_total", "evidence_reasons", "geometry_status",
-                         "frame_id", "view_id", "raw_component_ids", "entity_total")}
+                         "frame_id", "view_id", "raw_component_ids", "entity_total",
+                         "name_anchor_entity_id", "declared_section_names", "portion_components",
+                         "section_dimension_evidence")}
                        for item in candidates],
         "attribution": {"status": status, "reasons": [reason],
                         "selected_candidate_id": selected,
@@ -1211,6 +1232,41 @@ def _demote(binding: Dict[str, Any], candidates: List[Dict[str, Any]],
                         "suggested_material": str(advice.get("suggested_material") or "")},
     })
     binding["reasons"] = list(dict.fromkeys(list(binding.get("reasons") or []) + [reason]))
+
+
+def _section_dimension_proofs(candidate, regions, rects):
+    from . import packaging_business_part_resolver as resolver
+    proofs = []
+    for region in regions or []:
+        if (set(region.get('entity_ids') or []) <= set(candidate.get('entity_ids') or [])
+                and region.get('entity_ids') and (region.get('_section_dimension_verified')
+                    if '_section_dimension_verified' in region else resolver._region_is_size_confirmed(region,rects))):
+            length, width = resolver._region_size(region)
+            proofs.append({'entity_ids':sorted(region['entity_ids']),'length_mm':length,'width_mm':width,
+                           'source':'verified_cad_dimension'})
+    return proofs
+
+
+def enrich_section_candidates(cad_ir, rows, anchors, regions, rects, match):
+    """Build portion candidates even when model assistance is off; never invent sizes."""
+    from . import packaging_business_part_resolver as resolver
+    for region in regions:
+        region['_section_dimension_verified'] = resolver._region_is_size_confirmed(region,rects)
+        if (not region.get('excluded') and region.get('outline_status') == 'closed'
+                and region['_section_dimension_verified']):
+            region['substantial'] = True  # 小圆有独立标注，不能用旧面积门槛丢弃。
+    by_code = {r.get('business_part_code'):r for r in rows}
+    by_anchor = {r.get('entity_id'):r for r in anchors}
+    frames = _layout_frames(cad_ir,regions)
+    groups = _combined_groups(cad_ir,regions,_view_ids(regions),frames)
+    for binding in match.get('bindings') or []:
+        row = by_code.get(binding.get('business_part_code')) or {}
+        anchor_ids = (row.get('evidence') or {}).get('anchor_entity_ids') or []
+        anchor = next((by_anchor[a] for a in anchor_ids if a in by_anchor),{})
+        point = _point(anchor.get('position'))
+        if point is not None:
+            binding['candidates'] = _candidates(point,regions,binding.get('region_id') or '',rects,groups,anchor.get('entity_id') or '')
+    return match
 
 
 def review_matches(cad_ir: Any, rows: Any, anchors: Any, regions: Any,

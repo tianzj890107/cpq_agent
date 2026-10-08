@@ -196,3 +196,15 @@ python -m unittest tests.test_packaging_parts_extraction_red \
 **没有**校验"未确认的尺寸数值准不准"（配错件的概率），也没要求把未确认件降级 —— 那是 §2 待签字的选项。
 
 未 push / MR / tag / Release / 部署，未连 PG、未起服务、未写业务数据。
+
+## 附录 A：`DERIVED_TOTAL` / `SIZED_TOTAL` 圆盘盒 36 → 46（2026-10-08）
+
+本 Spec 的 E1 冻结的是「derived / 有尺寸件数**精确相等**」。新 Spec
+`packaging-multipart-business-part-complete.md` §1 明确要求：单实体闭合圆也要成为候选、一个业务名称
+可以对应多个真实闭合图形，因此识别数量**精确重指**：
+
+- 圆盘盒 `derived` 36 → **46**、`sized` 36 → **46**；酒盒 26 / 26 不变。
+- 判据没有放宽：E1 仍是 `assertEqual`（不是下限），并且新增/既有的每一件都还要有 `component_ids`
+  与 `geometry_region` 证据；未确认尺寸的走独立空间标注测试，这层没动。
+- 红测 `tests/test_packaging_business_part_size_must_be_confirmed_by_dimension_red.py` 的
+  `DERIVED_TOTAL` / `SIZED_TOTAL` 同步为 26 / 46。

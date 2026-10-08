@@ -7429,6 +7429,15 @@ class PackagingSizeConfirmAction(BaseModel):
     note: str
 
 
+class PackagingSectionsAction(BaseModel):
+    sections: List[Dict[str, Any]] = Field(default_factory=list)
+    business_parts_hash: str = ''
+
+
+class PackagingSectionSizeAction(PackagingSizeConfirmAction):
+    business_parts_hash: str = ''
+
+
 def _business_parts_body(pid: str, doc: Any = None) -> dict:
     """业务部件读接口的响应（清单 + 几何证据 + 缺口 + 摘要）。
 
@@ -7458,11 +7467,16 @@ def _business_parts_body(pid: str, doc: Any = None) -> dict:
     # 文档级「对照资料」块（Spec `packaging-customer-workbook-is-a-reference-not-an-input.md` §2.4）：
     # 新键 `reference`；旧键仍照原样透传（老前端还认它）。名字本身按 §2.3 用拼接写出来。
     disclosure = packaging_parts.business_part_reference_block(record)
+    rows = list(record.get('business_parts') or [])
+    if record.get('derived_from_drawing'):
+        from .services import packaging_sections
+        components = (record.get('geometry_evidence') or {}).get('components') or []
+        rows = [packaging_sections.hydrate_part(row,components) if not row.get('sections') else row for row in rows]
     return {"built": bool(record.get("business_parts")),
             "engine_version": record.get("engine_version") or packaging_parts.BUSINESS_ENGINE_VERSION,
             "business_parts_id": record.get("business_parts_id") or "",
             "business_parts_hash": record.get("business_parts_hash") or "",
-            "business_parts": list(record.get("business_parts") or []),
+            "business_parts": rows,
             "layout_rows": list(record.get("layout_rows") or []),
             "scheme_labels": list(record.get("scheme_labels") or []),
             "unassigned_candidates": [dict(item) for item in (record.get("unassigned_candidates") or [])
@@ -7766,6 +7780,46 @@ def update_packaging_geometry_binding(
         "business_parts_id": saved.get("business_parts_id"),
         "by": str(user.get("username") or ""),
     })
+    return _business_parts_body(pid, saved)
+
+
+@app.put('/api/projects/{pid}/requirement/packaging-business-parts/{part_code}/sections')
+def update_packaging_sections(pid: str, part_code: str, body: PackagingSectionsAction,
+                              user: dict = Depends(current_user)):
+    from .services import packaging_sections
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, '需要工艺经理、工艺技术总监或管理员权限')
+    _workflow_project(pid)
+    doc = packaging_parts.load_business_parts(pid) or {}
+    if body.business_parts_hash and body.business_parts_hash != doc.get('business_parts_hash'):
+        raise HTTPException(409, '零件清单已更新，请刷新后重试')
+    try:
+        updated = packaging_sections.assign_sections(doc, part_code, body.sections,
+                                                     actor=str(user.get('username') or ''))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    saved = packaging_parts.save_business_parts(pid, updated)
+    store.audit(pid, 'workflow:packaging_sections_updated', {'business_part_code':part_code,
+        'business_parts_hash':saved.get('business_parts_hash'), 'by':user.get('username')})
+    return _business_parts_body(pid, saved)
+
+
+@app.put('/api/projects/{pid}/requirement/packaging-business-parts/{part_code}/sections/{section_id}/size-confirm')
+def confirm_packaging_section_size(pid: str, part_code: str, section_id: str,
+                                  body: PackagingSectionSizeAction, user: dict = Depends(current_user)):
+    from .services import packaging_sections
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, '需要工艺经理、工艺技术总监或管理员权限')
+    _workflow_project(pid)
+    doc = packaging_parts.load_business_parts(pid) or {}
+    if body.business_parts_hash and body.business_parts_hash != doc.get('business_parts_hash'):
+        raise HTTPException(409, '零件清单已更新，请刷新后重试')
+    try:
+        updated = packaging_sections.confirm_section_size(doc, part_code, section_id,
+            body.length_mm, body.width_mm, actor=str(user.get('username') or ''), note=body.note)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    saved = packaging_parts.save_business_parts(pid, updated)
+    store.audit(pid, 'workflow:packaging_section_size_confirmed', {'business_part_code':part_code,
+        'section_id':section_id,'business_parts_hash':saved.get('business_parts_hash'),'by':user.get('username')})
     return _business_parts_body(pid, saved)
 
 
@@ -9222,6 +9276,13 @@ def _packaging_business_cost_analysis(inputs: Dict[str, Any], line: Dict[str, An
            "name": str(inputs.get("name") or ""),
            "material": str(inputs.get("material_text") or "")}
     analysis = _packaging_part_cost_analysis(row, line, quantity, "")
+    if line.get('sections'):
+        analysis['items'] = [{'category':'material','name':s['section_name'],'basis':s.get('expression') or '',
+            'quantity':s['quantity'],'unit':'件','unit_price':s.get('unit_amount'),'amount':s['amount'],
+            'source':s.get('formula_source') or '', 'confidence':0.7 if s['amount'] is not None else 0.3}
+            for s in line['sections']]
+        analysis['open_questions'] = [{'question':'组成 '+s['section_name']+' 的成本缺口：'+str(s.get('gap') or {}),
+            'required':True} for s in line['sections'] if s['amount'] is None]
     geometry_code = geometry_label.split(":", 1)[1] if geometry_label.startswith("bound:") else ""
     analysis["assumptions"] = [packaging_parts.business_cost_assumption(
         inputs, geometry_part_code=geometry_code)] + list(analysis.get("assumptions") or [])
@@ -9266,13 +9327,17 @@ async def packaging_business_part_cost(
                                      inputs["variables"].get("cut_length")),
                                      packaging_parts._mm_text(
                                          inputs["variables"].get("cut_width")))))
-        line = packaging_cost.compute_line("material", dict(inputs["variables"]))
+        from .services import packaging_sections
+        line = packaging_sections.compute_material(inputs, packaging_cost.compute_line)
         amount = line.get("amount")
         tasks.report_progress(
             "  ↳ 单件 %.4f 元（批量 %d 件）" % (amount, qty) if amount is not None
             else "  ↳ 缺输入变量，暂给不出金额：%s" % ((line.get("gap") or {}).get("code") or ""))
         analysis = _packaging_business_cost_analysis(inputs, line, qty, geometry_label)
         summary = cost.compute(analysis)
+        if line.get('sections') and line.get('amount') is None:
+            summary.update(computed_total=None, complete=False)
+            summary.setdefault('warnings',[]).append('部分组成未算出成本，不能使用部分合计作为完整金额')
         packaging_parts.save_part_cost(pid, {
             "part_code": inputs["part_code"],
             # 这份结论**不是**按几何零件算的：`parts_id` 必须为空，免得读侧拿它去比几何版本。
@@ -9281,6 +9346,7 @@ async def packaging_business_part_cost(
             "analysis": analysis, "summary": summary,
             # 业务件没有知识库检索依据，不装样子（Spec §C3）。
             "lookup": {},
+            "sections": line.get('sections') or [],
             "size_source": inputs["size_source"], "size_source_ref": inputs["size_source_ref"],
             "size_text": inputs["size_text"], "geometry": geometry_label,
             "business_part_code": inputs["part_code"],
@@ -9293,7 +9359,7 @@ async def packaging_business_part_cost(
         # 任务返回值里也带上口径四键（Spec `packaging-business-part-conclusion-basis-in-panel.md`
         # §C3）：面板拿到 `task.result` 就渲染「按清单尺寸算的…」那一行，不必再读一次。
         return {"part_code": inputs["part_code"], "analysis": analysis, "summary": summary,
-                "line": line,
+                "line": line, "sections": line.get('sections') or [],
                 "size_source": inputs["size_source"],
                 "size_source_ref": inputs["size_source_ref"],
                 "size_text": inputs["size_text"], "geometry": geometry_label}
@@ -9317,6 +9383,7 @@ def get_packaging_business_part_cost(pid: str, code: str,
     _packaging_business_part_row(pid, code)
     record = packaging_parts.load_part_cost(pid, code) or {}
     body = {"part_code": str(record.get("part_code") or code),
+            "sections": record.get('sections') or [],
             "analysis": record.get("analysis") if record else None,
             "summary": record.get("summary") if record else None,
             "source": (record.get("source") if isinstance(record.get("source"), dict) else {}),
@@ -9388,10 +9455,16 @@ async def packaging_business_part_process(
                               % (size_text, str(inputs.get("material_text") or "未填")))
         # 复用既有工艺链路（`process.outline_process()` 只吃 Part）：业务件与图纸零件走
         # **同一个**模型口径，区别只在输入 —— 这里没有整体 IR、没有几何，只有清单原文。
-        plan, coverage = process.outline_process(
-            part, overall=None, geom=None,
-            note=_packaging_business_part_process_note(inputs, note), attachments=atts)
-        plan_dict = plan.model_dump()
+        sections = []
+        if inputs.get('sections'):
+            from .services import packaging_sections
+            plan_dict, coverage, sections = packaging_sections.recommend_process(
+                inputs, process.outline_process, note=note, attachments=atts)
+        else:
+            plan, coverage = process.outline_process(
+                part, overall=None, geom=None,
+                note=_packaging_business_part_process_note(inputs, note), attachments=atts)
+            plan_dict = plan.model_dump()
         steps_total = len(plan_dict.get("steps") or [])
         library = (coverage or {}).get("summary") or {}
         tasks.report_progress(
@@ -9411,6 +9484,7 @@ async def packaging_business_part_process(
             "parts_id": "",
             "engine_version": packaging_parts.ENGINE_VERSION,
             "plan": plan_dict, "validation": validation, "coverage": coverage,
+            "sections": sections,
             # 业务件没有知识库检索依据，不装样子（与业务件成本那条同口径）。
             "lookup": {}, "assumptions": [assumption] if assumption else [],
             "size_source": inputs["size_source"], "size_source_ref": inputs["size_source_ref"],
@@ -9426,7 +9500,7 @@ async def packaging_business_part_process(
         })
         # 同上：任务返回值带口径四键（Spec §C3），面板生成完立刻说得清按哪套尺寸编的。
         return {"part_code": inputs["part_code"], "part_id": part.part_id,
-                "plan": plan_dict, "validation": validation, "coverage": coverage,
+                "plan": plan_dict, "validation": validation, "coverage": coverage, "sections": sections,
                 "size_source": inputs["size_source"],
                 "size_source_ref": inputs["size_source_ref"],
                 "size_text": inputs["size_text"], "geometry": geometry_label}
@@ -9450,6 +9524,7 @@ def get_packaging_business_part_process(pid: str, code: str,
     _packaging_business_part_row(pid, code)
     record = packaging_parts.load_part_process(pid, code) or {}
     body = {"part_code": str(record.get("part_code") or code),
+            "sections": record.get('sections') or [],
             "plan": record.get("plan") if record else None,
             "validation": record.get("validation") if record else None,
             "coverage": record.get("coverage") if record else None,

@@ -407,10 +407,12 @@ class EGuardrails(unittest.TestCase):
         # 本次视觉复核又新增人工确认几何映射的 PUT，重指为 6；计数仍精确相等。
         src = _source(ROOT / "tech_app" / "frontend" / "app.js")
         # 图纸尺寸人工确认单列 size-confirm PUT，总数精确重指为 7。
-        self.assertEqual(8, src.count("packaging-business-parts/"),
-                         "新增入口只能是 geometry-binding、size-confirm 与 auto-bind-candidates")
+        # 多组成闭环 Spec 明确新增共用 sections 写入，不解除其它批次冻结。
+        self.assertEqual(9, src.count("packaging-business-parts/"),
+                         "额外入口仅限本轮声明的 sections 写入")
+        self.assertIn('/sections${suffix}',src)
         self.assertEqual(1, src.count("/geometry-binding"))
-        self.assertEqual(1, src.count("/size-confirm"))
+        self.assertEqual(2, src.count("/size-confirm"))  # 整件兼容 + 逐部分确认
         self.assertEqual(1, src.count("/auto-bind-candidates"))
         self.assertEqual(1, src.count('id="packagingBusinessPartCostBySize"'),
                          "面板入口的按钮只许有一处（Spec §C2）")
