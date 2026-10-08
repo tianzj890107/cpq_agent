@@ -132,3 +132,25 @@
 - 验证：全量复跑 → **`Ran 6955 … OK (skipped=28)`**（零红）；`git diff --check`、改动 JS
   `node --check`、改动/新增 Python `py_compile` 全过。
 - 状态：本地提交 + 双远端推送 + 34 部署（详见 `## 529`）。
+
+## 529. `## 526`–`## 528` 的提交、双远端推送与 34 部署记录（10-8）
+
+- 提交 `2c5a386`（`## 526-528 一个业务件多组成部分闭环、报价工作区结构化展示与全量回归收口`），
+  入库 26 个文件：2 份新 Spec、2 个新红测模块、新服务 `tech_app/backend/services/packaging_sections.py`、
+  17 个改动文件与 changelog。不入库的未跟踪项不变：`拆分程序/`、`.~南京锂能DA梳理.xlsx`。
+- 提交前复跑：全量 `unittest discover -s tests -p 'test_*.py'` → **`Ran 6955 … OK (skipped=28)`**；
+  `git diff --check`、改动 JS `node --check`、改动/新增 Python `py_compile` 全过。
+- 双远端：GitLab 与 GitHub 的 `ytbz` 均回读为 `2c5a3864596697ae7f10ce228d2a7fcf72e97ef5`
+  （`634a6da..2c5a386`），与本地 HEAD 三方一致。
+- 34 部署：`bash scripts/deploy_34_bare.sh ytbz`，`7b16541 → 2c5a386`（纯快进）；
+  `build.commit=2c5a3864596697ae7f10ce228d2a7fcf72e97ef5`、`branch=ytbz`、
+  `deployed_at=2026-10-08T15:12:26+0800`，8010 pid=`3456406`，`/api/health` 与 `/suite/health` 200。
+- 部署后核对（第 5 步）：ODA 27.1 主转换器直出、`converter_role=primary`、`fallback_used=false`
+  （酒盒 6711 实体 / 8 层；圆盘盒 3457 实体 / 32 层），dxf + preview 齐全。
+- 部署后核对（第 6b 步，隔离端到端 `verdict=ok`）：酒盒八步 8/8、零件 263 件（`closed_ratio=0.510`）、
+  可算 13 / 可挤出 13；圆盘盒八步 8/8、零件 312 件（`closed_ratio=0.840`）、可算 101 / 可挤出 262；
+  两条权威实样路线 `confirm=confirmed`；隔离自检未写运行目录（78 → 78）。
+- 部署后核对（只读）：8010 `/` 200；8012 实际下发的 `packaging-quote-panel.js` 含 `renderPackage`、
+  `app.js` 含 **9** 处 `packaging-business-parts/`（与 `## 528` 重指后的护栏一致）。
+- 能力声明不变：**DWG 编排能力完成，真实转换能力未验收**；门禁两项人工项未代签。多组成闭环在真实
+  图纸上仍需逐件复验（本批只读诊断：圆盘盒 5 条多组成业务行），不构成客户正式报价授权。
