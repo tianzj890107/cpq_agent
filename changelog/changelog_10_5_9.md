@@ -62,3 +62,32 @@
 - 入库：本批连同 `## 522`/`## 523` 的工作区成果一并提交（35 个跟踪文件改动 + 11 个新文件）；
   不入库的未跟踪项：`拆分程序/`（独立拆分程序与酒盒拆分方法说明，仓库运行路径无引用）、
   `.~南京锂能DA梳理.xlsx`（Excel 锁文件）。
+
+## 525. `## 522`–`## 524` 的提交、双远端推送与 34 部署记录（10-8）
+
+- 提交 `7b16541`（`## 522-524 包装线上验收记录、曲线/零件尺寸修复与全量回归收口`），入库 46 个
+  文件：35 个跟踪文件改动 + 11 个新文件（Spec `packaging-round-parts-and-e2e-fact-consistency.md`、
+  8 个新红测模块、`docs/reports/online-packaging-e2e-20261008.md` 与右盖实际预览截图）。
+  不入库的未跟踪项（与本批能力无关，且仓库运行路径无引用）：`拆分程序/`（独立拆分程序 + 酒盒
+  拆分方法说明）、`.~南京锂能DA梳理.xlsx`（Excel 锁文件）。
+- 提交前复跑（复核口径）：全量 `unittest discover -s tests -p 'test_*.py'` → **`Ran 6919 … OK
+  (skipped=28)`**；`node --check`（`app.js` / `assembly-integration.js` / `cost-review.js` /
+  `requirement-create.js` / `cpq_auth.js`）、改动 Python 文件 `py_compile`、`git diff --check` 全过。
+- 双远端：GitLab 与 GitHub 的 `ytbz` 均回读为 `7b165418e7cc1e61dae9e04d887abb0f9630874a`
+  （`4b29e19..7b16541`），与本地 HEAD 三方一致。
+- 34 部署：`bash scripts/deploy_34_bare.sh ytbz`，`62a1849 → 7b16541`（纯快进）；
+  `build.commit=7b165418e7cc1e61dae9e04d887abb0f9630874a`、`branch=ytbz`、
+  `deployed_at=2026-10-08T11:41:11+0800`，8010 pid=`2650356`，`/api/health` 与 `/suite/health`
+  均 200，8012 `/api/health` 200；启动 PATH 含 `xvfb` 目录。
+- 部署后核对（脚本第 5 步，两份真实样本）：ODA 27.1 主转换器直出、`converter_role=primary`、
+  `fallback_used=false`（酒盒 6711 实体 / 8 层，圆盘盒 3457 实体 / 32 层），dxf + preview 齐全。
+- 部署后核对（脚本第 6b 步，隔离端到端自检 `verdict=ok`）：酒盒八步 8/8、零件 263 件
+  （`closed_ratio=0.510`）、可算 13 / 可挤出 13；圆盘盒八步 8/8、零件 312 件
+  （**`closed_ratio=0.840`**，即本批 7 件 bulge 整圆首次判闭合）、可算 101 / 可挤出 262；
+  两条权威实样路线（`YT-DWG-ROUND-10PC` 9 道 / `YT-DWG-WINE-700ML` 10 道）`confirm=confirmed`；
+  隔离自检未写运行目录（`tech_app/tech_data` 78 → 78）。
+- 部署后核对（只读）：8012 实际下发的 `app.js` 含「本版清单由图纸推导 / 无需导入对照表」，
+  `assembly-integration.js` 含 `aiParamsAutofill(options)` —— 与本次提交逐字一致。
+- 能力声明不变：**DWG 编排能力完成，真实转换能力未验收**；门禁两项人工项
+  （`converter_license`、`real_samples_e2e_passed`）未代签。真实样图的整件边界 / 尺寸准确率与
+  线上页面视觉仍须另行实图验收，本批不构成客户正式报价授权。
