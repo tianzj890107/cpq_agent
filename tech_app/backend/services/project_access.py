@@ -525,6 +525,13 @@ def visible_projects(user: dict, scope: str = "mine", include_archived: bool = F
             if not card.get("primary_action") or not home_card.current_stage_actionable(project_id, user):
                 continue
         entry = dict(meta)
+        try:
+            entry = home_card.project_list_identity(entry, store.load_requirement(project_id),
+                                                   store.load_session_events(project_id))
+        except Exception:
+            # 单项目详情读失败不拖垮列表，也不伪装成0轮。
+            entry["turns"] = None
+            entry["list_detail_unavailable"] = True
         entry["access"] = {
             "scope": scope,
             "mine_sources": mine_sources(user, meta),

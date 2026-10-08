@@ -277,8 +277,13 @@ class CRealSamples(Base):
         stats = self.module.summarize(doc)
         self.assertEqual(312, int(stats.get("part_total") or len(doc.get("parts") or [])),
                          "圆盘盒件数必须原样 312（Spec §2.3）")
-        self.assertEqual(255, int(stats.get("closed_total") or 0),
-                         "圆盘盒闭合件数必须原样 255（Spec §2.3）")
+        # 2026-10-08：262 = 255 + 7。新 Spec
+        # `packaging-round-parts-and-e2e-fact-consistency.md` §1 要求带 bulge 的折线保留真实
+        # 曲线形状，圆盘盒里 7 件「两个顶点 + 两个 180° bulge」的整圆因此第一次被判成闭合
+        # （每件单实体、采样后 289–386 点、首尾重合）。零附带判据本身没放宽：件数 312、
+        # 角色已知 9、本批判标注 0 都逐字不动。
+        self.assertEqual(262, int(stats.get("closed_total") or 0),
+                         "圆盘盒闭合件数 = 255 + 7 件 bulge 整圆（新 Spec §1）")
         self.assertEqual(9, int(stats.get("role_known_total") or 0),
                          "圆盘盒角色已知件数必须原样 9（Spec §2.3：既有的 role_known_total 地板）")
         self.assertEqual(0, int((doc.get("stats") or {}).get("annotation_filtered_total") or 0),

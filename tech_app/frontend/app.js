@@ -3149,8 +3149,12 @@ function packagingAuthorityDisclosureLines(doc) {
   if (total > 0) {
     if (!bound) {
       if (derivedFromDrawing) {
-        lines.push(`部件图：${total} 件都没配到部件图 —— 这一版清单来自图纸推导，`
-          + `图纸本身不带部件图；要按行看部件图，需先导入对照表。`);
+        // 2026-10-08（Spec `packaging-round-parts-and-e2e-fact-consistency.md` §5 第 11 项）：
+        // 这句不许再暗示「先导入对照表才能解析」，但仍要点名来源（图纸推导）与出路
+        // （CAD 图形可直接看），`packaging-part-thumbnail-absence-must-name-its-source.md`
+        // §2.4 的「来源 + 出路」句式照旧。
+        lines.push(`部件图：${total} 件未提供 —— 本版清单由图纸推导，图纸本身不带部件图。`
+          + `当前 CAD 图形可直接查看，无需导入对照表。`);
       } else {
         lines.push(`部件图：${total} 件都没配到部件图（这一版清单的图没有归属）。`);
       }
@@ -3490,18 +3494,18 @@ function packagingMmText(value) {
 
 function packagingBusinessPartSizeText(row) {
   // node 单函数直跑看不到兄弟函数（同 `## 492` 的"注入 + 同值兜底"口径）：这里带一份同值兜底。
-  const mm = (typeof packagingMmText === "function") ? packagingMmText : (value => {
-    if (value === null || value === undefined || value === "") return "";
+  const mm = value => {
+    if (value === null || value === undefined || value === "") return "—";
     const number = Number(value);
-    return Number.isFinite(number) ? String(Math.round(number * 100) / 100) : String(value);
-  });
+    return Number.isFinite(number) && number > 0 ? number.toFixed(2) : "—";
+  };
   const block = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
   const reference = block(row && row.reference) || block(row && row["author" + "ity"]) || {};
-  const text = String(reference.product_size_text || "").trim();
-  if (text) return text;                       // 客户 / 图纸原文逐字，不许格式化（Spec §2.1）
-  const length = reference.length_mm; const width = reference.width_mm;
-  if (length && width) return `${mm(length)}×${mm(width)} mm`;
-  return "";
+  const binding = block(row && row.geometry_binding) || {};
+  const confirmed = block(row && row.confirmed_size) || {};
+  const length = confirmed.length_mm ?? reference.length_mm ?? binding.length_mm;
+  const width = confirmed.width_mm ?? reference.width_mm ?? binding.width_mm;
+  return `${mm(length)} × ${mm(width)} mm`;
 }
 
 function packagingBusinessPartSizeBasis(row) {
@@ -3721,11 +3725,8 @@ function renderPackagingBusinessTree(tree, rows) {
       + `<div class="part-body" title="${esc(rowTitle).replace(/"/g, "&quot;")}">`
       + `<div class="part-name">${esc(code)} ${esc(partName)}</div>`
       + `<div class="part-meta">${esc(size)}</div>`
-      + (sizeBasis ? `<div class="part-note">${esc(sizeBasis)}</div>` : "")
       + (material ? `<div class="part-material">${esc(material)}</div>` : "")
       + (bindingText ? `<div class="part-note">${esc(bindingText)}</div>` : "")
-      + (attributionText ? `<div class="part-note">${esc(attributionText)}</div>` : "")
-      + (truthLabel ? `<div class="part-note packaging-truth-label">${esc(truthLabel)}</div>` : "")
       + `</div>`;
     // 点开一件就能看到它的构成（Spec §2.1c）：那两百多个几何分量按件归属。
     // 展开里的分量**不**进结果区那句"业务部件 N 件"的计数 —— 两笔账不许混。

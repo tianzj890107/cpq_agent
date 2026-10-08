@@ -155,6 +155,7 @@ class IntegrationPartRef(BaseModel):
 class IntegrationParamFill(BaseModel):
     """「整合参数」智能补全给出的一条建议。**是建议，不是结论** —— 由人过目后才写入。"""
     code: str = Field("", description="报价成品参数字典里的字段编码，如 rated_voltage")
+    source: str = Field("model_suggestion", description="平台标记来源，模型不得自证需求事实")
     value: str = Field("", description="建议值。推不出来就留空，不要编")
     unit: Optional[str] = Field(None, description="单位，与字典一致时可不给")
     basis: str = Field("", description="这个值是怎么来的：哪个零件、哪条需求、哪次测算")
@@ -308,6 +309,8 @@ class FinanceHandoff(BaseModel):
     target_name: str = ""
     sent_at: Optional[str] = None
     sent_by: Optional[str] = None
+    draft: bool = False
+    source_business_parts_hash: str = ""
 
 
 class IntegrationWaiver(BaseModel):

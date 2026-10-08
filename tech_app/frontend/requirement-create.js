@@ -8,14 +8,12 @@ function rcSubLabel(no){var a=(typeof window!=='undefined'&&window.CpqWorkflowSt
    同一个全局 `window.CPQ_DWG_CAPABILITY_NOTE`，避免四处各说各话（更不许写成
    「模型可直接解析 DWG」）。 */
 window.CPQ_DWG_CAPABILITY_NOTE = window.CPQ_DWG_CAPABILITY_NOTE
-  || '可上传，DWG 需 CAD 转换服务解析（当前环境未安装）';
+  || '可上传，DWG 转换服务状态正在查询。';
 var rcDwgNote = window.CPQ_DWG_CAPABILITY_NOTE;
 // Capability is not a licence/quality sign-off. A failed probe means unknown, not absent.
 (async function refreshRequirementDwgCapability() {
   try {
-    const response = await fetch('/api/capabilities/cad-converter');
-    if (!response.ok) return;
-    const cap = await response.json();
+    const cap = await api('/api/capabilities/cad-converter');
     const old = rcDwgNote;
     rcDwgNote = cap.available
       ? `可上传，DWG 由 CAD 转换服务解析（${[cap.adapter_name, cap.converter_version].filter(Boolean).join(' ')}）；许可与实际转换质量需另行验收。`

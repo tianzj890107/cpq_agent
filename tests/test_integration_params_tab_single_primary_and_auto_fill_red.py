@@ -173,7 +173,9 @@ class IntegrationParamsTabSinglePrimaryRed(unittest.TestCase):
         self.assertIn("aiAutoFillParams()", body, "第二步必须走共用的自动补全链路")
         helper = block_from(self.board, "async function aiAutoFillParams()")
         self.assertTrue(helper, "找不到 aiAutoFillParams()")
-        self.assertIn("aiParamsAutofill()", helper, "第二步必须复用既有智能补全接口")
+        # 2026-10-08：自动链只落需求事实，模型猜测仍需人工核对（新 Spec §3）。
+        self.assertIn("aiParamsAutofill({ knownOnly: true })", helper,
+                      "第二步必须复用智能补全，但不得自动落库模型猜测")
         self.assertIn("aiParamsFinalize(false)", helper, "第三步必须复用既有 finalize 落库")
 
     def test_auto_fill_only_saves_when_it_filled_something(self):
@@ -186,7 +188,9 @@ class IntegrationParamsTabSinglePrimaryRed(unittest.TestCase):
         self.assertIn("aiMissingParamFields()", body, "必须先看参数表还有哪些空格子")
 
     def test_autofill_reports_what_it_filled(self):
-        body = block_from(self.board, "async function aiParamsAutofill()")
+        # 2026-10-08（`## 524`）：签名去掉默认对象字面量 —— `options = {}` 会让括号配对
+        # 取到 `{}` 当函数体，别的守卫也读不到这个函数。
+        body = block_from(self.board, "async function aiParamsAutofill(options)")
         self.assertRegex(body, r"return \{ applied:",
                          "aiParamsAutofill 必须把补了几项返回给调用方")
         self.assertIn("unresolved", body, "推不出来的项仍要如实返回")

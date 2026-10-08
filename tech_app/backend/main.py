@@ -3605,6 +3605,7 @@ class IntegrationPublishBody(BaseModel):
     # 可选：发送财务时携带的「仍要继续」签字（L2 缺口豁免）。真正记进 plan.waivers 的
     # 缺口以服务端算出的为准，这里只是本人"可以带缺口继续"的意愿与原因。
     waiver: Optional[dict] = None
+    draft: bool = False
 
 
 def _bridge_http_error(exc: Exception) -> HTTPException:
@@ -3673,7 +3674,7 @@ def integration_send_to_finance(project_id: str, body: IntegrationPublishBody,
         product_name=body.product_name, note=body.note,
         target_type=body.target_type, target_role_code=body.target_role_code,
         target_user_id=body.target_user_id, token=_sso_token(request),
-        waiver=body.waiver)
+        waiver=body.waiver, draft=body.draft)
     # 任务创建与项目参与权在**同一处**完成（Spec `e2e-packaging-downstream-handoff-report.md`
     # §3.2）：指派到人时把他的参与权一并写下，他领取后打开 2.3 才不会是「项目不存在」。
     access = None
@@ -7297,7 +7298,8 @@ def _cad_scene_points(row: Dict[str, Any]) -> List[List[float]]:
     """IR 一行 → 真实几何点；包围盒只是定位信息，不能冒充零件轮廓。"""
     attrs = row.get("attributes") or {}
     kind = str(row.get("kind") or "")
-    points = _cad_scene_pairs(attrs.get("points")) or _cad_scene_pairs(attrs.get("fit_points"))
+    points = (_cad_scene_pairs(attrs.get("sampled_points"))
+              or _cad_scene_pairs(attrs.get("points")) or _cad_scene_pairs(attrs.get("fit_points")))
     if not points and kind == "line":
         points = _cad_scene_pairs([attrs.get("start"), attrs.get("end")])
     if not points:

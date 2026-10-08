@@ -1366,9 +1366,9 @@ def _parse_step1_json(out: str, keys=None):
 def _step1_visible_text(raw: str) -> str:
     """流式输出里应展示给用户的部分：===JSON=== 之前的散文（并剥掉思考段）。"""
     s = re.sub(r"<think>.*?(?:</think>|$)", "", raw or "", flags=re.S)
-    cut = s.find(_JSON_MARK)
-    if cut >= 0:
-        s = s[:cut]
+    marker = re.search(r"={2,}\s*JSON\s*=*", s, re.I)
+    if marker:
+        s = s[:marker.start()]
     # 模型偶尔不写分隔符直接给 JSON：遇到裸的 { 就截断，别把 JSON 喷给用户
     brace = s.find("{")
     if brace >= 0:
@@ -2262,6 +2262,29 @@ def _bom_level(r: dict) -> int:
     v = str(r.get("层级", r.get("level", ""))).strip()
     m = re.search(r"\d+", v)
     return int(m.group(0)) if m else 1
+
+
+def packaging_step6_document(session_id: str):
+    """包装报价正文与面板共用已保存引擎结果，不让模型另算金额/税口径。"""
+    import cpq_wf
+    import cpq_packaging_quote
+    source = cpq_wf.step_snapshot(session_id, 2) or {}
+    package = source.get("packaging_package") or {}
+    if package.get("industry") != "packaging":
+        return None
+    snapshot = cpq_wf.step_snapshot(session_id, 5) or {}
+    quote = snapshot.get("packaging_quote")
+    if not isinstance(quote, dict) or not quote:
+        return None
+    document = cpq_packaging_quote.document(quote, publish=False)
+    cost = package.get("cost") or {}
+    blocked = bool(quote.get("draft") or quote.get("publish_blocked") or quote.get("gap_count")
+                   or quote.get("gaps") or package.get("gaps") or cost.get("has_gaps"))
+    message = ("草稿已生成，尚不可正式导出；请补齐成本缺口并重新定价。" if blocked
+               else "报价正文已按已保存定价结果生成；正式导出仍需通过业务门禁。")
+    return {"ui": {"action": "render_document", "section_id": "s6_doc", "step": 6,
+                   "title": document["title"], "markdown": document["markdown"]},
+            "message": message}
 
 
 def _assert_formal_packaging_quote(payload: dict) -> None:
@@ -3163,6 +3186,23 @@ class Bridge:
                 self.events.append({"type": "user", "text": bubble})
                 if not self.title and bubble.strip() and not bubble.startswith("【"):
                     self.title = bubble.strip().replace("\n", " ")[:24]
+            if (step == 6 or self.step == 6 or re.search(r"【表单确认】\s*第\s*5\s*步", text)) \
+                    and re.search(r"报价|表单确认|生成|输出", text):
+                deterministic = packaging_step6_document(self.session_id)
+                if deterministic:
+                    conv.add_user_message(text)
+                    response = deterministic["message"]
+                    conv.messages.append({"role": "assistant", "content": response})
+                    events = [{"type": "ui", "ui": {"action": "set_step", "step": 6}},
+                              {"type": "ui", "ui": deterministic["ui"]},
+                              {"type": "text", "text": response}]
+                    self.step = 6
+                    for event in events:
+                        self.events.append(event)
+                        emit(event)
+                    self._persist()
+                    emit({"type": "done", "model": "deterministic-packaging-quote", "cost": 0})
+                    return
             if conv.model == NO_MODEL_ID:
                 # 无模型模式：不调用大模型，仅记录（【…】开头的系统消息静默入档；
                 # 用户手打的聊天给一句提示），并采纳前端上报的人工进度。

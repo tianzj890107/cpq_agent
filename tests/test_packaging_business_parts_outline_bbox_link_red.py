@@ -49,7 +49,10 @@ MIN_DERIVED = {"酒盒": 20, "圆盘盒": 31}
 
 #: 不回归（Spec §1.6）：几何零件提取本身不许变。
 GEOMETRY_TOTAL = {"酒盒": 263, "圆盘盒": 312}
-CLOSED_RATIO = {"酒盒": 0.510, "圆盘盒": 0.817}
+#: 2026-10-08：圆盘盒 0.817 → 0.840（255 → 262 件）。新 Spec
+#: `packaging-round-parts-and-e2e-fact-consistency.md` §1 要求带 bulge 的折线保留曲线形状，
+#: 7 件「两顶点 + 两个 180° bulge」的整圆首次被判闭合；提取的件数与其它口径没动。
+CLOSED_RATIO = {"酒盒": 0.510, "圆盘盒": 0.840}
 
 #: 区域有 bbox 的比例门槛（两份样本都是 100%，留一点余量）。
 MIN_REGION_RECT_RATIO = 0.99

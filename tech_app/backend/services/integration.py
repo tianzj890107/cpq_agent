@@ -69,14 +69,43 @@ def _requirement_brief(requirement: Optional[dict]) -> str:
     """1.x 已确认的工艺评估需求。字段缺失就跳过，不编。"""
     if not requirement:
         return ""
+    requirement = {**requirement, **(requirement.get("data") or {})}
     fields = [
         ("product_name", "产品名称"), ("customer_name", "客户"), ("quantity", "需求数量"),
         ("delivery_date", "交期"), ("technical_requirements", "技术要求"),
         ("quality_requirements", "质量要求"), ("special_requirements", "特殊要求"),
+        ("packaging_product_name", "包装产品名称"), ("quote_quantity", "报价数量"),
+        ("inner_length", "成品内长 mm"), ("inner_width", "成品内宽 mm"),
+        ("inner_height", "成品内高 mm"), ("face_paper_gsm", "面纸克重 g"),
+        ("box_type", "盒型"), ("closure_type", "闭合方式"), ("v_groove", "V槽"),
     ]
     lines = [f"  - {label}: {requirement[key]}"
-             for key, label in fields if str(requirement.get(key) or "").strip()]
+             for key, label in fields if requirement.get(key) is not None
+             and str(requirement.get(key)).strip()]
     return "【1.x 已确认的工艺评估需求】\n" + "\n".join(lines) if lines else ""
+
+
+def _inherit_requirement_params(project_id: str, result: IntegrationParamPlan, family: str) -> None:
+    """需求单事实确定性继承，不让模型估计覆盖已保存的业务输入。"""
+    requirement = store.load_requirement(project_id) or {}
+    data = {**requirement, **(requirement.get("data") or {})}
+    fields = {field["code"]: field for field in product_params.fields_for(family)}
+    facts = {code: value for code, value in data.items()
+             if code in fields and value is not None and str(value).strip()}
+    existing = {param.param_code: param for param in result.params if param.param_code}
+    for code, value in facts.items():
+        field = fields[code]
+        param = existing.get(code)
+        if param is None:
+            param = IntegrationParam(name=field["name"], param_code=code)
+            result.params.append(param)
+        param.value = str(value)
+        param.unit = field.get("unit") or None
+        param.source = "需求单"
+        param.basis = "已保存需求单 data." + code
+        param.confidence = 1.0
+    if facts.get("packaging_product_name"):
+        result.assembly_name = str(facts["packaging_product_name"])
 
 
 def _existing_cost_brief(project_id: str, ir: DesignIR) -> str:
@@ -241,6 +270,8 @@ def recommend_params(project_id: str, ir: Optional[DesignIR], plan: IntegrationP
         result.assembly_name = (ir.device_name if ir else "") or "整机总成"
     reconcile_part_refs(result, ir)
     result.product_family = product_params.align(result, family)
+    _inherit_requirement_params(project_id, result, family)
+    product_params.align(result, family)
     _report(progress, f"参数 {len(result.params)} 条、连接 {len(result.interfaces)} 处、"
                       f"BOM {len(result.part_refs)} 行")
     _report_param_coverage(result, progress, family)
@@ -681,6 +712,17 @@ def autofill_params(project_id: str, ir: Optional[DesignIR], plan: IntegrationPl
     allowed = {field["code"] for field in missing}
     result.fills = [fill for fill in result.fills
                     if fill.code in allowed and str(fill.value or "").strip()]
+    for fill in result.fills:
+        fill.source = "model_suggestion"
+    # 补全同样以保存的需求为准：即使当前参数表空着也不允许猜另一套尺寸。
+    known = IntegrationParamPlan()
+    _inherit_requirement_params(project_id, known, family)
+    from ..models.integration import IntegrationParamFill
+    facts = {param.param_code: param for param in known.params if param.param_code in allowed}
+    result.fills = [fill for fill in result.fills if fill.code not in facts]
+    result.fills.extend(IntegrationParamFill(code=code, value=param.value, unit=param.unit,
+        basis=param.basis or "需求单", confidence=1.0, source="saved_requirement")
+        for code, param in facts.items())
     _report(progress, f"  ↳ 给出 {len(result.fills)} 项建议、"
                       f"{len(result.unresolved)} 项确实推不出来")
     return result
@@ -1039,7 +1081,7 @@ def send_to_finance(project_id: str, user: Optional[dict] = None, *,
                     product_name: str = "", note: str = "",
                     target_type: str = "", target_role_code: str = "",
                     target_user_id: str = "", token: str = "",
-                    waiver: Optional[dict] = None) -> IntegrationPlan:
+                    waiver: Optional[dict] = None, draft: bool = False) -> IntegrationPlan:
     """组装与整合的出口：确认工艺并发送至财务做成本测算。
 
     成本不再由工艺经理算 —— 他交的是工艺、参数与用量，成本的数字归后一步的财务。
@@ -1055,6 +1097,10 @@ def send_to_finance(project_id: str, user: Optional[dict] = None, *,
     调用方（HTTP 路由或 Agent 工具）各自把它翻译成用户能看懂的形式。
     """
     # cost_review 反向依赖本模块，函数内延迟导入，避免形成导入环。
+    if draft:
+        return _send_packaging_finance_draft(project_id, user, product_name=product_name,
+            note=note, target_type=target_type, target_role_code=target_role_code,
+            target_user_id=target_user_id, token=token)
     from . import cost_review
 
     username, display = _flow_actor(user)
@@ -1133,4 +1179,53 @@ def send_to_finance(project_id: str, user: Optional[dict] = None, *,
     store.audit(project_id, "integration_send_to_finance",
                 {"task_no": plan.finance_handoff.task_no,
                  "by": plan.finance_handoff.sent_by})
+    return plan
+
+
+def _send_packaging_finance_draft(project_id: str, user: Optional[dict], *, product_name: str,
+                                 note: str, target_type: str, target_role_code: str,
+                                 target_user_id: str, token: str) -> IntegrationPlan:
+    """内部草稿核算交接：不替人确认参数/工艺，不签 waiver，不解锁正式发布。"""
+    from . import packaging_parts, packaging_route
+    requirement = store.load_requirement(project_id) or {}
+    data = requirement.get("data") or {}
+    if data.get("industry") != "packaging":
+        raise IntegrationFlowError("带缺口内部草稿交接仅支持包装项目")
+    plan = load_plan(project_id)
+    parts = packaging_parts.load_business_parts(project_id) or {}
+    route = packaging_route.load_route(project_id)
+    if not parts.get("business_parts") or not route.get("built") or not route.get("steps") or route.get("stale"):
+        raise IntegrationFlowError("请先生成当前版本的包装零件清单与包装路线，不能发送空白或过期草稿")
+    source_hash = str(parts.get("business_parts_hash") or "")
+    if plan.finance_handoff and plan.finance_handoff.task_id:
+        if plan.finance_handoff.draft and plan.finance_handoff.source_business_parts_hash == source_hash:
+            return plan
+        raise IntegrationFlowError("已有财务交接任务，请先处理原任务，不重复派发")
+    username, display = _flow_actor(user)
+    title = product_name.strip() or str(data.get("packaging_product_name") or data.get("title")
+                                      or requirement.get("title") or project_id)
+    brief_parts = [{"business_part_code": row.get("business_part_code"), "name": row.get("name"),
+                    "geometry_binding_status": (row.get("geometry_binding") or {}).get("status"),
+                    "size_confirmed": (row.get("geometry_binding") or {}).get("size_confirmed", False)}
+                   for row in parts["business_parts"] if isinstance(row, dict)]
+    context = {"tech_cost": {"project_id": project_id, "product_name": title, "draft": True,
+               "quote_quantity": data.get("quote_quantity"), "quantity": data.get("quote_quantity"),
+               "business_parts_id": parts.get("business_parts_id"), "business_parts_hash": source_hash,
+               "business_parts": brief_parts, "route": route,
+               "requirement": data,
+               "notice": "带缺口内部核算草稿；未代签工艺或参数确认，不可正式发布报价"}}
+    result = cpq_bridge.send_to_finance(token, project_id, title,
+        str(data.get("customer_name") or ""), title,
+        "内部草稿核算（不可正式发布）：" + (note or "请核对尺寸、材料、工艺与成本缺口"),
+        context, target_type, target_role_code, target_user_id)
+    if not result.get("task_id"):
+        raise IntegrationFlowError("财务任务未创建成功，未保存交接状态")
+    plan.finance_handoff = FinanceHandoff(task_id=str(result["task_id"]),
+        task_no=str(result.get("task_no") or ""), target_role_name=str(result.get("target_role_name") or "财务经理"),
+        target_type=str(result.get("target_type") or target_type or "role"),
+        target_name=str(result.get("target_name") or ""), sent_at=now_cst_str(), sent_by=display,
+        draft=True, source_business_parts_hash=source_hash)
+    save_plan(project_id, plan, username)
+    store.audit(project_id, "packaging_finance_draft_handoff", {
+        "task_id": plan.finance_handoff.task_id, "business_parts_hash": source_hash, "by": username})
     return plan

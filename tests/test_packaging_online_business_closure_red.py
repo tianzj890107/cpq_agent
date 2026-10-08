@@ -83,11 +83,13 @@ if(PACKAGING_RESTORED_RATE!==0)throw Error('invalid accepted');
         script = '''let LAST_PACKAGING_PACKAGE={requirement:{title:'礼盒'}};
 const FORMS=['s1_products','s2_products','s3_products','s4_products','s5_detail'].map((id,i)=>({section_id:id,step:i+1,columns:[]}));
 const rendered=[];function renderTableSection(ui){rendered.push(ui)};
-''' + fn + '''
+''' + js_function(src, 'packagingQuoteDetailValues') + fn + '''
 applyPackagingQuoteRows({box_type_code:'BOX',quote_quantity:1000,currency:'CNY',cost_total:12,
 untaxed_unit_price:16,untaxed_total:16000,taxed_total:18080,tax_rate:0.13,margin_price:16,addon_total:0,draft:true});
 const row=rendered.find(x=>x.section_id==='s5_detail').rows[0];
-if(row['税金']!==2080 || row['数量']!==1000 || row['成本状态']!=='暂估（缺口草稿）') throw Error(JSON.stringify(row));
+// 2026-10-08：明细金额改为同一版本的展示投影（两位小数字符串），不再用两位单价反算
+// （Spec `packaging-round-parts-and-e2e-fact-consistency.md` §4；断言口径没放宽，数值仍是 18080-16000）。
+if(row['税金']!=='2080.00' || row['数量']!==1000 || row['成本状态']!=='暂估（缺口草稿）') throw Error(JSON.stringify(row));
 '''
         run = subprocess.run(['node', '-e', script], text=True, capture_output=True)
         self.assertEqual(0, run.returncode, run.stderr)
@@ -134,11 +136,13 @@ if(row['税金']!==2080 || row['数量']!==1000 || row['成本状态']!=='暂估
         script = '''let LAST_PACKAGING_PACKAGE={requirement:{title:'礼盒'}};
 const FORMS=[{section_id:'s5_detail',step:5,columns:[]}];
 let row;function renderTableSection(ui){row=ui.rows[0]};
-''' + js_function(src,'applyPackagingQuoteRows') + '''
+''' + js_function(src,'packagingQuoteDetailValues') + js_function(src,'applyPackagingQuoteRows') + '''
 applyPackagingQuoteRows({box_type_code:'BOX',quote_quantity:1000,currency:'CNY',cost_total:12,
 margin_price:16,addon_total:4,subtotal_unit:20,discount_rate:0.1,net_unit_price:18,
 untaxed_unit_price:16,untaxed_total:18000,taxed_total:20340,tax_rate:0.13,draft:false});
-if(row['报价']!==20 || row['折扣']!==0.9 || row['折后价格']!==18)throw Error(JSON.stringify(row));
+// 2026-10-08：折后价格取引擎净单价原值（`String()` 保留精度），加价与折扣口径不变
+// （Spec `packaging-round-parts-and-e2e-fact-consistency.md` §4）。
+if(row['报价']!==20 || row['折扣']!==0.9 || row['折后价格']!=='18')throw Error(JSON.stringify(row));
 '''
         run = subprocess.run(['node','-e',script],capture_output=True,text=True)
         self.assertEqual(0,run.returncode,run.stderr)

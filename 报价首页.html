@@ -1953,7 +1953,7 @@
         '<div class="request-info">' + info + '</div>' +
         '<div class="request-footer"><div class="request-creator">' +
         '<div class="creator-avatar">' + escH(String(title).charAt(0) || '—') + '</div>' +
-        escH(date) + ' · ' + (Number(s.turns) || 0) + ' 轮</div>' +
+        escH(date) + ' · ' + (s.turns == null ? '—' : Number(s.turns) || 0) + ' 轮</div>' +
         '<span><span class="request-detail">详情</span>' +
         (mode === 'tech' ? '' : '<button class="card-del" title="删除该记录"><i class="ti ti-trash"></i></button>') + '</span></div></div>';
     }
@@ -2007,7 +2007,7 @@
             if (!wfUser()) throw new Error('尚未登录，请先登录后再查看技术工艺项目');
             let data;
             try {
-              data = await window.cpqAuth.api('/api/projects');
+              data = await homeBoundedRequest(signal => window.cpqAuth.api('/api/projects', { signal }));
             } catch (e) {
               throw new Error('项目接口读取失败：' + ((e && e.message) || '未知错误'));
             }
@@ -2019,7 +2019,7 @@
               title: pp.project_name || pp.device_name || pp.source_filename || '未命名工艺项目',
               project: pp.project_name || pp.device_name || pp.source_filename || '',
               created: pp.created_at || '', updated: pp.updated_at || pp.created_at || '',
-              status: pp.status || '', turns: 0,
+              status: pp.status || '', turns: pp.turns ?? null,
               card: pp.card || null,
             }));
             TECH_SCOPE_ROWS.mine = SESSIONS.tech;
@@ -2118,6 +2118,13 @@
         const entryId = techEntryId(tab);
         if (entryId !== 'mine') {
           const scoped = techScopedRows(entryId);
+          if (scoped === false) {
+            cardGrid.innerHTML = '<div class="cards-empty">项目列表读取失败：' + escH(SESSION_ERROR || '请求超时')
+              + '。<br><button class="icon-btn" onclick="techLoadScope(\'all\', TECH_INCLUDE_ARCHIVED)">重试</button></div>';
+            if (info) info.textContent = '';
+            if (ctrl) ctrl.innerHTML = '';
+            return;
+          }
           if (scoped === undefined) {
             cardGrid.innerHTML = '<div class="cards-empty">加载中…</div>';
             if (info) info.textContent = '';
@@ -2830,6 +2837,21 @@
     /* ===== 批次 10 / ## 139：首页三页签（唯一口径来自 tech-home-board.js）=====
        入口定义与卡片渲染都交给该模块；本机只记住「先给你看哪几条」，归属永远问后端。 */
     const TECH_SCOPE_ROWS = { mine: null, all: null, allArchived: null };
+    const TECH_SCOPE_REQUESTS = {};
+    function homeBoundedRequest(factory, timeoutMs = 15000) {
+      const controller = new AbortController();
+      let timer;
+      const deadline = new Promise((resolve, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error('读取超时，请重试；尚未取得数据，不代表清单为空');
+          error.code = 'home-request-timeout';
+          reject(error);
+          controller.abort();
+        }, timeoutMs);
+      });
+      return Promise.race([Promise.resolve().then(() => factory(controller.signal)), deadline])
+        .finally(() => clearTimeout(timer));
+    }
     let TECH_INCLUDE_ARCHIVED = false;   // 「全部项目」的「包含已归档」开关
     function techEntries() {
       const board = window.TechHomeBoard;
@@ -2864,24 +2886,29 @@
         title: pp.project_name || pp.device_name || pp.source_filename || '未命名工艺项目',
         project: pp.project_name || pp.device_name || pp.source_filename || '',
         created: pp.created_at || '', updated: pp.updated_at || pp.created_at || '',
-        status: pp.status || '', turns: 0,
+        status: pp.status || '', turns: pp.turns ?? null,
         card: pp.card || null,
       };
     }
     async function techLoadScope(scope, includeArchived) {
       const key = includeArchived ? 'allArchived' : scope;
+      if (TECH_SCOPE_REQUESTS[key]) return TECH_SCOPE_REQUESTS[key];
       TECH_SCOPE_ROWS[key] = null;
+      const run = (async () => {
       try {
         const url = '/api/projects?scope=' + encodeURIComponent(scope) +
           (includeArchived ? '&include_archived=true' : '');
-        const data = await window.cpqAuth.api(url);
+        const data = await homeBoundedRequest(signal => window.cpqAuth.api(url, { signal }));
         const arr = Array.isArray(data) ? data : (data && data.projects) || [];
         TECH_SCOPE_ROWS[key] = arr.map(techRowOf);
       } catch (e) {
-        TECH_SCOPE_ROWS[key] = [];
+        TECH_SCOPE_ROWS[key] = false;
         SESSION_ERROR = (e && e.message) || '读取失败';
       }
       if (currentMode === 'tech') renderCards();
+      })();
+      TECH_SCOPE_REQUESTS[key] = run;
+      try { return await run; } finally { delete TECH_SCOPE_REQUESTS[key]; }
     }
     // 返回该入口要渲染的行；undefined 表示正在加载（已排好下一次渲染）。
     // 「全部项目」按 TECH_INCLUDE_ARCHIVED 决定是否带上已归档（后端 include_archived）。
@@ -3284,18 +3311,25 @@
       box.innerHTML = '<div class="hist-empty">加载中…</div>';
       const sessions = [];
       let anyOk = false;
+      const failures = [];
       await Promise.all(HIST_SOURCES.map(async src => {
         try {
-          const r = await cpqAuthFetch(src.base + '/api/sessions').then(r => r.json());
+          const r = await homeBoundedRequest(signal => cpqAuthFetch(src.base + '/api/sessions', { signal })
+            .then(response => { if (!response.ok) throw new Error('历史读取失败：' + response.status); return response.json(); }));
           anyOk = true;
           (r.sessions || []).forEach(s => sessions.push(Object.assign({}, s, { _src: src })));
-        } catch (e) {}
+        } catch (e) { failures.push(e.message || '历史读取失败'); }
       }));
       if (!anyOk) {
         box.innerHTML = '<div class="hist-empty">无法连接助手服务，暂时读不到历史。<br>请先启动 cpq_suite_server.py。</div>';
         return;
       }
       if (!sessions.length) {
+        if (failures.length) {
+          box.innerHTML = '<div class="hist-empty">部分历史未读取成功：' + escH(failures[0])
+            + '。<br><button class="icon-btn" onclick="loadHistoryList()">重试</button></div>';
+          return;
+        }
         box.innerHTML = '<div class="hist-empty">还没有历史记录。<br>完成一次对话后会自动保存在这里。</div>';
         return;
       }
@@ -3312,7 +3346,7 @@
         const stepName = s._src.agent === 'quote' ? (STEP_NAMES[(s.step || 1) - 1] || '') : '';
         item.querySelector('.h-chip').textContent = s._src.label + '助手' + (stepName ? '·步骤' + (s.step || 1) + '·' + stepName : '');
         item.querySelector('.h-meta span:last-child').textContent =
-          (s.updated ? s.updated.replace('T', ' ').slice(5, 16) : '') + ' · ' + (s.turns || 0) + ' 轮';
+          (s.updated ? s.updated.replace('T', ' ').slice(5, 16) : '') + ' · ' + (s.turns == null ? '—' : s.turns || 0) + ' 轮';
         item.onclick = (e) => { if (!e.target.closest('.h-del')) openSession(s._src, s.id); };
         item.querySelector('.h-del').onclick = (e) => { e.stopPropagation(); deleteSession(s._src, s.id, s.title); };
         box.appendChild(item);

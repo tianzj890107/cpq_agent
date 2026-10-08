@@ -1640,12 +1640,13 @@
       } else if (name === 'match_products') {
         // 这个工具内部直接查 Postgres（不经 sql_query），轨迹里要显式写明取数出处，
         // 否则只显示「调用 match_products…」，看不出到底有没有查库。
-        main = '产品匹配：查询产品参数值表（远程 Postgres）并做六维加权评分';
+        const packagingMatch = currentIndustry() === 'packaging';
+        main = packagingMatch ? '包装匹配：查询包装案例库并比较盒型、尺寸和材料' : '产品匹配：查询产品参数值表（远程 Postgres）并做六维加权评分';
         const cond = ['max_dimension', 'application_scope', 'operating_temperature',
                       'service_life', 'hermeticity']
           .filter(k => String(inp[k] || '').trim())
           .map(k => (CAND_REQ_LABEL[k] || k) + '=' + inp[k]).join('，');
-        source = 'SELECT * FROM product_para_value' + (cond ? '　｜匹配条件：' + cond : '');
+        source = packagingMatch ? '包装案例库（按包装行业隔离）' : 'SELECT * FROM product_para_value' + (cond ? '　｜匹配条件：' + cond : '');
       } else if (name === 'Read') {
         /* 这里唯一读得到的东西就是 DA 本体（业务对象 / 逻辑实体 / 属性）。
            对用户来说那是一份语义定义，不是磁盘上的文件 —— 思考过程里报一个
@@ -2663,8 +2664,9 @@
     // ③ 产品匹配（纯查库 + 六维加权评分，不调模型）
     async function step1Match(req, comment) {
       setBusy(true);
-      const act = addToolActivity('第 1 步 · 产品匹配：查询产品参数值表（远程 Postgres）→ 六维加权评分',
-        'SELECT * FROM product_para_value');
+      const packagingMatch = currentIndustry() === 'packaging';
+      const act = addToolActivity(packagingMatch ? '第 1 步 · 包装匹配：查询包装案例库 → 盒型、尺寸和材料匹配' : '第 1 步 · 产品匹配：查询产品参数值表（远程 Postgres）→ 六维加权评分',
+        packagingMatch ? '包装案例库（按包装行业隔离）' : 'SELECT * FROM product_para_value');
       showTyping();
       const d = await _sseCall(AGENT_URL + '/api/step1/match',
         { phase: 'match', requirement: req, comment: comment || '', sid: currentSessionId,
@@ -2685,7 +2687,7 @@
         below_threshold: d.below_threshold, advice: d.advice,
         all_count: d.all_count, source: d.source || {},
       });
-      let md = '🔎 已查库并完成六维加权评分：共评估 ' + (d.all_count || 0) + ' 个产品，推荐 Top' +
+      let md = (packagingMatch ? '🔎 已查包装案例库并完成盒型、尺寸和材料匹配：共评估 ' : '🔎 已查库并完成六维加权评分：共评估 ') + (d.all_count || 0) + ' 个产品，推荐 Top' +
         ((d.products || []).length) + '（见上表）。';
       if (d.below_threshold) md += '\n\n⚠ ' + (d.advice || '无高度匹配标品，建议转入定制评估。');
       md += '\n\n请在上方表格点「选用」确定产品（随后会自动带出参数与价格）。';
@@ -4242,6 +4244,22 @@
           && Number.isFinite(rate) && rate >= 0 && rate < 1) PACKAGING_RESTORED_RATE = rate;
     }
 
+    function packagingQuoteDetailValues(quote) {
+      const q = quote || {};
+      const money = value => Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '';
+      const unit = q.net_unit_price ?? q.untaxed_unit_price;
+      return {
+        '数量': q.quote_quantity,
+        '报价': q.subtotal_unit ?? q.untaxed_unit_price,
+        '折扣': 1 - (q.discount_rate ?? 0),
+        // 单价保留引擎精度，总额只从同一版本的结果取，不能用两位单价反算。
+        '折后价格': unit == null ? '' : String(unit),
+        '总金额': money(q.untaxed_total),
+        '税率': q.tax_rate,
+        '税金': money(Number(q.taxed_total) - Number(q.untaxed_total)),
+      };
+    }
+
     function applyPackagingQuoteRows(quote) {
       if (!quote || !LAST_PACKAGING_PACKAGE) return;
       const req = LAST_PACKAGING_PACKAGE.requirement || {};
@@ -4258,6 +4276,7 @@
         '税金': quote.taxed_total - quote.untaxed_total,
         '成本状态': quote.draft ? '暂估（缺口草稿）' : '完整',
         '成本结果版本': quote.source_result_version || '',
+        ...packagingQuoteDetailValues(quote),
       };
       for (const id of ['s1_products', 's2_products', 's3_products', 's4_products', 's5_detail']) {
         const f = FORMS.find(x => x.section_id === id);
@@ -5102,6 +5121,11 @@
 
     // 单行重算：折后价格 = 报价 × 折扣 → 总金额 = 数量 × 折后价格 → 税金 = 总金额 × 税率
     function s5RecalcRow(tr) {
+      if (currentIndustry() === 'packaging' && LAST_PACKAGING_QUOTE) {
+        const values = packagingQuoteDetailValues(LAST_PACKAGING_QUOTE);
+        Object.keys(values).forEach(key => _s5Set(tr, key, values[key]));
+        return;
+      }
       const quote = _numOf(_s5Get(tr, '报价'));
       if (quote == null) { S5_DERIVED.forEach(k => _s5Set(tr, k, '')); return; }
       const disc = _numOf(_s5Get(tr, '折扣'));
@@ -5124,6 +5148,16 @@
       const bindRow = tr => {
         if (tr.dataset.s5bound) return;
         tr.dataset.s5bound = '1';
+        if (currentIndustry() === 'packaging' && LAST_PACKAGING_QUOTE) {
+          // 包装输入通过定价面板改后由引擎重算，不允许明细另算出第二套金额。
+          ['数量', '报价', '折扣', '税率'].forEach(key => {
+            const cell = _s5Cell(tr, key);
+            if (cell && cell.tagName === 'INPUT') {
+              cell.readOnly = true;
+              cell.title = '请在包装定价面板修改并重新定价';
+            }
+          });
+        }
         S5_DERIVED.forEach(k => {
           const el = _s5Cell(tr, k);
           if (el && el.tagName === 'INPUT') {

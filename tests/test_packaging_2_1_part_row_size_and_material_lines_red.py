@@ -162,18 +162,25 @@ class ESizeFormat(unittest.TestCase):
     def test_e2_业务件尺寸两位小数(self):
         got = js_one(BUSINESS_SIZE_FN, [business_row(218.19700899999998, 68.2460000000001)],
                      "业务部件尺寸")
-        self.assertEqual("218.2×68.25 mm", got, "浮点原值不许直接上屏（Spec §2.1）")
+        # 2026-10-08：零件行尺寸改为「严格两位小数 + ` × `」（Spec
+        # `packaging-round-parts-and-e2e-fact-consistency.md` §2）；仍不许直接把浮点原值上屏。
+        self.assertEqual("218.20 × 68.25 mm", got,
+                         "零件行尺寸必须两位小数（Spec §2，判据没放宽）")
 
     def test_e3_整数不补零(self):
         got = js_one(SIZE_FN, [{"unfolded_length_mm": 300, "unfolded_width_mm": 200}],
                      "几何分量尺寸")
         self.assertEqual("展开 300×200 mm", got, "`300.00` 不许出现（Spec §2.1）")
 
-    def test_e4_原文尺寸逐字不动(self):
+    def test_e4_成品原文不再冒充零件展开尺寸(self):
+        # 2026-10-08：对照表「产品尺寸」原文是**成品**尺寸，不是零件展开尺寸；零件行只显示
+        # 件自己的确认 / 图纸 / CAD 尺寸，未知轴显示 `—`（Spec
+        # `packaging-round-parts-and-e2e-fact-consistency.md` §2）。原文仍留在详情依据里
+        # （`packaging_parts.py` 的「尺寸原文」对），证据没有丢。
         row = {"authority": {"product_size_text": "200×150×80 mm"},
                "reference": {"product_size_text": "200×150×80 mm"}}
-        self.assertEqual("200×150×80 mm", js_one(BUSINESS_SIZE_FN, [row], "业务部件尺寸"),
-                         "客户 / 图纸原文不许被格式化（Spec §2.1）")
+        self.assertEqual("— × — mm", js_one(BUSINESS_SIZE_FN, [row], "业务部件尺寸"),
+                         "零件行不许拿成品原文当零件展开尺寸（Spec §2）")
 
     def test_e5_后端_mm_text_两位小数(self):
         from tech_app.backend.services import packaging_parts

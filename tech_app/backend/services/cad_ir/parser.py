@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import math
 import os
 import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -233,10 +234,14 @@ def _points_of_entity(entity: Any, kind: str) -> List[geometry.Point]:
 
 def _closed_flag(entity: Any, kind: str, points: Sequence[geometry.Point],
                  tolerance: float) -> bool:
-    if kind in ("CIRCLE", "ELLIPSE"):
+    if kind == "CIRCLE":
         return True
     if kind == "ARC":
-        return True
+        return False
+    if kind == "ELLIPSE":
+        start = geometry.finite(entity.dxf.get("start_param", 0.0))
+        end = geometry.finite(entity.dxf.get("end_param", 2 * math.pi))
+        return start is not None and end is not None and abs(abs(end - start) - 2 * math.pi) < 1e-8
     if kind in POLYLINE_TYPES:
         try:
             if bool(entity.closed) if kind == "LWPOLYLINE" else bool(entity.is_closed):
@@ -296,7 +301,8 @@ def _curve_metrics(entity: Any, kind: str) -> Tuple[Optional[float], Optional[fl
         except Exception:  # pragma: no cover
             pts = []
         attrs.update({"center": list(center) if center else None, "ratio": ratio,
-                      "semi_major": semi_major, "semi_minor": semi_minor, "curve": "ellipse"})
+                      "semi_major": semi_major, "semi_minor": semi_minor, "curve": "ellipse",
+                      "sampled_points": geometry.points_of(pts), "sample_step": 0.01})
         return (geometry.ellipse_perimeter(semi_major, semi_minor), None,
                 geometry.bbox_of(pts), attrs)
     if kind == "SPLINE":
@@ -334,12 +340,26 @@ def _polyline_row(entity: Any, kind: str, item: Dict[str, Any], builder: _Builde
     if not points:
         return None
     closed = _closed_flag(entity, kind, points, builder.tolerance)
-    length = geometry.polyline_length(points, closed=closed)
-    area = geometry.polygon_area(points) if closed else None
+    sampled = []
+    try:
+        # ezdxf 的 path 展开保留 bulge（圆弧），原始顶点继续存档。
+        from ezdxf.path import make_path
+        import itertools
+        sampled = [(float(v.x), float(v.y)) for v in itertools.islice(
+            make_path(entity).flattening(0.01), 8193)]
+        if len(sampled) > 8192:
+            builder.warn("polyline_sampling_limit", "曲线采样超出上限，保留顶点并等待核对", [])
+            sampled = []
+    except Exception:
+        sampled = []
+    measured = sampled or points
+    length = geometry.polyline_length(measured, closed=closed)
+    area = geometry.polygon_area(measured) if closed else None
     return {"closed": closed, "length": length, "area": area,
-            "bbox": geometry.bbox_of(points),
+            "bbox": geometry.bbox_of(measured),
             # 顶点坐标落盘（Spec §2）：`vertices` 仍是数量，`points` 是坐标（与它一致）。
-            "attributes": {"vertices": len(points), "points": geometry.points_of(points)}}
+            "attributes": {"vertices": len(points), "points": geometry.points_of(points),
+                           "sampled_points": geometry.points_of(sampled), "sample_step": 0.01}}
 
 
 def _row_for(entity: Any, item: Dict[str, Any], builder: _Builder,
@@ -529,7 +549,9 @@ def _dimension_targets(entity: Any) -> List[str]:
     """把标注的两个定义点尽量关联到实体（关联不到就留空，不猜）。"""
     out: List[str] = []
     try:
-        for attribute in ("defpoint2", "defpoint3"):
+        kind = int(entity.dxf.get("dimtype", 0) or 0) & 7
+        attributes = ("defpoint", "defpoint4") if kind in (3, 4) else ("defpoint2", "defpoint3")
+        for attribute in attributes:
             point = geometry.point_of(entity.dxf.get(attribute))
             if point is not None:
                 out.append("point:%.6f,%.6f" % (point[0], point[1]))

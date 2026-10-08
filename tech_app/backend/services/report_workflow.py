@@ -371,10 +371,13 @@ def new_report(project_id: str, user: dict) -> ProcessReport:
         summary["risks"] = snapshot_lines["risks"]
     # 包装项目没有 legacy 摘要：结论句由制造快照的现状生成，不留空结论
     # （否则 3.1 会以"没有内容"为由挡住送审，而其实零件与成本都在）。
-    if not summary.get("conclusion") and snapshot.get("ready"):
-        summary["conclusion"] = packaging_conclusion(snapshot)
+    req_data = requirement.get("data") or {}
+    if not summary.get("conclusion") and (snapshot.get("ready") or req_data.get("industry") == "packaging"):
+        summary["conclusion"] = (packaging_conclusion(snapshot) if snapshot.get("ready") else
+            "包装内部草稿：零件尺寸、工艺或成本证据尚未齐全；成本尚未测算完成，不能正式报价或发布报告。")
     device_name = (aggregate.get("device_name")
-                   or (store.load_requirement(project_id) or {}).get("product_name")
+                   or req_data.get("packaging_product_name") or req_data.get("title")
+                   or requirement.get("product_name")
                    or "未命名项目")
     now = now_str()
     preparer = (user or {}).get("display_name") or (user or {}).get("username", "system")

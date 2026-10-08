@@ -811,6 +811,38 @@ def dimension_rects(cad_ir: Any) -> List[Dict[str, Any]]:
                     "witness_points": [list(point) for point in witnesses],
                     "dimension_ref": ("dim:%s|%s" % (h_id, v_id)) if (h_id or v_id) else "",
                 })
+    # 圆形的直径/半径标注不是两条线性尺寸，必须关联真实 CIRCLE 后单独核验。
+    circles = [row for row in ir.get("entities") or [] if row.get("type") == "CIRCLE"]
+    for dimension in ir.get("dimensions") or []:
+        kind = dimension.get("dim_type")
+        if kind not in ("diameter", "radius"):
+            continue
+        points = [_dimension_point(target) for target in dimension.get("target_entity_ids") or []]
+        if len(points) != 2 or any(point is None for point in points):
+            continue
+        first, second = points
+        value = _num(dimension.get("measured_value"))
+        declared = _num(dimension.get("declared_value"))
+        if value is None or value <= 0 or (declared is not None and abs(declared - value) > 0.01):
+            continue
+        center = first if kind == "radius" else ((first[0]+second[0])/2, (first[1]+second[1])/2)
+        radius = value if kind == "radius" else value/2
+        if abs(((second[0]-first[0])**2 + (second[1]-first[1])**2)**0.5 - value) > 0.01:
+            continue
+        matching = []
+        for circle in circles:
+            attributes = circle.get("attributes") or {}
+            actual_center, actual_radius = _xy(attributes.get("center")), _num(attributes.get("radius"))
+            if actual_center is not None and actual_radius is not None \
+                    and abs(actual_radius-radius) <= 0.01 \
+                    and ((actual_center[0]-center[0])**2 + (actual_center[1]-center[1])**2)**0.5 <= 0.01:
+                matching.append(_text(circle.get("entity_id")))
+        if matching:
+            rects.append({"length_mm": radius*2, "width_mm": radius*2,
+                          "center": list(center), "witness_points": [list(point) for point in points],
+                          "circle_entity_ids": matching,
+                          "dimension_ref": "dim:" + _text(dimension.get("entity_id")),
+                          "dimension_kind": kind})
     return rects
 
 
@@ -906,6 +938,9 @@ def _region_is_size_confirmed(region: Dict[str, Any], rects: Any) -> bool:
     box = _region_box(region)
     for rect in (rects or []):
         if not isinstance(rect, dict):
+            continue
+        if rect.get("circle_entity_ids") and not set(rect["circle_entity_ids"]).intersection(
+                region.get("entity_ids") or []):
             continue
         if not _sizes_match(rect.get("length_mm"), rect.get("width_mm"), region):
             continue

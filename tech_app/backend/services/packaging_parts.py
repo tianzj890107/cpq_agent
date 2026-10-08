@@ -256,7 +256,7 @@ SIZE_QUALITIES = (SIZE_QUALITY_UNFOLDED, SIZE_QUALITY_BBOX)
 UNFOLDED_SIZE_SOURCES = ("closed_outline", "dwg_outline")
 
 #: 求环只吃这几类实体；DIMENSION / HATCH / INSERT / TEXT 一律不参与（Spec §3 第 1 步）。
-LOOP_TYPES = ("LINE", "ARC", "CIRCLE", "LWPOLYLINE", "POLYLINE", "SPLINE")
+LOOP_TYPES = ("LINE", "ARC", "CIRCLE", "ELLIPSE", "LWPOLYLINE", "POLYLINE", "SPLINE")
 
 #: CIRCLE 天然闭环，按这个点数采样成多边形（面积走鞋带公式的近似）。
 CIRCLE_SAMPLES = 32
@@ -460,19 +460,19 @@ def _layer_key(name: Any) -> str:
 
 
 def _segment_of(entity: Any) -> List[List[float]]:
-    """一条实体 → 一段折线点串（**纯函数**，Spec §C1）：只认**已经落盘**的顶点坐标。
-
-    折线 `attributes.points` / 直线 `start`+`end` / 样条 `fit_points` 三种；其余类型（圆、弧、
-    椭圆、填充）今天在 IR 里没有顶点坐标 —— 一段都不出，**不猜**、不拿 bbox 编点。
-    """
+    """一条实体 → 预览点串：优先 CAD 采样，圆/弧依据真实参数展开，不拿 bbox 编轮廓。"""
     payload = entity if isinstance(entity, dict) else {}
     attrs = payload.get("attributes") if isinstance(payload.get("attributes"), dict) else {}
     raw: Any = None
-    for key in ("points", "fit_points"):
+    for key in ("sampled_points", "points", "fit_points"):
         candidate = attrs.get(key)
         if isinstance(candidate, list) and len(candidate) >= 2:
             raw = candidate
             break
+    if raw is None:
+        chains, _, _ = _entity_chains(payload)
+        if chains:
+            raw = chains[0]
     if raw is None:
         start, end = attrs.get("start"), attrs.get("end")
         if isinstance(start, (list, tuple)) and isinstance(end, (list, tuple)):
@@ -1141,7 +1141,7 @@ def _entity_chains(entity: Dict[str, Any]
     """实体 → (chains, natural_closed, approximation)；拿不到坐标 → (None, False, "")。
 
     chains 是若干条点序列（每条 ≥ 2 点）；natural_closed 表示这一条实体自己就是闭环。
-    弧段（ARC）与样条（SPLINE）在本版按端点直连近似，必须留痕（Spec §3 第 5 步）。
+    圆弧按受控点列保留形状，样条/椭圆优先采用解析器的采样证据。
     """
     kind = _text(entity.get("type")).upper()
     if kind not in LOOP_TYPES:
@@ -1161,13 +1161,18 @@ def _entity_chains(entity: Dict[str, Any]
             return None, False, ""
         first_angle = _num(attrs.get("start_angle")) or 0.0
         second_angle = _num(attrs.get("end_angle")) or 0.0
-        first = (center[0] + radius * math.cos(math.radians(first_angle)),
-                 center[1] + radius * math.sin(math.radians(first_angle)))
-        second = (center[0] + radius * math.cos(math.radians(second_angle)),
-                  center[1] + radius * math.sin(math.radians(second_angle)))
-        if cad_geometry.distance(first, second) <= LOOP_TOLERANCE_MM:
-            return None, False, ""
-        return [[first, second]], False, "arc_endpoints"
+        span = (second_angle - first_angle) % 360.0 or 360.0
+        # 插入轴向极值，保证跨零度及非整步长圆弧的包络不缩小。
+        step = math.degrees(2 * math.acos(max(-1.0, 1 - min(0.01 / radius, 1.0))))
+        count = min(4096, max(2, math.ceil(span / max(step, 0.001))))
+        angles = {first_angle + span * index / count for index in range(count + 1)}
+        for quadrant in range(math.floor(first_angle / 90), math.ceil((first_angle + span) / 90) + 1):
+            angle = quadrant * 90.0
+            if first_angle <= angle <= first_angle + span:
+                angles.add(angle)
+        points = [(center[0] + radius * math.cos(math.radians(angle)),
+                   center[1] + radius * math.sin(math.radians(angle))) for angle in sorted(angles)]
+        return [points], span == 360.0, "arc_sampled"
     if kind == "CIRCLE":
         center = cad_geometry.point_of(attrs.get("center"))
         radius = _num(attrs.get("radius"))
@@ -1178,13 +1183,21 @@ def _entity_chains(entity: Dict[str, Any]
                 for index in range(CIRCLE_SAMPLES)]
         return [ring + [ring[0]]], True, ""
     if kind in ("LWPOLYLINE", "POLYLINE"):
-        points = cad_geometry.points_of(attrs.get("points") or [])
+        points = cad_geometry.points_of(attrs.get("sampled_points") or attrs.get("points") or [])
         if len(points) < 2:
             return None, False, ""
         closed = bool(entity.get("closed")) or cad_geometry.is_closed(points, LOOP_TOLERANCE_MM)
         if closed and not cad_geometry.is_closed(points, LOOP_TOLERANCE_MM):
             points = points + [points[0]]
         return [points], closed, ""
+    if kind == "ELLIPSE":
+        points = cad_geometry.points_of(attrs.get("sampled_points") or [])
+        if len(points) < 2:
+            return None, False, ""
+        closed = bool(entity.get("closed")) or cad_geometry.is_closed(points, LOOP_TOLERANCE_MM)
+        if closed and not cad_geometry.is_closed(points, LOOP_TOLERANCE_MM):
+            points.append(points[0])
+        return [points], closed, "ellipse_sampled"
     if kind == "SPLINE":
         points = cad_geometry.points_of(attrs.get("fit_points") or [])
         if len(points) < 2:
@@ -4509,6 +4522,8 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
             "status": status, "component_ids": known,
             "entity_ids": confirmed_entities,
             "bbox": union_box,
+            "length_mm": abs(union_box[2] - union_box[0]) if union_box else None,
+            "width_mm": abs(union_box[3] - union_box[1]) if union_box else None,
             "confidence": (1.0 if status == "bound" and source == "manual" else
                            candidate_confidence_percent(selected) / 100.0
                            if status == "bound" and source == "auto" else 0.0),
@@ -4655,12 +4670,25 @@ def confirm_business_part_size(doc: Any, code: Any, length_mm: Any, width_mm: An
 
 
 def verified_business_part_input_row(row: Any, doc: Any) -> Dict[str, Any]:
-    """单件工艺/成本的输入行：图纸推导件只使用已经人工确认的尺寸。"""
+    """单件输入只用人工核对或空间关联 CAD 标注；自动候选/bbox 仍不得放行。"""
     result = copy.deepcopy(row) if isinstance(row, dict) else {}
     if not isinstance(doc, dict) or not doc.get("derived_from_drawing"):
         return result
     binding = result.get("geometry_binding") if isinstance(result.get("geometry_binding"), dict) else {}
     confirmed = result.get("confirmed_size") if isinstance(result.get("confirmed_size"), dict) else {}
+    cad_verified = (binding.get("status") == "bound" and binding.get("size_confirmed") is True
+                    and binding.get("size_source") == "size_dimension"
+                    and "size_dimension" in (binding.get("evidence_kinds") or [])
+                    and binding.get("component_ids") and binding.get("entity_ids")
+                    and (_num(binding.get("length_mm")) or 0) > 0
+                    and (_num(binding.get("width_mm")) or 0) > 0)
+    if cad_verified and not confirmed:
+        reference = dict(business_part_reference_block(result))
+        reference.update(length_mm=_num(binding["length_mm"]), width_mm=_num(binding["width_mm"]),
+                         size_source="verified_cad_dimension", size_quality="unfolded")
+        result[REFERENCE_BLOCK_KEY] = reference
+        result[LEGACY_REFERENCE_BLOCK_KEY] = dict(reference)
+        return result
     if (binding.get("status") != "bound" or binding.get("bound_by") not in ("manual", "auto")
             or binding.get("size_confirmed") is not True or not binding.get("component_ids")
             or (_num(confirmed.get("length_mm")) or 0) <= 0

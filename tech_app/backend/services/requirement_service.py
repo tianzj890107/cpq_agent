@@ -86,9 +86,17 @@ def extract_explicit_packaging_quote_fields(text: str) -> dict:
         r"(\d+(?:\.\d+)?)\s*[×xX*]\s*(\d+(?:\.\d+)?)\s*mm\b", source, re.I)]
     if sizes and len(set(sizes)) == 1 and all(value > 0 for value in sizes[0]):
         out.update(zip(("inner_length", "inner_width", "inner_height"), sizes[0]))
-    gsm = unique(r"面纸(?:克重)?\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(?:g|克)(?:\s*/\s*m(?:²|2))?")
+    gsm_values = {float(match.group(1)) for pattern in (
+        r"面纸(?:克重)?\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(?:g|克)(?:\s*/\s*m(?:²|2))?",
+        r"(\d+(?:\.\d+)?)\s*(?:g|克)(?:\s*/\s*m(?:²|2))?\s*面纸")
+        for match in re.finditer(pattern, source, re.I)}
+    gsm = next(iter(gsm_values)) if len(gsm_values) == 1 else None
     if gsm and float(gsm) > 0:
         out["face_paper_gsm"] = float(gsm)
+    if not out.get("closure_type"):
+        closures = set(re.findall(r"双开门\s*/\s*对开|双开门|对开", source))
+        if len(closures) == 1:
+            out["closure_type"] = next(iter(closures))
     insert = unique(r"内托\s*[:：]?\s*([A-Za-z\u4e00-\u9fff]+)")
     if not insert:
         match = re.search(r"\b(EVA)\s*内托\b", source, re.I)

@@ -117,7 +117,11 @@ class GenerateParamsFillsEveryGap(unittest.TestCase):
     def test_autofill_helper_reuses_existing_pipeline(self):
         body = block_from(self.board, "async function aiAutoFillParams()")
         self.assertTrue(body, "找不到 aiAutoFillParams()")
-        self.assertIn("aiParamsAutofill()", body, "补全必须复用既有智能补全")
+        # 2026-10-08：自动链只落需求事实、模型猜测仍要人工核对（Spec
+        # `packaging-round-parts-and-e2e-fact-consistency.md` §3 与 §6.1 授权，
+        # 只改自动调用入参，参数/自动填充流程与门禁断言一个字没放宽）。
+        self.assertIn("aiParamsAutofill({ knownOnly: true })", body,
+                      "补全必须复用智能补全，但不得自动落库模型猜测")
         self.assertIn("aiParamsFinalize(false)", body, "补上的值要复用既有 finalize 落库")
         self.assertIn("applied", body, "只有真的填进了值才值得写一次 finalize")
         for token in ("fetch(", "/api/projects/"):

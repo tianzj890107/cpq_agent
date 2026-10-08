@@ -178,3 +178,17 @@ node --check tech_app/frontend/app.js           # OK
 ```
 
 未连 PG / 34、未写生产数据、未调模型、未 push / MR / tag / Release / 未部署。
+
+## 附录 A：§C1「圆 / 弧 / 椭圆一段都不出」已修订（2026-10-08）
+
+§C1 当时的前提是「圆、弧、椭圆今天在 IR 里没有顶点坐标」。新 Spec
+`packaging-round-parts-and-e2e-fact-consistency.md` §1 要求预览保留曲线形状（不得以端点弦或包围盒
+代替），因此 `packaging_parts._segment_of()` 增加一条回退：拿不到落盘顶点时按 `_entity_chains()` 的
+**真实圆心 / 半径 / 起止角**采样成一段折线（整圆 33 点、首尾重合）。
+
+- 判据没有放宽：没有任何真实几何参数的实体仍然一段都不出（`{"attributes": {}}` ⇒ 0 段），
+  纯包围盒永远不许编点；段数 / 点数上限与 `truncated` 披露一个字没动。
+- 受影响的红测（本批同步，改钉新契约）：`tests/test_packaging_cad_plan_polyline_segments_red.py::test_a5`
+  改名 `test_a5_curves_are_sampled_from_real_parameters_not_from_the_box`（圆 1 段、首尾重合、空实体 0 段）。
+- 连带变化见 `packaging-dimension-frame-must-not-be-the-part-ring.md` 附录 A 与
+  `packaging-business-parts-outline-bbox-broken-link.md` 附录 A。

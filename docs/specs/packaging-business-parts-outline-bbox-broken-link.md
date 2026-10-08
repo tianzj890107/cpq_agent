@@ -231,3 +231,12 @@ python -m unittest tests.test_packaging_parts_extraction_red \
 另：本批 Spec 头部写的 changelog 条目号是 `## 461`，同一时刻落地的
 `tech-projection-step-state-must-agree-with-its-reasons.md` 也写了 `## 461`（号撞了）。
 本批按自己的号写 `## 461`，另一批的实现方请另取号。
+
+## 附录 A：§1.6 的 `closed_ratio` 圆盘盒 0.817 → 0.840（2026-10-08）
+
+同一条根因：新 Spec `packaging-round-parts-and-e2e-fact-consistency.md` §1 让 7 件 bulge 整圆首次判
+闭合，圆盘盒 `closed_ratio` 0.817 → 0.840（255/312 → 262/312）。
+
+- 件数（263 / 312）、酒盒 0.510 与 `extract()` 的确定性不变；§1.6 的验收门槛（≥20% 余量）与绑定件数
+  门槛不因此放宽。
+- 红测 `tests/test_packaging_business_parts_outline_bbox_link_red.py` 的 `CLOSED_RATIO` 同步。

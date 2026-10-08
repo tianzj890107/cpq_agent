@@ -531,16 +531,21 @@ function crRenderTotal() {
   const final = crData?.final || {};
   const partsTotal = crData?.parts_total || {};
   const counts = crData?.counts || {};
+  const packaging = crData?.packaging_cost;
+  const scopeText = packaging ? '逐件材料开料费与包装整单公式成本是两种核算视图，不重复相加。整单有缺口时仅用于内部草稿。'
+    : '零件合计是“料工费加起来多少”；整机成本已含零件成本，是对外的口径。';
+  const finalLabel = packaging ? (packaging.has_gaps || packaging.stale || !packaging.built
+    ? '包装整单部分成本（内部草稿）' : '包装整单成本') : '整机成本（对外口径）';
   let html = `<section class="inline-card"><div class="inline-card-title">汇总</div>`
     + `<div class="inline-hint">两个数回答的不是同一个问题，<strong>不要相加</strong>：`
-    + `零件合计是"料工费加起来多少"；整机成本已含零件成本，是对外的口径。</div>`
+    + `${esc(scopeText)}</div>`
     + `<div class="inline-cost-table-wrap"><table class="inline-cost-table"><thead><tr>`
     + `<th>口径</th><th>材料</th><th>人工</th><th>制造费用</th><th>加工费用</th><th>合计</th>`
     + `</tr></thead><tbody>`
     + `<tr><td>零件成本合计（${counts.parts_costed || 0}/${counts.parts || 0} 件）</td>`
     + ['material', 'labor', 'overhead', 'machining', 'total']
         .map(key => `<td><span class="number">${crMoney(partsTotal[key])}</span></td>`).join('')
-    + `</tr><tr class="cr-final"><td><b>整机成本（对外口径）</b></td>`
+    + `</tr><tr class="cr-final"><td><b>${esc(finalLabel)}</b></td>`
     + ['material', 'labor', 'overhead', 'machining', 'total']
         .map(key => `<td><span class="number">${crMoney(final[key])}</span></td>`).join('')
     + `</tr></tbody></table></div>`;
@@ -706,6 +711,13 @@ function crRender() {
   });
   $cr('crBody').innerHTML = renderers[crTab]();
   const packagingCost = crData?.packaging_cost;
+  if (packagingCost) {
+    const scope = document.createElement('div');
+    scope.className = 'inline-hint';
+    scope.textContent = `报价批量：${crData.quote_quantity ?? '待填写'} 只；单盒用量另按零件行核对，不是报价批量。`
+      + (crData.quantity_mismatch ? `当前成本按 ${crData.cost_quote_quantity} 只测算，与需求不一致，请重新测算。` : '');
+    $cr('crBody').prepend(scope);
+  }
   if (packagingCost && (packagingCost.has_gaps || packagingCost.stale)) {
     const notice = document.createElement('div');
     notice.className = 'inline-warn';
@@ -961,6 +973,13 @@ async function crSendToFinance() {
 
 /* --------------------------------------------------------------- 测算 */
 async function crRunPart(partId, quantity) {
+  if (crData?.packaging_cost) {
+    quantity = Number($cr('crQuantity')?.value || crData.quote_quantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      crToast('请先填写真实报价批量，不能把单盒用量1当作报价数量。', true);
+      return false;
+    }
+  }
   if (crBusy) return false;
   crBusy = true;
   crRender();
@@ -1287,7 +1306,7 @@ async function crStart() {
   try {
     crData = await api(crUrl(''));
     $cr('crNote').value = crData.review?.note || '';
-    $cr('crQuantity').value = crData.quantity || 1;
+    $cr('crQuantity').value = crData.packaging_cost ? (crData.quote_quantity ?? '') : crData.quantity || 1;
     crTab = crData.ready ? 'total' : (crData.counts?.missing || []).length ? 'parts' : 'assembly';
     crRender();
     await crReplayTimeline();

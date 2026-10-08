@@ -660,7 +660,7 @@ function aiRenderDrawings() {
     });
     if (parts.some(part => !part.hasCost)) {
       html += `<div class="inline-warn">⚠ 有零件尚未在第 4 阶段完成成本测算。整单成本会缺这几项的底价，`
-        + `模型只能估 —— 建议先回 2.1 把它们算完。</div>`;
+        + `请在第 4 阶段成本测算中补齐；当前只可查看带缺口的成本草稿。</div>`;
     }
   }
   return html + `</section>`;
@@ -821,7 +821,12 @@ async function aiConfirmStep(step) {
 /** 第 3 阶段 · 3.2 参数推荐：智能补全。只给还缺的报价必填项出**建议值**，不落库。
     复用既有 POST /integration/params/autofill 与任务轮询，不新增第二套推荐逻辑；
     建议值经 QuoteParams.applyFills() 回填到当前参数表，人工核对后保存才会写进模型。 */
-async function aiParamsAutofill() {
+function aiAutoApplicableFills(fills) {
+  return (Array.isArray(fills) ? fills : []).filter(fill => fill.source === 'saved_requirement');
+}
+
+async function aiParamsAutofill(options) {
+  const opts = options || {};
   if (aiBusy) return;
   if (!aiData?.status?.has_params) { aiToast('请先生成参数推荐', true); return; }
   aiBusy = true;
@@ -842,7 +847,8 @@ async function aiParamsAutofill() {
     aiPublishTask('task-progress', { taskId: taskId, label: '智能补全', status: 'running',
                                      progress: '已提交，正在按 2.1 零件与库内规则推缺失项…' });
     const result = await aiPollTask(taskId, card, '智能补全');
-    const fills = result?.fills || [];
+    const proposed = result?.fills || [];
+    const fills = opts.knownOnly ? aiAutoApplicableFills(proposed) : proposed;
     const unresolved = result?.unresolved || [];
     aiBusy = false;
     aiRender();                     // 先把表画回来，再往输入框里填
@@ -857,7 +863,8 @@ async function aiParamsAutofill() {
       : `没有可以推出来的参数${unresolved.length ? `：${unresolved.join('、')} 都需要人工确定。` : '。'}`);
     // 调用方（生成参数推荐链路）据此判断要不要把补上的值落库：建议已回填进表格，
     // 但只有真的填了值才值得写一次 finalize。
-    return { applied: applied, unresolved: unresolved };
+    return { applied: applied, unresolved: unresolved,
+             suggestions: proposed.filter(fill => fill.source !== 'saved_requirement') };
   } catch (error) {
     const message = error.message || '智能补全失败';
     const interrupted = aiTaskInterrupted(error);
@@ -917,7 +924,7 @@ async function aiParamsFinalize(confirm, waiver) {
 async function aiAutoFillParams() {
   if (!aiHasParams()) return { applied: 0, unresolved: [] };
   if (!aiMissingParamFields().length) return { applied: 0, unresolved: [] };
-  const filled = await aiParamsAutofill();
+  const filled = await aiParamsAutofill({ knownOnly: true });
   if (filled && filled.applied > 0) await aiParamsFinalize(false);
   return filled || { applied: 0, unresolved: [] };
 }
@@ -1417,6 +1424,8 @@ function aiRenderOps() {
     : '确认参数推荐与组装工艺后，把任务交给财务经理测算成本';
 
   const financeBtn = $ai('aiToFinance');
+  const draftBtn = $ai('aiFinanceDraft');
+  if (draftBtn) { draftBtn.hidden = aiIndustry !== 'packaging'; draftBtn.disabled = aiBusy; }
   // L2 缺口不再把按钮置灰：参数推荐与组装工艺跑过（L1）就能点，缺什么由「仍要继续」
   // 签字放行。忙的时候仍然禁用 —— 那是并发保护，不是业务门禁。
   const ready = Boolean(state.has_params && state.has_process) && !aiBusy;
@@ -1475,7 +1484,7 @@ async function aiWfApi(path) {
   return window.cpqAuth.api(path);
 }
 
-async function aiOpenFinanceDialog(waiver) {
+async function aiOpenFinanceDialog(waiver, draft = false) {
   if (aiBusy) {
     const message = '正在处理中，请稍后再发送财务。';
     aiStatus(message, true);
@@ -1557,6 +1566,7 @@ async function aiOpenFinanceDialog(waiver) {
   $ai('aiSendGo').onclick = () => {
     const way = $ai('aiSendWay').value;
     const dispatch = { target_type: way, note: $ai('aiSendNote').value.trim() };
+    if (draft) dispatch.draft = true;
     if (way === 'role') dispatch.target_role_code = $ai('aiSendRole').value;
     if (way === 'user') {
       dispatch.target_user_id = $ai('aiSendUser').value;
@@ -1637,6 +1647,7 @@ async function aiSendToFinanceInBackground() {
 async function aiRunOp(kind, dispatch) {
   if (aiBusy) return;
   const labels = { 'send-to-finance': '确认工艺并发送至财务做成本测算' };
+  if (dispatch && dispatch.draft) labels['send-to-finance'] = '发送包装内部草稿核算（不可正式发布）';
   aiBusy = true;
   aiRenderOps();
   aiRenderActions();
@@ -1659,10 +1670,11 @@ async function aiRunOp(kind, dispatch) {
     card.log([`任务 ${finance.task_no || ''} 已${whom}`,
       `  他将在技术工艺 4 成本测算逐件测算零件成本与组装成本`,
       `  写入数据库与发送至报价也都在那一步完成`]);
-    aiSay(`工艺已确认，任务 ${finance.task_no || ''} 已${whom}做成本测算。
+    aiSay(`${finance.draft ? '内部草稿已交接，未代签参数或工艺确认' : '工艺已确认'}，任务 ${finance.task_no || ''} 已${whom}做成本测算。
 `
       + `他会在 4 成本测算逐个零件加整机算完成本，然后选择写入数据库、发送至报价，`
-      + `或把结果退回给你复核工艺与用量。报价必填参数已在前面「参数推荐」里定稿。`);
+      + (finance.draft ? `或退回补齐缺口；当前参数和工艺未定稿，成本仅用于内部草稿核算。`
+                       : `或把结果退回给你复核工艺与用量。报价必填参数已在前面「参数推荐」里定稿。`));
     card.done(true);
     aiStatus(`${labels[kind]}完成`);
     aiPublishTask('task-completed', { taskId: opTask, label: labels[kind],
@@ -1919,6 +1931,7 @@ function aiBindShell() {
   // 不直接发：先走与左侧动作同一条链路 —— 组装工艺没确认就先确认，L2 缺口由「仍要继续」
   // 取得本人签字，最后才让人选派发方式（角色 / 指定人 / 公共任务池），和报价助手一致。
   $ai('aiToFinance').onclick = () => aiConfirmProcessAndSendToFinance();
+  if ($ai('aiFinanceDraft')) $ai('aiFinanceDraft').onclick = () => aiOpenFinanceDialog(null, true);
   $ai('aiSend').onclick = () => aiSendNote();
   $ai('aiInput').onkeydown = event => {
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); aiSendNote(); }

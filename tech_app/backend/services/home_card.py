@@ -207,6 +207,20 @@ def packaging_progress(project_id: str) -> Dict[str, Any]:
     return facts
 
 
+def project_list_identity(meta: dict, requirement: Any, events: Any) -> dict:
+    """项目名与附件名分开；轮次只计持久化用户消息，不计任务进度。"""
+    out = dict(meta)
+    req = requirement if isinstance(requirement, dict) else {}
+    data = req.get("data") if isinstance(req.get("data"), dict) else {}
+    out["project_name"] = (_text(meta.get("project_name")) or _text(data.get("project_name"))
+                           or _text(data.get("title")) or _text(req.get("title"))
+                           or _text(meta.get("device_name")) or _text(meta.get("source_filename")))
+    out["turns"] = (sum(1 for row in events if isinstance(row, dict)
+                        and row.get("kind") == "user" and _text(row.get("text")))
+                    if isinstance(events, list) else None)
+    return out
+
+
 def build_card(project_id: str, meta: Optional[dict] = None, user: Optional[dict] = None) -> Dict[str, Any]:
     """一张首页卡片；投影读不动时降级为空阶段，绝不抛。"""
     meta = meta if isinstance(meta, dict) else (store.load_meta(project_id) or {})

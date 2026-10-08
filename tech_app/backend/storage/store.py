@@ -381,11 +381,14 @@ def save_business_case(project_id: str, link: dict, author: str = "system") -> d
 
 def list_projects(include_archived: bool = False) -> List[dict]:
     out = []
+    owner_users = {}
     for meta in _meta().list_metas():
         if meta.get("deleted_at") and not include_archived:
             continue
         owner = meta.get("owner") or "system"
-        owner_user = _meta().get_user(owner)
+        if owner not in owner_users:
+            owner_users[owner] = _meta().get_user(owner)
+        owner_user = owner_users[owner]
         # 展示名每次从账户资料解析，用户修改个人显示名后无需回写历史项目。
         meta["owner_display_name"] = (owner_user or {}).get("display_name") or meta.get("owner_display_name") or owner
         pid = meta.get("project_id")

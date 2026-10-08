@@ -238,10 +238,19 @@ class AComponentSegments(unittest.TestCase):
         self.assertIs(True, got["truncated"])
         self.assertEqual([[0.0, 0.0], [0.0, 1.0]], got["segments"][0], "取前 24 段（Spec §C1）")
 
-    def test_a5_entities_without_coordinates_yield_nothing(self):
+    def test_a5_curves_are_sampled_from_real_parameters_not_from_the_box(self):
+        """2026-10-08：本 Spec §C1「圆/弧/椭圆一段都不出」的前提是「IR 里没有顶点坐标」。
+
+        新 Spec `packaging-round-parts-and-e2e-fact-consistency.md` §1 要求预览保留曲线形状
+        （不得以端点弦或包围盒代替），圆/弧改为按**真实圆心半径**采样；判据没放宽 ——
+        没有任何真实几何参数的实体仍然一段都不出，纯包围盒永远不许编点。
+        """
         got = self.segments([_circle("e:1"), {"entity_id": "e:2", "attributes": {}}])
-        self.assertEqual([], got["segments"], "没坐标就是没折线（Spec §C1）")
-        self.assertEqual(0, got["segments_total"])
+        self.assertEqual(1, len(got["segments"]), "圆要按真实参数采样成一段（新 Spec §1）")
+        ring = got["segments"][0]
+        self.assertGreater(len(ring), 8, "采样点太少就看不出是圆")
+        self.assertEqual(ring[0], ring[-1], "整圆首尾必须重合")
+        self.assertEqual(1, got["segments_total"])
         self.assertIs(False, got["truncated"])
 
     def test_a6_never_throws(self):

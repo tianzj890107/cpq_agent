@@ -597,6 +597,17 @@ def business_part_rows(business_doc: Any) -> list:
         # 图纸推导件的“参考/候选尺寸”不等于客户确认；只有人工绑定图元并核对尺寸后，
         # confirmed_size 才能进入 BOM。旧模板/对照表口径保持原状以兼容历史数据。
         size_values = confirmed_size if drawing_derived else reference
+        cad_size = False
+        if drawing_derived and not confirmed_size:
+            from . import packaging_parts
+            try:
+                verified = packaging_parts.verified_business_part_input_row(row, business_doc)
+                candidate_size = _reference_block(verified)
+                if candidate_size.get("size_source") == "verified_cad_dimension":
+                    size_values = candidate_size
+                    cad_size = True
+            except ValueError:
+                pass  # 未核验的几何仍留尺寸缺口，不靠 bbox 或模型数字补齐。
         length = _positive_number(size_values.get("length_mm"))
         width = _positive_number(size_values.get("width_mm"))
         missing = [name for name, value in (("length_mm", length), ("width_mm", width))
@@ -610,6 +621,10 @@ def business_part_rows(business_doc: Any) -> list:
                        ({} if drawing_derived else _reference_size_source(
                            reference, business_parts_id=doc_id,
                            business_parts_hash=doc_hash)))
+        if cad_size and not missing:
+            size_origin = {"kind": "verified_cad_dimension", "business_parts_id": doc_id,
+                           "business_parts_hash": doc_hash,
+                           "entity_ids": list(binding.get("entity_ids") or [])}
         out.append({
             "bom_category": "optional_part" if purchased else "box_part",
             "item_key": code,

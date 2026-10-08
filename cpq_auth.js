@@ -28,6 +28,7 @@
     return fetch(path, {
       method: opts.method || 'GET', headers: headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
+      signal: opts.signal,
     }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (d) {
         if (!r.ok) throw new Error(d.error || ('请求失败（' + r.status + '）'));

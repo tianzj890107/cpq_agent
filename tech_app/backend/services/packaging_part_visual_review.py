@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from io import BytesIO
 import hashlib
+import json
 import math
 import os
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -99,7 +100,7 @@ def _anchor_in_region(anchor: Tuple[float, float], region: Dict[str, Any]) -> bo
 
 def _candidates(anchor: Tuple[float, float], regions: Any,
                 current_id: str, rects: Any,
-                groups: Any = None) -> List[Dict[str, Any]]:
+                groups: Any = None, anchor_entity_id: str = "") -> List[Dict[str, Any]]:
     """这个名字锚点给出的候选表（单片 + 有证据的**整件**候选，Spec §2）。
 
     发给模型的永远是这一张表：只给最近几个单片的话，模型不可能选出"由两片互补刀线
@@ -121,7 +122,9 @@ def _candidates(anchor: Tuple[float, float], regions: Any,
             "member_total": 1, "evidence_reasons": [], "geometry_status": "supported",
         })
     records.sort(key=lambda row: (_distance(anchor, _center(_bbox(row["bbox"]))), row["id"]))
-    whole = [dict(row, id=str(row.get("candidate_id") or "")) for row in (groups or [])]
+    whole = [dict(row, id=str(row.get("candidate_id") or "")) for row in (groups or [])
+             if not row.get("name_anchor_entity_id") or not anchor_entity_id
+             or row.get("name_anchor_entity_id") == anchor_entity_id]
     whole.sort(key=lambda row: (_distance(anchor, _center(_bbox(row["bbox"]))), row["id"]))
     chosen_groups = [row for row in whole if current_id and current_id in (row.get("region_ids") or [])]
     current = [row for row in records if row["id"] == current_id]
@@ -174,6 +177,11 @@ def _color(entity: Dict[str, Any]) -> str:
 
 
 def _entity_points(entity: Dict[str, Any]) -> List[Tuple[float, float]]:
+    # 模型看到的几何与轮廓识别使用同一路曲线展开，不另画一套端点直线。
+    from . import packaging_parts
+    chains, _, _ = packaging_parts._entity_chains(entity)
+    if chains:
+        return chains[0]
     attr = entity.get("attributes") if isinstance(entity.get("attributes"), dict) else {}
     kind = str(entity.get("kind") or "").lower()
     if kind == "line":
@@ -862,9 +870,80 @@ def _raw_layout_groups(ir: Any, regions: Any, frames: Any,
     return sorted(out, key=lambda row: row["candidate_id"])
 
 
+def _compound_named_groups(ir: Any, regions: Any, views: Any, frames: Any) -> List[Dict[str, Any]]:
+    """复合件名给多个不相接的轮廓提供弱候选；不把邻近或数量当确权证据。"""
+    from . import packaging_business_part_resolver as resolver
+    from . import packaging_layout
+    doc = ir if isinstance(ir, dict) else {}
+    anchors = [row for row in resolver.extract_text_anchors(doc, layout_aware=True)
+               if _point(row.get("position")) is not None and row.get("name") and not row.get("excluded")]
+    owners: Dict[str, List[Dict[str, Any]]] = {}
+    for region in regions or []:
+        box = _bbox(region.get("bbox"))
+        if not region.get("substantial") or box is None:
+            continue
+        frame_id = _frame_for_region(str(region.get("region_id") or ""), frames)
+        frame = next((item for item in frames or [] if item.get("frame_id") == frame_id), {})
+        candidates = []
+        for anchor in anchors:
+            point = _point(anchor.get("position"))
+            if frame_id and not _point_in_box(point, _bbox(frame.get("bbox")), 1.0):
+                continue
+            distance = _distance(point, _center(box))
+            if distance <= max(100.0, 2 * math.hypot(box[2] - box[0], box[3] - box[1])):
+                candidates.append((distance, str(anchor.get("entity_id") or ""), anchor))
+        if candidates:
+            _, key, _ = min(candidates, key=lambda item: (item[0], item[1]))
+            owners.setdefault(key, []).append(region)
+    out = []
+    for anchor in anchors:
+        sections = packaging_layout.declared_sections(anchor.get("name"))
+        members = owners.get(str(anchor.get("entity_id") or ""), [])
+        # 不将整个“最近名称区域”直接并成一件：仅为明确复合名称生成有限建议。
+        if len(sections) <= 1 or not (len(sections) <= len(members) <= MAX_GROUP_MEMBERS):
+            continue
+        frame_ids = {_frame_for_region(str(row.get("region_id") or ""), frames) for row in members}
+        if len(frame_ids) > 1:
+            continue
+        group = _group_record(members, doc, views, frames, GROUP_REASON_SPATIAL)
+        group["evidence_reasons"].append("compound_name_anchor")
+        group["name_anchor_entity_id"] = str(anchor.get("entity_id") or "")
+        group["declared_section_names"] = [row["name"] for row in sections]
+        out.append(group)
+    return sorted(out, key=lambda row: row["candidate_id"])
+
+
+def _block_part_groups(ir: Any, regions: Any, views: Any, frames: Any) -> List[Dict[str, Any]]:
+    """真实块实例中的多个轮廓作为一组弱候选；不因共享块就自动认作同一件。"""
+    doc = ir if isinstance(ir, dict) else {}
+    entities = {str(row.get("entity_id") or ""): row for row in doc.get("entities") or []}
+    grouped = {}
+    for region in regions or []:
+        if not region.get("substantial") or _bbox(region.get("bbox")) is None:
+            continue
+        member_paths = [entities.get(str(eid), {}).get("block_path")
+                        for eid in region.get("entity_ids") or []]
+        if not member_paths or not all(member_paths):
+            continue
+        paths = {json.dumps(path, sort_keys=True) for path in member_paths}
+        if len(paths) == 1:
+            grouped.setdefault(next(iter(paths)), []).append(region)
+    out = []
+    for members in grouped.values():
+        frame_ids = {_frame_for_region(str(row.get("region_id") or ""), frames) for row in members}
+        if not 2 <= len(members) <= MAX_GROUP_MEMBERS or len(frame_ids) > 1:
+            continue
+        group = _group_record(members, doc, views, frames, GROUP_REASON_SPATIAL)
+        group["evidence_reasons"].append("shared_block_instance")
+        out.append(group)
+    return sorted(out, key=lambda row: row["candidate_id"])
+
+
 def _combined_groups(ir: Any, regions: Any, views: Any,
                      frames: Any) -> List[Dict[str, Any]]:
     groups = _spatial_part_groups(ir, regions, views, frames)
+    groups.extend(_compound_named_groups(ir, regions, views, frames))
+    groups.extend(_block_part_groups(ir, regions, views, frames))
     # Endpoint evidence is stronger for the same member set; replace only that
     # proposal, never erase the weaker mechanism's distinct alternatives.
     by_members = {tuple(row["component_ids"]): row for row in groups}
@@ -1164,7 +1243,8 @@ def review_matches(cad_ir: Any, rows: Any, anchors: Any, regions: Any,
         if point is None:
             _demote(binding, [], "review_needed", "name_anchor_position_missing")
             continue
-        choices = _candidates(point, regions, str(binding.get("region_id") or ""), rects, groups)
+        choices = _candidates(point, regions, str(binding.get("region_id") or ""), rects, groups,
+                              str((anchor or {}).get("entity_id") or ""))
         for choice in choices:
             choice["nearby_texts"] = _candidate_nearby_texts(cad_ir, choice, frames)
         current = by_region.get(str(binding.get("region_id") or ""))

@@ -254,6 +254,19 @@ def confirm_gaps(project_id: str, ir: Optional[DesignIR], plan,
     codes: List[str] = []
     fields: List[str] = []
     packaging = data.get("packaging_cost") or {}
+    if packaging:
+        requirement = store.load_requirement(project_id) or {}
+        requirement_data = requirement.get("data") or {}
+        try:
+            wanted = float(requirement_data.get("quote_quantity"))
+            computed = float(packaging.get("quote_quantity"))
+        except (TypeError, ValueError):
+            wanted = computed = None
+        if (requirement_data.get("industry") == "packaging" and wanted is not None
+                and computed is not None and math.isfinite(wanted) and math.isfinite(computed)
+                and wanted > 0 and computed > 0 and wanted != computed):
+            codes.append(f"packaging:quantity:{computed:g}:{wanted:g}")
+            fields.append(f"包装成本按 {computed:g} 只测算，但当前报价为 {wanted:g} 只，须重新测算")
     if packaging.get("stale"):
         codes.append("packaging:stale")
         fields.append("包装成本依据已变化，需要重新测算")
@@ -369,6 +382,17 @@ def payload(project_id: str, ir: Optional[DesignIR], plan, review: CostReview) -
     # 不弹第二次；缺口本身如实带出去（签字只放行，不抹掉）。
     review_dict["gaps"] = confirm_gaps(project_id, ir, plan, data)
     review_dict["cost_waiver"] = waiver_summary(review)
+    requirement = store.load_requirement(project_id) or {}
+    req_data = requirement.get("data") or {}
+    packaging = req_data.get("industry") == "packaging"
+    def batch(value):
+        try:
+            number = float(value)
+            return (int(number) if number.is_integer() else number) if math.isfinite(number) and number > 0 else None
+        except (ValueError, TypeError):
+            return None
+    quote_quantity = batch(req_data.get("quote_quantity")) if packaging else None
+    cost_quantity = batch((data.get("packaging_cost") or {}).get("quote_quantity")) if packaging else None
     return {
         "review": review_dict,
         "param_checklist": checklist,
@@ -382,7 +406,12 @@ def payload(project_id: str, ir: Optional[DesignIR], plan, review: CostReview) -
         "params_complete": review_dict["params_complete"],
         "waiver": review_dict["waiver"],
         **data,
-        "quantity": plan.quantity,
+        "quantity": quote_quantity if packaging else plan.quantity,
+        "quote_quantity": quote_quantity,
+        "cost_quote_quantity": cost_quantity,
+        "legacy_batch_quantity": plan.quantity,
+        "assembly_usage": 1,
+        "quantity_mismatch": bool(packaging and quote_quantity and cost_quantity and quote_quantity != cost_quantity),
         "material": ({"number": written.number, "name": written.name,
                       "unit_price": written.material_unit_price} if written else None),
         "quote_handoff": plan.quote_handoff.model_dump() if plan.quote_handoff else None,
