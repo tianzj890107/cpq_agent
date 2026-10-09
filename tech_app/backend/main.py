@@ -1202,13 +1202,20 @@ def update_shared_model_settings(body: LlmSettingsBody,
 
 @app.get("/api/projects")
 def projects(scope: str = "mine", include_archived: bool = False,
-             user: dict = Depends(current_user)):
+             user: dict = Depends(current_user), page: Optional[int] = None,
+             page_size: int = 6, q: str = ""):
     """项目列表：默认「我的」；?scope=all 是我权限范围内的全部（不是全公司）；archived 是归档。
 
     返回形状仍是 list（既有消费方不必改结构），每项新增 `access` 块。非法 scope → 400。
     """
     if scope not in project_access.SCOPES:
         raise HTTPException(400, f"scope 取值不合法：{scope}")
+    if page is not None:
+        try:
+            return project_access.visible_projects_page(user, scope, include_archived=include_archived,
+                                                        page=page,page_size=page_size,query=q)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
     return project_access.visible_projects(user, scope, include_archived=include_archived)
 
 

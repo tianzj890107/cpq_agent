@@ -89,3 +89,20 @@ cost / summary / report-review / report-publish`。
 - 全量：`python3 -m unittest discover -s tests -p 'test_*.py'`
 - 语法：`node --check tech_app/frontend/tech-stage-restore.js`、
   `node --check tech_app/frontend/tech-workbench.js`
+
+## 附录 A：R3 的「首页半边」被取代（10-8，Codex）
+
+Spec `project-page-progressive-loading.md`（首页项目轻量分页与工作台渐进加载）**取代**本
+Spec R3 里「`报价首页.html` 的 `openTechProject()` 自己取 `/workflow` + `/summary`」那半条，
+其余一字不动（R1 / R2 / R4 与工作台那半条 R3 照旧是验收标准）。
+
+- 为什么要改：首页打开一张卡片先 `Promise.all` 四个详情接口（`/workflow`、`/api/projects/{id}`、
+  `/summary`、`/cost-review`），在 34 上实测「我的项目」42 条要 16.95s、单个最重项目一张卡片
+  6.90s，直接撞上 `homeBoundedRequest`（`报价首页.html`）的 **15s** 客户端上限，用户看到
+  「读取超时，请重试；尚未取得数据，不代表清单为空」。
+- 改成了什么：卡片带 `card.primary_action.target` → 直接按目标的 `stage` 跳；没带 →
+  `techWorkbenchUrl(stage, pid) + '&restore=1'` 交工作台 `techHistoryRestore()` 取真实数据再判定。
+- 判据没有放宽：真实取数仍然必须发生，只是从首页挪到工作台；`tests/test_tech_history_restore_real_stage_red.py`
+  里工作台那条断言逐字保留，首页那条按新契约**精确重指**（`/workflow`、`/summary`、
+  `/cost-review` 一个都不许再出现在 `openTechProject()` 里，且必须交代 `primary_action` 与
+  `restore=1` 两条出路），函数内逐字写明「旧断言为何过期、判据为何没放宽」。

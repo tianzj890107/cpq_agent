@@ -379,7 +379,7 @@ def save_business_case(project_id: str, link: dict, author: str = "system") -> d
     return dict(merged)
 
 
-def list_projects(include_archived: bool = False) -> List[dict]:
+def list_projects(include_archived: bool = False, lightweight: bool = False) -> List[dict]:
     out = []
     owner_users = {}
     for meta in _meta().list_metas():
@@ -392,9 +392,10 @@ def list_projects(include_archived: bool = False) -> List[dict]:
         # 展示名每次从账户资料解析，用户修改个人显示名后无需回写历史项目。
         meta["owner_display_name"] = (owner_user or {}).get("display_name") or meta.get("owner_display_name") or owner
         pid = meta.get("project_id")
-        ir = _meta().get_doc(pid, "ir") if pid else None
-        meta["has_ir"] = ir is not None
-        meta["device_name"] = (ir or {}).get("device_name")
+        if not lightweight:
+            ir = _meta().get_doc(pid, "ir") if pid else None
+            meta["has_ir"] = ir is not None
+            meta["device_name"] = (ir or {}).get("device_name")
         out.append(meta)
     return out
 

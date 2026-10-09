@@ -1692,9 +1692,10 @@
     const WF = { cards: [], tasks: [], loaded: false };
     function wfUser() { return (window.cpqAuth && cpqAuth.user()) || null; }
 
-    async function wfLoad() {
+    async function wfLoad(tasksOnly=false) {
       if (!wfUser()) { WF.cards = []; WF.tasks = []; WF.loaded = false; wfBadge(); return; }
       try {
+        if(tasksOnly){const t=await cpqAuth.api('/wf/tasks');WF.tasks=t.tasks || [];WF.loaded=true;wfBadge();return;}
         const [c, t] = await Promise.all([cpqAuth.api('/wf/cards'), cpqAuth.api('/wf/tasks')]);
         WF.cards = c.cards || []; WF.tasks = t.tasks || []; WF.loaded = true;
       } catch (e) { WF.cards = []; WF.tasks = []; WF.loaded = false; }
@@ -1807,28 +1808,12 @@
     async function openTechProject(projectId) {
       if (!projectId) return;
       let stage = 'requirement-create';
-      const id = encodeURIComponent(projectId);
-      try {
-        const [flow, projectData, aggregate, costDetail] = await Promise.all([
-          cpqAuthFetch('/api/projects/' + id + '/workflow')
-            .then(r => r.ok ? r.json() : null),
-          cpqAuthFetch('/api/projects/' + id)
-            .then(r => r.ok ? r.json() : null),
-          cpqAuthFetch('/api/projects/' + id + '/summary')
-            .then(r => r.ok ? r.json() : null),
-          cpqAuthFetch('/api/projects/' + id + '/cost-review')
-            .then(r => r.ok ? r.json() : null)
-            .catch(() => null),
-        ]);
-        const steps = (aggregate && aggregate.steps) || {};
-        stage = techStageFromFlow(flow, projectData, {
-          integration: steps.integration || {},
-          cost_review: steps.cost_review || {},
-          cost_detail: costDetail || {},
-        }) || stage;
-      } catch (e) { /* 拉不到状态时落 1.1，页内可继续定位 */ }
+      const row = (SESSIONS.tech || []).find(item => String(item.id) === String(projectId));
+      const target = row?.card?.primary_action?.target;
+      const params = target ? new URL(target, window.location.href).searchParams : null;
+      stage = params?.get('stage') || stage;
       try { if (window.TechHomeBoard) window.TechHomeBoard.rememberRecent(projectId); } catch (e) {}
-      window.location.href = techWorkbenchUrl(stage, projectId);
+      window.location.href = techWorkbenchUrl(stage, projectId) + (params?.get('view') ? '&view=' + encodeURIComponent(params.get('view')) : '') + (!target ? '&restore=1' : '');
     }
 
     // 领取任务并打开对应的工作台。
@@ -1998,6 +1983,10 @@
     const LOAD_INFLIGHT = {};
     async function loadCards(mode) {
       if (!cardGrid) return;
+      if (mode === 'tech') {
+        if(!currentTab().startsWith('待办任务')) { renderTechProjectPage(); await loadTechProjectPage(true); }
+        wfLoad(true).then(() => { if(currentMode === mode) renderCards(); }).catch(() => {}); return;
+      }
       if (LOAD_INFLIGHT[mode]) return LOAD_INFLIGHT[mode];
       const run = (async () => {
         cardGrid.innerHTML = '<div class="cards-empty">加载中…</div>';
@@ -2034,7 +2023,7 @@
           SESSIONS[mode] = null;
           SESSION_ERROR = (e && e.message) || '读取失败';
         }
-        if (mode === 'quote' || mode === 'tech') await wfLoad();   // 我的卡片 + 待办任务（含技术工艺支线）
+        if (mode === 'quote' || mode === 'tech') wfLoad().then(() => { if(currentMode === mode) renderCards(); }).catch(() => {});
         PAGE = 1;
         renderCards();
       })();
@@ -2073,6 +2062,7 @@
     function renderCards() {
       if (!cardGrid) return;
       const mode = currentMode;
+      if (mode === 'tech' && !currentTab().startsWith('待办任务')) { renderTechProjectPage(); return; }
       let rows = SESSIONS[mode];
       const info = document.querySelector('.pagination-info');
       const ctrl = document.querySelector('.pagination-controls');
@@ -2841,6 +2831,42 @@
     /* ===== 批次 10 / ## 139：首页三页签（唯一口径来自 tech-home-board.js）=====
        入口定义与卡片渲染都交给该模块；本机只记住「先给你看哪几条」，归属永远问后端。 */
     const TECH_SCOPE_ROWS = { mine: null, all: null, allArchived: null };
+    const TECH_PAGE_CACHE = new Map();
+    const TECH_PAGE_REQUESTS = new Map();
+    function techProjectPageKey() {
+      return JSON.stringify([wfUser()?.username || '',wfUser()?.role || '',currentTab().startsWith('我的') ? 'mine':'all',TECH_INCLUDE_ARCHIVED,PAGE,(searchInput?.value || '').trim()]);
+    }
+    async function loadTechProjectPage(force=false) {
+      const key=techProjectPageKey();
+      if (TECH_PAGE_REQUESTS.has(key)) return TECH_PAGE_REQUESTS.get(key);
+      if (force) TECH_PAGE_CACHE.clear();
+      const run=(async()=>{
+        try {
+          await waitForHomeAuth();
+          if(!wfUser()) throw new Error('请先登录');
+          const [, ,scope,archived,page,q]=JSON.parse(key);
+          const url='/api/projects?scope='+scope+'&page='+page+'&page_size='+PAGE_SIZE+'&q='+encodeURIComponent(q)+(archived&&scope==='all'?'&include_archived=true':'');
+          const data=await homeBoundedRequest(signal=>window.cpqAuth.api(url,{signal}));
+          TECH_PAGE_CACHE.set(key,{...data,projects:(data.projects || []).map(techRowOf)});
+        } catch(error) { TECH_PAGE_CACHE.set(key,{error:error.message || '读取失败'}); }
+        if(currentMode==='tech' && techProjectPageKey()===key) renderTechProjectPage();
+      })();
+      TECH_PAGE_REQUESTS.set(key,run);
+      try{return await run;}finally{TECH_PAGE_REQUESTS.delete(key);}
+    }
+    function renderTechProjectPage() {
+      const key=techProjectPageKey(),data=TECH_PAGE_CACHE.get(key);
+      const info=document.querySelector('.pagination-info'),ctrl=document.querySelector('.pagination-controls');
+      if(techArchivedFilterEl) techArchivedFilterEl.hidden=currentTab().startsWith('我的');
+      if(!data){cardGrid.innerHTML='<div class="cards-empty">正在读取第 '+PAGE+' 页…</div>';if(info)info.textContent='';if(ctrl)ctrl.innerHTML='';loadTechProjectPage();return;}
+      if(data.error){cardGrid.innerHTML='<div class="cards-empty">读取项目失败：'+escH(data.error)+' <button class="page-btn" id="techPageRetry">重试</button></div>';document.getElementById('techPageRetry').onclick=()=>loadTechProjectPage(true);return;}
+      if(PAGE>data.pages){PAGE=Math.max(1,data.pages);renderTechProjectPage();return;}
+      SESSIONS.tech=data.projects || [];
+      cardGrid.innerHTML=SESSIONS.tech.length?SESSIONS.tech.map(row=>cardHtml('tech',row)).join(''):'<div class="cards-empty">本页没有匹配的项目</div>';
+      cardGrid.querySelectorAll('.request-card').forEach((card,index)=>{card.onclick=e=>{if(!e.target.closest('.card-del'))openTechProject(card.dataset.id);};const del=card.querySelector('.card-del');if(del)del.onclick=e=>{e.stopPropagation();deleteCard('tech',card.dataset.id,SESSIONS.tech[index]?.title);};});
+      if(info)info.textContent='共 '+data.total+' 条，第 '+PAGE+' / '+data.pages+' 页';
+      if(ctrl){let html='<button class="page-btn" data-page="'+Math.max(1,PAGE-1)+'">‹</button>';const first=Math.max(1,Math.min(PAGE-2,data.pages-5));for(let i=first;i<=Math.min(data.pages,first+5);i++)html+='<button class="page-btn'+(i===PAGE?' active':'')+'" data-page="'+i+'">'+i+'</button>';html+='<button class="page-btn" data-page="'+Math.min(data.pages,PAGE+1)+'">›</button>';ctrl.innerHTML=html;ctrl.querySelectorAll('[data-page]').forEach(button=>button.onclick=()=>{PAGE=Number(button.dataset.page);renderTechProjectPage();});}
+    }
     const TECH_SCOPE_REQUESTS = {};
     function homeBoundedRequest(factory, timeoutMs = 15000) {
       const controller = new AbortController();
@@ -3336,8 +3362,13 @@
     }
 
     if (searchBtn) searchBtn.addEventListener('click', applyFilter);
+    let projectSearchTimer;
     if (searchInput) {
-      searchInput.addEventListener('input', applyFilter);
+      searchInput.addEventListener('input', () => {
+        clearTimeout(projectSearchTimer);
+        if(currentMode==='tech') projectSearchTimer=setTimeout(applyFilter,200);
+        else applyFilter();
+      });
       searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applyFilter(); } });
     }
     // 技术工艺「全部项目」的「包含已归档」开关（## 139）：勾选 / 取消都重新拉一次

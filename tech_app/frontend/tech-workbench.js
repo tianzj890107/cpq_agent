@@ -1301,4 +1301,5 @@
   bindTechSettingsModal();
   refreshTechModelLabel();
   if (state.project) refreshProgress();
+  if (state.project && new URLSearchParams(location.search).get('restore') === '1') techHistoryRestore(state.project);
 })();

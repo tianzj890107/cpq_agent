@@ -271,12 +271,29 @@ class HistoryRestoreRealStageRed(unittest.TestCase):
         self.assertRegex(body, r"techStageFromProject\([^)]*,[^)]*,",
                          "必须把真实数据作为第三份信号交给判定")
 
-    def test_cpq_home_open_project_fetches_real_stage_data(self):
+    def test_cpq_home_open_project_hands_off_without_detail_fetches(self):
+        """R3 的**首页半边**已被 Spec `project-page-progressive-loading.md` 取代，逐字重指。
+
+        旧断言要求首页 `openTechProject()` 自己取 `/workflow` + `/summary` 再判定 ——
+        那正是「点一次卡片先干等四个详情接口」的来源（首页 15s `homeBoundedRequest`
+        超时的直接原因）。新契约把"取真实数据 + 判定"整体挪进工作台的
+        `techHistoryRestore()`：上一条 `test_workbench_restore_fetches_real_stage_data`
+        仍逐字钉着它（`/workflow` + `/summary` + `techStageFromProject(…, …, …)` 一个没少）；
+        首页只做两件事：卡片带 `primary_action.target` 就按目标的 stage 跳，没带就交
+        `restore=1` 给工作台补恢复。
+
+        判据**没有放宽** —— 要证明的还是同一件事：不许凭 IR 猜阶段。
+        """
         body = js_body(self.cpq_home, "async function openTechProject(")
         self.assertTrue(body, "找不到 报价首页 的 openTechProject()")
-        for url in ("/workflow", "/summary"):
+        for url in ("/workflow", "/summary", "/cost-review"):
             with self.subTest(url=url):
-                self.assertIn(url, body, f"首页打开项目必须真的取 {url}")
+                self.assertNotIn(url, body,
+                                 f"首页打开项目不得再阻塞等 {url}；真实取数已挪到工作台恢复")
+        self.assertIn("primary_action", body, "有阶段目标时按卡片目标的 stage 跳")
+        self.assertIn("restore=1", body,
+                      "没有阶段目标时必须交工作台恢复（不许凭 IR 猜）")
+        self.assertIn("techWorkbenchUrl(", body, "落点仍走既有的 techWorkbenchUrl()")
 
     # ------------------------------------------- R4 不缩水（守卫）
     def test_task_kind_landings_unchanged(self):

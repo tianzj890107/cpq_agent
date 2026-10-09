@@ -493,7 +493,7 @@ def require_project_access(project_id: str, user: dict, mode: str = "read", *,
     return meta
 
 
-def visible_projects(user: dict, scope: str = "mine", include_archived: bool = False) -> List[dict]:
+def visible_projects(user: dict, scope: str = "mine", include_archived: bool = False, _metas=None) -> List[dict]:
     """列表判定：mine / all / todo / archived。
 
     每项仍附 access = {scope, mine_sources, can_read, can_write}（批次 7），并新增
@@ -505,7 +505,7 @@ def visible_projects(user: dict, scope: str = "mine", include_archived: bool = F
     if scope not in SCOPES:
         raise ValueError(f"scope 取值不合法：{scope}")
     out: List[dict] = []
-    for meta in store.list_projects(include_archived=True):
+    for meta in (_metas if _metas is not None else store.list_projects(include_archived=True)):
         archived = bool(meta.get("deleted_at"))
         if scope == "archived":
             if not archived or not can_read(user, meta):
@@ -541,6 +541,38 @@ def visible_projects(user: dict, scope: str = "mine", include_archived: bool = F
         entry["card"] = card
         out.append(entry)
     return home_card.sort_entries(out)
+
+
+def visible_projects_page(user: dict, scope: str = 'mine', *, include_archived=False,
+                          page=1, page_size=6, query='') -> dict:
+    if scope not in SCOPES or page < 1 or not 1 <= page_size <= 100:
+        raise ValueError('invalid_project_page')
+    if scope == 'todo':
+        rows = visible_projects(user, scope, include_archived)
+    else:
+        rows = []
+        for meta in store.list_projects(include_archived=True, lightweight=True):
+            archived = bool(meta.get('deleted_at'))
+            if scope == 'archived' and not archived:
+                continue
+            if scope != 'archived' and archived and not include_archived:
+                continue
+            if not can_read(user, meta) or (scope == 'mine' and not mine_sources(user, meta)):
+                continue
+            rows.append(meta)
+    needle = _text(query).lower()
+    if needle:
+        rows = [row for row in rows if needle in ' '.join(str(row.get(key) or '') for key in
+                ('project_id','project_name','device_name','source_filename','owner','owner_display_name')).lower()]
+    rows.sort(key=lambda row: _text(row.get('project_id')))
+    rows.sort(key=lambda row: _text(row.get('updated_at') or row.get('created_at')), reverse=True)
+    total = len(rows)
+    selected = rows[(page-1)*page_size:page*page_size]
+    projects = selected if scope == 'todo' else [dict(meta, access={
+        'scope':scope,'mine_sources':mine_sources(user,meta),'can_read':True,
+        'can_write':None},card=None,list_detail_pending=True,turns=None) for meta in selected]
+    return {'projects':projects,'total':total,'page':page,'page_size':page_size,
+            'pages':max(1,(total+page_size-1)//page_size)}
 
 
 def scope_of(user: dict) -> str:

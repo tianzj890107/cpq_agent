@@ -180,6 +180,28 @@
   而「只有一个可交互主图 / 主图出自纯函数 / 别件图元不进这张图 / 缩略图不共享拖拽绑定」照旧。
 - 验证：全量复跑 → **`Ran 6961 … OK (skipped=28)`**；`git diff --check`、`node --check app.js` 通过。
 
+## 533. 首页项目轻量分页与工艺工作台渐进加载（10-8，本地）
+
+- 新增 Spec `project-page-progressive-loading.md`，先实跑三项红测失败再实现，扩展新增测试到 9 项通过。
+- `/api/projects?page=...&page_size=6&q=...` 返回权限筛选后的当前页元数据，不为卡片展示调用 build_card 或读取 IR/BOM/成本/会话明细；旧无页参数接口兼容。排序以更新时间和 ID 稳定分页，保留 ACL 必要依据。
+- 首页我的/全部项目每次仅加载当前页，分页、查询、归档、重试接线，缓存按用户/范围/页/查询隔离；实际执行测试确认旧页迟到不覆盖新页。技术首页待办加载不拉报价卡片全集。
+- 工艺卡片先跳工作台，再按需恢复该项目阶段。第 2 步已存零件和主体先显示，流程/角色映射/BOM/旧项目兼容补算不挡页面就绪；补算去重并增加跨项目迟到结果保护。第 3 步保存的整合结果不再等零件明细和会话回放。
+- 相关回归 146 项通过，后续保护相关 70 项通过（有重叠），新增模块最新 9 项通过。
+- 全量回归（`unittest discover -s tests -p 'test_*.py'`）先暴露 **2 条红**，都在本批改动的文件里：
+  `test_tech_history_restore_real_stage_red::test_cpq_home_open_project_fetches_real_stage_data` 的
+  `/workflow`、`/summary` 两条子用例 —— 它们钉的正是本批**取代**掉的旧契约「首页自己
+  `Promise.all` 四个详情接口再判定」（首页 15s `homeBoundedRequest` 超时的直接来源）。
+  按 Spec `project-page-progressive-loading.md` **精确重指、不是放宽**：首页 `openTechProject()` 里
+  `/workflow`、`/summary`、`/cost-review` 一个都不许再出现，必须交代 `primary_action`（有阶段目标
+  直接跳）与 `restore=1`（无目标交工作台恢复）两条出路；工作台那半条 R3 断言
+  （`/workflow` + `/summary` + `techStageFromProject(…, …, …)`）**逐字保留**，真实取数只是从首页
+  挪到工作台。函数内逐字写明旧断言为何过期、判据为何没放宽，并给
+  `docs/specs/tech-history-restore-real-stage.md` 补附录 A（唯一被取代的是 R3 的首页半边）。
+- 验证：全量复跑 → **`Ran 6970 … OK (skipped=28)`**（零红）；重指后该模块与新增模块 24 项通过；
+  `报价首页.html` 内联脚本（2052 行）、`app.js` / `assembly-integration.js` / `tech-workbench.js`
+  的 `node --check`、改动 Python 的 `py_compile`、`git diff --check` 全过。
+- 未提交/推送/部署、未浏览器或线上耗时验收；旧历史消费者仍兼容使用原接口，不声称全部消费者已优化。用户未跟踪文件保留。
+
 ## 532. `## 530`–`## 531` 的提交、双远端推送与 34 部署记录（10-8）
 
 - 提交 `a3ed335`（`## 530-531 零件首屏尺寸、候选来源图集与预览布局；全量回归收口`），入库 6 个文件：

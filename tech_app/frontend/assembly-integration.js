@@ -2146,6 +2146,7 @@ async function aiStart() {
   aiLoadManifest();
   aiLoadAgentMeta();
   try {
+    const savedPlan = api(aiUrl('')).then(payload=>({payload}),error=>({error}));
     const requirementPayload = await api(`/api/projects/${encodeURIComponent(aiPid)}/requirement`).catch(() => ({}));
     aiIndustry = String(requirementPayload?.requirement?.data?.industry || '');
     if (aiIndustry === 'packaging') {
@@ -2155,17 +2156,21 @@ async function aiStart() {
         if (name) button.textContent = `${{ drawings: '3.1', params: '3.2', process: '3.3' }[button.dataset.aiTab]} ${name}`;
       });
     }
-    const [payload, parts] = await Promise.all([api(aiUrl('')), aiLoadParts()]);
+    const settledPlan = await savedPlan;
+    if(settledPlan.error) throw settledPlan.error;
+    const payload = settledPlan.payload;
     aiData = payload;
-    aiParts = parts;
+    aiParts = [];
     $ai('aiRequirement').value = aiPlan().requirement_note || '';
     const state = aiData.status || {};
     // 落在"下一件该做的事"上。
     aiTab = state.has_process ? 'process' : state.has_params ? 'params' : 'drawings';
     aiRender();
-    await aiReplayTimeline();
+    aiReplayTimeline().catch(() => null);
     aiStatus(state.confirmed ? '本步已确认' : '就绪');
-    if (!parts.length) aiSay('还没有拿到 2.1 的零件清单。请先完成 2.1 图纸解析 —— 3 组装与整合是把那些零件装回整机。');
+    aiLoadParts().then(parts => { aiParts=parts; aiRender();
+      if (!parts.length) aiStatus('整合结果已读取；零件清单暂未取得，请检查 2.1。');
+    }).catch(() => aiStatus('整合结果已读取；零件明细读取失败，请重试。',true));
   } catch (error) {
     $ai('aiBody').innerHTML = `<div class="inline-empty error">读取失败：${esc(error.message)}</div>`;
     aiStatus(`读取失败：${error.message}`, true);
