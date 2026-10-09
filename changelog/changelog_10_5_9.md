@@ -1,5 +1,19 @@
 # 变更日志（10-5 ~ 10-9）
 
+## 549. 包装零件 ↔ 库内零件/工艺路线的受约束匹配（10-9，本地）
+
+- 新增 Spec `docs/specs/packaging-part-route-constrained-match.md` 与红测
+  `tests/test_packaging_part_route_constrained_match_red.py`（44 项）；按用户点名例外**直接落地实现**：
+  新增 `tech_app/backend/services/packaging_part_route_match.py`（编码/逐字名 → 归一化名 →
+  受硬约束相似度 → 显式 `unbound`，只用标准库 `difflib`）。
+- 接线：`da_process_routing.for_row()` 加外购/采购短路（不调桥接）与归一化名重试一次；
+  `packaging_process_instances.collect()` 的外购跳过改引用同一处 `is_external_part`，外购口径只留一处。
+- 真实样本（图上 28 件 × DA CLM 26 条酒盒路线名）：26 matched（15 逐字 + 11 归一化，即 5 件
+  「忖纸」→「衬纸」、6 件「左盒/右盒」→「左盖/右盖」）+ 2 外购 skipped + 0 unbound；
+  反例守卫拦下 `底板`/`底板面纸`、左/右、内盒1/2 误配。
+- 不回归：业务件工艺、图纸解析流程、成本引擎、成本收口、DA 只读桥、单件—项目路线成本同源。
+- 未提交、未推送、未部署。
+
 ## 545. `## 536~544` 的提交、双远端推送与 34 部署记录（10-9，本地）
 
 - 提交 `28d22ba`（`## 536~544 批次 1~5 实现与真并行分片回归；DA 工艺路线真实接入、单件—项目路线—公式成本同源`），

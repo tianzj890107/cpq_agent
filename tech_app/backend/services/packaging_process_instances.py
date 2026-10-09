@@ -2,6 +2,8 @@
 import hashlib
 import json
 
+from .packaging_part_route_match import is_external_part
+
 ALIASES = {
     'UV印刷':'PKG-C-PRINT-UV',
     '覆膜':'PKG-C-LAMINATION','覆哑膜':'PKG-C-LAMINATION',
@@ -70,8 +72,8 @@ def collect(project_id):
     has_saved_result=False
     for row in rows:
         reference=packaging_parts.business_part_reference_block(row)
-        authority = row.get('authority') or {}
-        if any(k in str(reference.get('process_text') or authority.get('process_text') or '') for k in ('外购','采购')):
+        # 外购口径只允许有一处（Spec §2.6）：引用 `packaging_part_route_match.is_external_part`。
+        if is_external_part(dict(row, reference=reference)):
             continue
         code=str(row.get('business_part_code') or '')
         if not code:
