@@ -180,6 +180,25 @@
   而「只有一个可交互主图 / 主图出自纯函数 / 别件图元不进这张图 / 缩略图不共享拖拽绑定」照旧。
 - 验证：全量复跑 → **`Ran 6961 … OK (skipped=28)`**；`git diff --check`、`node --check app.js` 通过。
 
+## 532. `## 530`–`## 531` 的提交、双远端推送与 34 部署记录（10-8）
+
+- 提交 `a3ed335`（`## 530-531 零件首屏尺寸、候选来源图集与预览布局；全量回归收口`），入库 6 个文件：
+  新 Spec `packaging-candidate-gallery-initial-size.md` 与其 6 项测试、`app.js`、`drawing-flow.css`、
+  `packaging-2-1-right-pane-single-part-figure.md` 附录与 changelog。不入库未跟踪项不变。
+- 提交前复跑：全量 → **`Ran 6961 … OK (skipped=28)`**；`node --check app.js`、`git diff --check`、
+  `py_compile` 通过。
+- 双远端：GitLab 与 GitHub 的 `ytbz` 均回读为 `a3ed335c9898d2c37aa08e138a07a10a320e006b`
+  （`903622c..a3ed335`），与本地 HEAD 三方一致。
+- 34 部署：`bash scripts/deploy_34_bare.sh ytbz`，`2c5a386 → a3ed335`（纯快进）；
+  `build.commit=a3ed335c9898d2c37aa08e138a07a10a320e006b`、`deployed_at=2026-10-08T15:59:53+0800`，
+  8010 pid=`3648762`，`/api/health` 200。
+- 部署后核对：ODA 27.1 主转换器直出、`fallback_used=false`（酒盒 6711 / 8 层，圆盘盒 3457 / 32 层）；
+  隔离端到端自检 `verdict=ok`（酒盒 263 件 `closed_ratio=0.510`、可挤出 13；圆盘盒 312 件
+  `closed_ratio=0.840`、可挤出 262；两条权威实样路线 confirmed；未写运行目录 78 → 78）。
+- 部署后核对（只读）：8010 `/` 200；8012 下发的 `drawing-flow.css` 含候选图集样式且
+  **`#2563eb` 归零**，`app.js` 含「尺寸仍须单独确认」——与本次提交逐字一致。
+- 能力声明不变：**DWG 编排能力完成，真实转换能力未验收**；本批全部是前端展示与交互，
+  未做浏览器视觉验收（真实页面观感仍须人工确认），不构成客户正式报价授权。
 ## 533. 首页项目轻量分页与工艺工作台渐进加载（10-8，本地）
 
 - 新增 Spec `project-page-progressive-loading.md`，先实跑三项红测失败再实现，扩展新增测试到 9 项通过。
@@ -202,22 +221,34 @@
   的 `node --check`、改动 Python 的 `py_compile`、`git diff --check` 全过。
 - 未提交/推送/部署、未浏览器或线上耗时验收；旧历史消费者仍兼容使用原接口，不声称全部消费者已优化。用户未跟踪文件保留。
 
-## 532. `## 530`–`## 531` 的提交、双远端推送与 34 部署记录（10-8）
+## 534. `## 533` 的提交、双远端推送与 34 部署记录（10-9）
 
-- 提交 `a3ed335`（`## 530-531 零件首屏尺寸、候选来源图集与预览布局；全量回归收口`），入库 6 个文件：
-  新 Spec `packaging-candidate-gallery-initial-size.md` 与其 6 项测试、`app.js`、`drawing-flow.css`、
-  `packaging-2-1-right-pane-single-part-figure.md` 附录与 changelog。不入库未跟踪项不变。
-- 提交前复跑：全量 → **`Ran 6961 … OK (skipped=28)`**；`node --check app.js`、`git diff --check`、
-  `py_compile` 通过。
-- 双远端：GitLab 与 GitHub 的 `ytbz` 均回读为 `a3ed335c9898d2c37aa08e138a07a10a320e006b`
-  （`903622c..a3ed335`），与本地 HEAD 三方一致。
-- 34 部署：`bash scripts/deploy_34_bare.sh ytbz`，`2c5a386 → a3ed335`（纯快进）；
-  `build.commit=a3ed335c9898d2c37aa08e138a07a10a320e006b`、`deployed_at=2026-10-08T15:59:53+0800`，
-  8010 pid=`3648762`，`/api/health` 200。
-- 部署后核对：ODA 27.1 主转换器直出、`fallback_used=false`（酒盒 6711 / 8 层，圆盘盒 3457 / 32 层）；
-  隔离端到端自检 `verdict=ok`（酒盒 263 件 `closed_ratio=0.510`、可挤出 13；圆盘盒 312 件
-  `closed_ratio=0.840`、可挤出 262；两条权威实样路线 confirmed；未写运行目录 78 → 78）。
-- 部署后核对（只读）：8010 `/` 200；8012 下发的 `drawing-flow.css` 含候选图集样式且
-  **`#2563eb` 归零**，`app.js` 含「尺寸仍须单独确认」——与本次提交逐字一致。
-- 能力声明不变：**DWG 编排能力完成，真实转换能力未验收**；本批全部是前端展示与交互，
-  未做浏览器视觉验收（真实页面观感仍须人工确认），不构成客户正式报价授权。
+- 提交 `5720a3b`（`## 533 首页项目轻量分页与工艺工作台渐进加载；全量回归收口`），入库 12 个文件：
+  新 Spec `project-page-progressive-loading.md` 与其 9 项测试、`main.py`、`project_access.py`、
+  `store.py`、`app.js`、`assembly-integration.js`、`tech-workbench.js`、`报价首页.html`、
+  `tech-history-restore-real-stage.md` 附录 A、重指的 `test_tech_history_restore_real_stage_red.py`
+  与 changelog。不入库未跟踪项不变：`拆分程序/`、`.~南京锂能DA梳理.xlsx`。
+- 提交前复跑：全量 `unittest discover -s tests -p 'test_*.py'` → **`Ran 6970 … OK (skipped=28)`**；
+  `报价首页.html` 内联脚本（2052 行）与 `app.js` / `assembly-integration.js` / `tech-workbench.js`
+  的 `node --check`、改动 Python 的 `py_compile`、`git diff --check` 全过。
+- 双远端：GitLab 与 GitHub 的 `ytbz` 均回读为 `5720a3b798db0de1fb576a6991d67497f7e52b94`
+  （`ea59762..5720a3b`），与本地 HEAD 三方一致。
+  · 本机当日**解析不到** `gitlab.boulderaitech.com`（`scutil --dns` 只有 8.8.8.8 / 1.1.1.1，
+    `ssh` 报 `Could not resolve hostname`）：改问内网 DNS `172.16.99.114` 得到真实地址
+    `172.16.5.150`，以 `HostKeyAlias=gitlab.boulderaitech.com` 直连该 IP 完成推送。
+    未改仓库 remote 配置、未写 `/etc/hosts`、未改任何凭据；推送后按 sha 回读确认。
+- 34 部署：`bash scripts/deploy_34_bare.sh ytbz`，`a3ed335 → 5720a3b`（纯快进）；
+  `build.commit=5720a3b798db0de1fb576a6991d67497f7e52b94`、`branch=ytbz`、
+  `deployed_at=2026-10-09T09:30:19+0800`，8010 pid=`3445930`；`/api/health`、`/`、8012 `/api/health` 全 200。
+- 部署后核对（隔离端到端 `verdict=ok`）：ODA 27.1 主转换器直出、`converter_role=primary`、
+  `fallback_used=false`；酒盒八步 8/8、零件 263 件（`closed_ratio=0.510`）、可算 13 / 可挤出 13；
+  圆盘盒八步 8/8、零件 312 件（`closed_ratio=0.840`）、可算 101 / 可挤出 262；两条权威实样路线
+  `confirm=confirmed`；隔离自检未写运行目录（78 → 78）。
+- 部署后核对（**本批真实收益，只读**）：6 个改动文件在 34 与本机逐字节一致；HTTP 取回的
+  `报价首页.html`（174,105 B）含 `loadTechProjectPage`×4、`page_size=`、`restore=1`、`primary_action`。
+  在 34 上以 `DATA_DIR=tech_app/tech_data` 复测 PE1：旧口径 `visible_projects(mine)` 42 条
+  **16.93s** → 新口径 `visible_projects_page(mine, page=1, page_size=6)` 6/42 条 **0.003s**；
+  `all` 第 2 页 0.003s；搜索 `q=圆盘盒` 0.003s（命中 7 条）；轻量行不含 `has_ir`，
+  `card=None`、`turns=None`、`list_detail_pending=True`（不再为列表挂卡片而整份解析大 JSON）。
+- 未做：浏览器视觉/交互验收（本批改的是加载时序与分页）；未改任何生产数据、未重解析任何已有图纸；
+  门禁两项人工项仍未代签。能力声明不变：**DWG 编排能力完成，真实转换能力未验收**。
