@@ -578,3 +578,13 @@ def visible_projects_page(user: dict, scope: str = 'mine', *, include_archived=F
 def scope_of(user: dict) -> str:
     """给界面说明「你看到的是我的 / 全部」。"""
     return "all" if _read_all(user) else "mine"
+
+
+def visible_scope_note(*, scope, visible_count) -> dict:
+    """项目列表的范围说明（Spec `observability-and-experience-batch4.md` §2.4）。
+
+    只给**有权看到**的数量；结构里**不得**出现无权项目的数量（`hidden_count` 恒为 `None`）。
+    """
+    count = int(visible_count)
+    return {"scope": str(scope), "visible_count": count,
+            "note": "按你的角色可见：%d 个" % count, "hidden_count": None}

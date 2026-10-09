@@ -203,9 +203,13 @@ def summarize(project_id: str, ir: Optional[DesignIR], plan) -> dict:
             if row["has_cost"] and row["unit_cost"] <= 0]
     requirement = store.load_requirement(project_id) or {}
     packaging_result = None
+    # 包装成本的「能不能用」只有**一个**裁决源（Spec `chain-consistency-batch1.md` §2.2）：
+    # 提示缺口不阻断、依据漂移（stale）阻断。这里只取结论，不另判一份。
+    packaging_ready = None
     if (requirement.get("data") or {}).get("industry") == "packaging":
         from . import packaging_cost
         packaging_result = packaging_cost.load_cost(project_id) or {}
+        packaging_ready = bool(packaging_cost.readiness_verdict(packaging_result)["formal_ready"])
         built = bool(packaging_result.get("built"))
         total = float(packaging_result.get("total_cost") or 0)
         assembly = dict(assembly, name="包装整单成本", has_cost=built,
@@ -232,9 +236,8 @@ def summarize(project_id: str, ir: Optional[DesignIR], plan) -> dict:
             "zero": zero,
             "assembly_costed": assembly["has_cost"],
         },
-        "ready": bool(parts) and not missing and assembly["has_cost"] and not zero
-                 and not bool((packaging_result or {}).get("has_gaps"))
-                 and not bool((packaging_result or {}).get("stale")),
+        "ready": (bool(parts) and not missing and assembly["has_cost"] and not zero
+                  and (packaging_ready is None or packaging_ready)),
         "packaging_cost": packaging_result,
     }
 
@@ -253,6 +256,10 @@ def confirm_gaps(project_id: str, ir: Optional[DesignIR], plan,
     counts = data["counts"]
     codes: List[str] = []
     fields: List[str] = []
+    # 提示性缺口（Spec `chain-consistency-batch1.md` §2.2）：**不进**「必须重签」的阻断集合，
+    # 但也**不许静默丢弃** —— 单独一份披露清单带给界面。
+    advisory_codes: List[str] = []
+    advisory_fields: List[str] = []
     packaging = data.get("packaging_cost") or {}
     if packaging:
         requirement = store.load_requirement(project_id) or {}
@@ -273,8 +280,19 @@ def confirm_gaps(project_id: str, ir: Optional[DesignIR], plan,
     for index, gap in enumerate(packaging.get("gaps") or []):
         if not isinstance(gap, dict):
             continue
-        codes.append("packaging:gap:%s:%s" % (gap.get("code") or "unknown", index))
-        fields.append(str(gap.get("message") or gap.get("code") or "包装成本证据不完整"))
+        key = "packaging:gap:%s:%s" % (gap.get("code") or "unknown", index)
+        label = str(gap.get("message") or gap.get("code") or "包装成本证据不完整")
+        severity = "blocking"
+        if packaging:
+            from . import packaging_cost
+            raw = (packaging_cost.gap_evidence(packaging, gap) or {}).get("severity")
+            severity = str(raw or "").strip().lower() or "blocking"
+        if severity == "blocking":
+            codes.append(key)
+            fields.append(label)
+        else:
+            advisory_codes.append(key)
+            advisory_fields.append(label)
     for part_id in counts["missing"]:
         codes.append(f"part:{part_id}:missing")
         fields.append(f"零件 {part_id} 没算成本")
@@ -291,6 +309,11 @@ def confirm_gaps(project_id: str, ir: Optional[DesignIR], plan,
         "codes": codes,
         "fields": fields,
         "count": len(codes),
+        # 阻断集合 = `codes`（签字覆盖判定读的就是它）；提示集合独立披露。
+        "blocking_codes": list(codes),
+        "advisory_codes": advisory_codes,
+        "advisory_fields": advisory_fields,
+        "advisory_count": len(advisory_codes),
         "parts": counts["parts"],
         "text": ("；".join(fields) + "。" if fields else ""),
     }

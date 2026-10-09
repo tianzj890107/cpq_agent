@@ -1533,6 +1533,19 @@ document.addEventListener('cpq-sso-ready', () => {
     sendCostReviewToQuote: crOpAction('send-to-quote', '回传销售经理继续报价', 'aux', 40),
     returnCostReviewToProcess: crOpAction('return-to-process', '提交工艺经理确认', 'aux', 50),
   });
+  /* P4（Spec 批次 4 §2.6）：成本版本 / 是否暂估 / 缺口分类的**唯一来源**是后端
+     `cost_display` 投影（packaging_observability.cost_display）；前端只展示，不另算分类。 */
+  function crCostDisplayNote(costDisplay) {
+    if (!costDisplay) return "";
+    var gaps = costDisplay.gaps || {};
+    var detail = Object.keys(gaps).map(function (name) { return name + " " + gaps[name]; });
+    return "成本版本 v" + costDisplay.version
+      + (costDisplay.is_estimate ? "（暂估）" : "")
+      + "；缺口 " + (costDisplay.gap_total || 0) + " 项"
+      + (detail.length ? "（" + detail.join("、") + "）" : "");
+  }
+  window.CPQ_COST_DISPLAY_NOTE = crCostDisplayNote;
+
   window.TechBoardRuntime.registerViews({
     parts: { run: () => crSetTab('parts'), getState: () => ({ active: crTab === 'parts' ? 'parts' : null }) },
     assembly: { run: () => crSetTab('assembly'), getState: () => ({ active: crTab === 'assembly' ? 'assembly' : null }) },

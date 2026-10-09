@@ -19,6 +19,9 @@
 红测：`tests/test_packaging_business_part_process_by_authority_route_red.py`
 行号基线：HEAD `6e3644c`
 
+2026-10-09 修订：C4 的 `lookup={}` 被 `da-process-routing-live.md` 替代：
+保存真实 DA 检索结果或明确 unavailable，不再恒为空；工序仍为模型推荐，不能冒充标准。
+
 ## 0. 一句话目标
 
 一件**没有几何**的业务部件，只要权威清单里有长度 / 宽度 / 材料原文，就能跑出**工序明细**

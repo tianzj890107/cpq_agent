@@ -215,13 +215,20 @@
     var box = el("div", "qq-candidates");
     box.appendChild(el("div", "qq-ws-head", "候选案例（标准成交案例库）"));
     var rows = match.candidates || [];
+    // 为什么不是更高分：唯一来源是后端 explain_ranking 的 why_not_higher；
+    // 行上若已带该字段则直接用，前端不另算相似度、不猜理由（Spec 批次 4 §2.3/§2.6）。
+    var whyByCase = {};
+    (match.explain_ranking || []).forEach(function (item) {
+      item = item || {};
+      whyByCase[item.case_code] = item.why_not_higher || [];
+    });
     if (!rows.length) {
       box.appendChild(el("p", "qq-summary",
         "没有候选案例（硬筛选后一条都不剩）。可以改字段重算，或转精准报价。"));
     } else {
       var table = el("table", "qq-candidates-table");
       var head = el("tr");
-      ["候选", "状态", "相似度", "标准单价", "差异项", "选为基准"]
+      ["候选", "状态", "相似度", "标准单价", "差异项", "为什么不是更高分", "选为基准"]
         .forEach(function (title) { head.appendChild(el("th", "", title)); });
       table.appendChild(head);
       rows.forEach(function (row) {
@@ -234,6 +241,8 @@
         tr.appendChild(cell((row.diff_items || []).map(function (item) {
           return item.label || item.key || "";
         }).filter(Boolean).join("、") || "—"));
+        var why = whyByCase[row.case_code] || row.why_not_higher || [];
+        tr.appendChild(cell(why.join("；") || "—"));
         var pickCell = el("td");
         var pick = el("button", "qq-pick", "选为基准");
         pick.disabled = !row.eligible;

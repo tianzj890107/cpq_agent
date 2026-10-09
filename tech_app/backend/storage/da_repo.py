@@ -865,11 +865,22 @@ def load_packaging_route(project_id: str, requirement_no: str = "") -> Optional[
 
 def load_packaging_route_steps(project_id: str, requirement_no: str = "") -> list[dict]:
     """读回路线工序(按 step_no 升序);没有行时给空列表。"""
-    return db.query(
+    rows = db.query(
         "SELECT * FROM wip_packaging_process_route_step "
         "WHERE project_id = ? AND requirement_no = ? ORDER BY step_no ASC",
         (project_id, requirement_no or ""),
     )
+    header = load_packaging_route(project_id, requirement_no) or {}
+    import json
+    try:
+        source = json.loads(header.get('source_versions_json') or '{}')
+    except (TypeError, ValueError):
+        source = {}
+    metadata = {str(s.get('step_no')): s for s in source.get('operation_instances', [])}
+    for row in rows:
+        extra = metadata.get(str(row.get('step_no'))) or {}
+        row.update({k:v for k,v in extra.items() if k not in _PACKAGING_ROUTE_STEP_COLUMNS})
+    return rows
 
 
 def append_packaging_route_version(record: dict) -> int:

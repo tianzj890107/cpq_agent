@@ -24,6 +24,8 @@ ENV_MAX_BLOCK_DEPTH = "CAD_IR_MAX_BLOCK_DEPTH"
 ENV_MAX_DXF_BYTES = "CAD_IR_MAX_DXF_BYTES"
 ENV_PARSE_TIMEOUT = "CAD_IR_PARSE_TIMEOUT_SECONDS"
 ENV_MAX_EVIDENCE = "CAD_IR_MAX_EVIDENCE"
+#: 曲线（椭圆 / 样条 / 折线折展）采样步长（Spec `observability-and-experience-batch4.md` §2.5）。
+ENV_CURVE_SAMPLE_STEP = "CAD_IR_CURVE_SAMPLE_STEP"
 
 DEFAULT_LIMITS: Dict[str, Any] = {
     "max_entities": 200000,
@@ -34,6 +36,8 @@ DEFAULT_LIMITS: Dict[str, Any] = {
     "max_evidence": 50000,
     "include_paper_space": False,
     "include_blocks": True,
+    # 曲线采样步长（正数，默认 0.01）；换参数可复现，写进 parser.options。
+    "curve_sample_step": 0.01,
 }
 
 #: 本批支持并归类的实体类型；其余一律进 `unsupported`（图不消失）
@@ -71,6 +75,26 @@ def _env_int(name: str, default: int) -> int:
     return value if value > 0 else int(default)
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return float(default)
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return float(default)
+    return value if value > 0 else float(default)
+
+
+def _sample_step(value: Any = None) -> float:
+    """曲线采样步长的统一解析：正数才生效，否则退回 DEFAULT_LIMITS（不猜、不置 0）。"""
+    try:
+        step = float(value)
+    except (TypeError, ValueError):
+        step = 0.0
+    return step if step > 0 else float(DEFAULT_LIMITS["curve_sample_step"])
+
+
 def resolve_limits(overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     limits = dict(DEFAULT_LIMITS)
     limits["max_entities"] = _env_int(ENV_MAX_ENTITIES, limits["max_entities"])
@@ -79,6 +103,8 @@ def resolve_limits(overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
     limits["max_dxf_bytes"] = _env_int(ENV_MAX_DXF_BYTES, limits["max_dxf_bytes"])
     limits["parse_timeout_seconds"] = _env_int(ENV_PARSE_TIMEOUT, limits["parse_timeout_seconds"])
     limits["max_evidence"] = _env_int(ENV_MAX_EVIDENCE, limits["max_evidence"])
+    limits["curve_sample_step"] = _env_float(ENV_CURVE_SAMPLE_STEP,
+                                            limits["curve_sample_step"])
     for key, value in (overrides or {}).items():
         if key in limits and value is not None:
             limits[key] = value
@@ -257,9 +283,14 @@ def _closed_flag(entity: Any, kind: str, points: Sequence[geometry.Point],
     return False
 
 
-def _curve_metrics(entity: Any, kind: str) -> Tuple[Optional[float], Optional[float],
-                                                    Optional[List[float]], Dict[str, Any]]:
-    """返回 (length, area, bbox, attributes)，只对曲线类使用。"""
+def _curve_metrics(entity: Any, kind: str, sample_step: Any = None
+                   ) -> Tuple[Optional[float], Optional[float],
+                              Optional[List[float]], Dict[str, Any]]:
+    """返回 (length, area, bbox, attributes)，只对曲线类使用。
+
+    `sample_step` 为曲线采样步长（配置化，Spec §2.5）；缺省取 DEFAULT_LIMITS。
+    """
+    step = _sample_step(sample_step)
     attrs: Dict[str, Any] = {}
     if kind == "CIRCLE":
         radius = geometry.finite(entity.dxf.get("radius", 0.0)) or 0.0
@@ -281,7 +312,7 @@ def _curve_metrics(entity: Any, kind: str) -> Tuple[Optional[float], Optional[fl
         boxes = []
         try:
             boxes = [list(point) for point in
-                     geometry.points_of([(v.x, v.y) for v in entity.flattening(0.01)])]
+                     geometry.points_of([(v.x, v.y) for v in entity.flattening(step)])]
         except Exception:  # pragma: no cover
             boxes = []
         return (geometry.arc_length(radius, start, end), None,
@@ -297,18 +328,18 @@ def _curve_metrics(entity: Any, kind: str) -> Tuple[Optional[float], Optional[fl
         semi_minor = abs(semi_major * ratio)
         pts: List[geometry.Point] = []
         try:
-            pts = [(float(v.x), float(v.y)) for v in entity.flattening(0.01)]
+            pts = [(float(v.x), float(v.y)) for v in entity.flattening(step)]
         except Exception:  # pragma: no cover
             pts = []
         attrs.update({"center": list(center) if center else None, "ratio": ratio,
                       "semi_major": semi_major, "semi_minor": semi_minor, "curve": "ellipse",
-                      "sampled_points": geometry.points_of(pts), "sample_step": 0.01})
+                      "sampled_points": geometry.points_of(pts), "sample_step": step})
         return (geometry.ellipse_perimeter(semi_major, semi_minor), None,
                 geometry.bbox_of(pts), attrs)
     if kind == "SPLINE":
         pts = []
         try:
-            pts = [(float(v.x), float(v.y)) for v in entity.flattening(0.01)]
+            pts = [(float(v.x), float(v.y)) for v in entity.flattening(step)]
         except Exception:  # pragma: no cover
             pts = []
         length = geometry.polyline_length(pts, closed=False)
@@ -322,7 +353,7 @@ def _curve_metrics(entity: Any, kind: str) -> Tuple[Optional[float], Optional[fl
         # `fit_points` 由「数量」改为坐标序列，数量挪到 `fit_points_count`（新增键，不删旧信息）。
         attrs.update({"control_points": control, "fit_points_count": len(pts),
                       "fit_points": geometry.points_of(pts), "curve": "spline",
-                      "sampled": True, "sample_step": 0.01})
+                      "sampled": True, "sample_step": step})
         return length, None, geometry.bbox_of(pts), attrs
     return None, None, None, attrs
 
@@ -346,7 +377,8 @@ def _polyline_row(entity: Any, kind: str, item: Dict[str, Any], builder: _Builde
         from ezdxf.path import make_path
         import itertools
         sampled = [(float(v.x), float(v.y)) for v in itertools.islice(
-            make_path(entity).flattening(0.01), 8193)]
+            make_path(entity).flattening(
+                _sample_step(builder.limits.get("curve_sample_step"))), 8193)]
         if len(sampled) > 8192:
             builder.warn("polyline_sampling_limit", "曲线采样超出上限，保留顶点并等待核对", [])
             sampled = []
@@ -359,7 +391,7 @@ def _polyline_row(entity: Any, kind: str, item: Dict[str, Any], builder: _Builde
             "bbox": geometry.bbox_of(measured),
             # 顶点坐标落盘（Spec §2）：`vertices` 仍是数量，`points` 是坐标（与它一致）。
             "attributes": {"vertices": len(points), "points": geometry.points_of(points),
-                           "sampled_points": geometry.points_of(sampled), "sample_step": 0.01}}
+                           "sampled_points": geometry.points_of(sampled), "sample_step": _sample_step(builder.limits.get("curve_sample_step"))}}
 
 
 def _row_for(entity: Any, item: Dict[str, Any], builder: _Builder,
@@ -403,7 +435,8 @@ def _row_for(entity: Any, item: Dict[str, Any], builder: _Builder,
         row["attributes"] = {"start": list(start) if start else None,
                              "end": list(end) if end else None}
     elif kind in ("CIRCLE", "ARC", "ELLIPSE", "SPLINE"):
-        length, area, box, attrs = _curve_metrics(entity, kind)
+        length, area, box, attrs = _curve_metrics(
+            entity, kind, builder.limits.get("curve_sample_step"))
         row["kind"] = kind.lower()
         row["closed"] = _closed_flag(entity, kind, [], builder.tolerance)
         row["length"] = length
@@ -801,7 +834,8 @@ def parse_dxf(content: bytes, *, filename: str = "drawing.dxf",
                    "version": _parser_version(),
                    "options": {"max_entities": int(resolved["max_entities"]),
                                "max_block_depth": int(resolved["max_block_depth"]),
-                               "include_paper_space": bool(resolved["include_paper_space"])}},
+                               "include_paper_space": bool(resolved["include_paper_space"]),
+                               "curve_sample_step": float(resolved["curve_sample_step"])}},
         "units": dict(drawing_units, source=drawing_units.get("source", "")),
         "document": {
             "extents": [round(float(value), 9) for value in

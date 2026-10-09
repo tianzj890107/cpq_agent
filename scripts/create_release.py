@@ -30,11 +30,45 @@ def api(method, path, payload=None):
         if exc.code == 404: return None
         raise
 
+def require_release_gate(gate_report, force):
+    """创建 Release 前必须过生产门禁（Spec `capability-isolation-and-shared-parse-batch5.md` §2.3）。
+
+    门禁未过 → 拒绝创建并打印 blocking；`--force` 可显式覆盖并打印告警。
+    只判**发布**，不据此对运行期做任何禁用。
+    """
+    root = Path(__file__).resolve().parents[1]
+    if str(root) not in sys.path: sys.path.insert(0, str(root))
+    from tech_app.backend.services.capability_isolation import release_verdict
+    report = None
+    if gate_report is not None:
+        try:
+            report = json.loads(Path(gate_report).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"警告：生产门禁报告读不到或不是 JSON（{exc}）。")
+            report = None
+    verdict = release_verdict(report)
+    if verdict["release_ok"]:
+        print("生产门禁：go")
+        return
+    print("生产门禁：no_go，blocking=" + "、".join(verdict["blocking"] or ["(无)"]))
+    if force:
+        print("警告：--force 已显式覆盖生产门禁；本次 Release 未过门禁，请留档说明。")
+        return
+    sys.exit("错误：生产门禁未过；拒绝创建 Release。如确需创建，请显式加 --force。")
+
+
 def main():
     parser = argparse.ArgumentParser(); parser.add_argument("--tag", required=True)
     parser.add_argument("--name", required=True); parser.add_argument("--description-file", required=True, type=Path)
-    parser.add_argument("--check", action="store_true"); args = parser.parse_args()
+    parser.add_argument("--check", action="store_true")
+    parser.add_argument("--gate-report", type=Path, default=None,
+                        help="生产门禁报告 JSON（dwg_deploy_gate --env production 的输出）")
+    parser.add_argument("--force", action="store_true",
+                        help="门禁未过时仍创建 Release（打印告警；默认拒绝）")
+    args = parser.parse_args()
     if not re.fullmatch(r"v\d+\.\d+\.\d+", args.tag): sys.exit("错误：tag 必须符合 vMAJOR.MINOR.PATCH。")
+    if not args.check:
+        require_release_gate(args.gate_report, args.force)
     project = api("GET", "projects/" + urllib.parse.quote(PROJECT, safe="")); pid = project["id"]
     encoded = urllib.parse.quote(args.tag, safe=""); tag = api("GET", f"projects/{pid}/repository/tags/{encoded}")
     if not tag: sys.exit("错误：GitLab 上不存在该 tag；Release 不得隐式创建 tag。")

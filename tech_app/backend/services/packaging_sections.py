@@ -299,16 +299,18 @@ def compute_material(inputs, calculate: Callable):
 
 
 def recommend_process(inputs, recommend, *, note='', attachments=None):
-    from . import packaging_parts, process
+    from . import packaging_parts, process, da_process_routing
     results, steps, questions, warnings, reused, missing = [], [], [], [], 0, 0
     for section in inputs['sections']:
         part = packaging_parts.business_as_ir_part(section['row'])
         grounding = '\n'.join([section['grounding'],
             '组成：'+section['name']+'；用量：'+str(section['quantity'])+'；CAD 图元：'+','.join(section['entity_ids']),note])
+        da_lookup = da_process_routing.for_row(section['row'])
+        grounding += '\n' + da_process_routing.grounding(da_lookup)
         plan, coverage = recommend(part, overall=None, geom=None, note=grounding, attachments=attachments or [])
         payload = plan.model_dump() if hasattr(plan,'model_dump') else dict(plan)
         warnings.extend(section['name']+'：'+w for w in process.compute(payload)['warnings'])
-        results.append({'section_id':section['section_id'],'section_name':section['name'],
+        results.append({'section_id':section['section_id'],'section_name':section['name'],'lookup':da_lookup,
             'entity_ids':section['entity_ids'],'quantity':section['quantity'],'plan':payload,'coverage':coverage})
         original_steps = payload.get('steps') or []
         numbers = {s.get('step_no'):(len(steps)+i+1)*10 for i,s in enumerate(original_steps)}

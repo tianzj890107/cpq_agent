@@ -388,7 +388,9 @@ class DPostRoute(unittest.TestCase):
         self.assertEqual(PLAN, record.get("plan"))
         self.assertEqual({"step_count": 4}, record.get("validation"))
         self.assertEqual(COVERAGE, record.get("coverage"))
-        self.assertEqual({}, record.get("lookup"), "业务件没有知识库依据，不许装样子（Spec §C4）")
+        self.assertEqual('unavailable', record.get('lookup', {}).get('status'),
+                         'DA 桥接未配置必须明确不可用，不伪装成空库（da-process-routing-live）')
+        self.assertEqual([], record.get('lookup', {}).get('routes'))
         self.assertEqual(ASSUMPTION, (record.get("assumptions") or [""])[0],
                          "口径那句话必须是第一条 assumption（Spec §C4）")
         self.assertEqual("authority_dimensions", record.get("size_source"))

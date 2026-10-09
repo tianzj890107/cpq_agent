@@ -192,8 +192,19 @@
     return '可上传，DWG 需 CAD 转换服务解析（当前环境未安装）';
   }
 
+  /* P6（Spec 批次 4 §2.6）：本次转换由谁完成、什么版本、许可是否确认，一律以后端
+     `converter_banner` 投影为准（packaging_observability.converter_banner）；
+     没有该投影时退回既有能力文案，绝不把未知许可写成「已确认」。 */
+  function converterBannerNote(banner) {
+    if (!banner) return '';
+    var head = banner.done_by + '（' + [banner.provider, banner.version].filter(Boolean).join(' ') + '）';
+    var tail = banner.warning ? '：' + banner.warning : '';
+    return head + tail;
+  }
+
   function applyDwgCapability(cap) {
-    var note = dwgNoteFor(cap);
+    var note = (cap && cap.converter_banner)
+      ? converterBannerNote(cap.converter_banner) : dwgNoteFor(cap);
     ttDwgNote = note;
     window.CPQ_DWG_CAPABILITY_NOTE = note;
     var noteEl = document.getElementById('ttDwgNote');

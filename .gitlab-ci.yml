@@ -36,7 +36,7 @@ python_contract:
   extends: .pip_base
   script:
     - python -m unittest discover -s tests -p 'test_*.py'
-    - python -m py_compile cpq_suite_server.py cpq_auth.py cpq_wf.py cpq_tech_bridge.py
+    - python scripts/ci_checks.py --compile-all --whitespace --base "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
 # --------------------------------------------------------------------------- #
 # 真实样本 DWG 端到端冒烟（DWG 支持第 6 批 Spec §5 契约 E）
 #

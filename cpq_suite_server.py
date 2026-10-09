@@ -643,6 +643,19 @@ class Handler(BaseHTTPRequestHandler):
         # 只认 X-Internal-Token（与 /agents/* 同一套 fail-closed 判定）。
         # PG / schema 不可用时回 503 + 原因 —— 绝不回空表：那会被读侧误判成
         # "库里没有可复用零件"（正是本批要消灭的假象）。
+        if path == "/wf/tech/process-routing" and self.command == "GET":
+            if not self._internal_token_ok():
+                self._send_json(403, {"ok": False, "error": "内部令牌校验失败"})
+                return True
+            try:
+                import cpq_process_routing
+                result = cpq_process_routing.lookup(arg("product_item_code"), arg("name"))
+                # PG dates/Decimal/large IDs retain lossless JSON strings.
+                result = json.loads(json.dumps(result, default=str))
+                self._send_json(200, {"ok": True, **result})
+            except Exception:
+                self._send_json(503, {"ok": False, "error": "DA 工艺路线数据库不可用，请检查字段映射及连接"})
+            return True
         if path == "/wf/tech/kb/snapshot" and self.command == "GET":
             if not self._internal_token_ok():
                 self._send_json(403, {"ok": False, "error": "内部令牌校验失败"})

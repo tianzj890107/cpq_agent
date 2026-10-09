@@ -423,6 +423,26 @@ def _build_route_steps_from_bom(box_type_code: str, inputs: dict, bom_rows: Any)
 def validate_order(steps) -> list:
     """顺序校验：返回违规码列表（空列表 = 合法，Spec §2.6）。"""
     rows = list(steps or [])
+    if any(row.get('part_code') for row in rows):
+        groups = {}
+        for row in rows:
+            groups.setdefault((row.get('part_code'),row.get('section_id')),[]).append(row)
+        aliases = {'UV印刷':'面纸印刷','覆哑膜':'覆膜','模切':'面纸模切',
+                   'V槽':'V 槽开槽','V槽开槽':'V 槽开槽','包盒':'组装'}
+        codes=[]
+        for group in groups.values():
+            positions={}
+            for row in group:
+                name=aliases.get(row['step_name'],row['step_name'])
+                if name in HARD_ORDER_CHAIN:
+                    positions.setdefault(name,_num(row.get('step_no')))
+            for earlier,later in zip(HARD_ORDER_CHAIN,HARD_ORDER_CHAIN[1:]):
+                if earlier in positions and later in positions and positions[earlier]>=positions[later]:
+                    codes.append('illegal_process_order:%s:%s' % (earlier,later))
+        numbers=[_num(row.get('step_no')) for row in rows]
+        if any(a is None or b is None or b<=a for a,b in zip(numbers,numbers[1:])):
+            codes.append('step_no_not_ascending')
+        return codes
     codes: list = []
     names = [_text(row.get("step_name")) for row in rows]
     for name in names:
@@ -456,6 +476,13 @@ def validate_order(steps) -> list:
 
 def _steps_fingerprint(steps) -> str:
     """工序序列（含 step_no）的稳定指纹。"""
+    if any(row.get('part_code') for row in steps or []):
+        keys=('step_no','step_name','part_code','section_id','formula_code','usage_qty',
+              'cost_parameters','standard_seconds','source_ref')
+        payload=json.dumps([{k:(_num(s.get(k)) if k in ('step_no','standard_seconds','usage_qty')
+                              else s.get(k)) for k in keys} for s in steps],
+                           ensure_ascii=False,sort_keys=True,default=str)
+        return hashlib.sha256(payload.encode('utf-8')).hexdigest()
     payload = json.dumps([[_num(row.get("step_no")), _text(row.get("step_name"))]
                           for row in (steps or [])], ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -628,7 +655,12 @@ def _stale_reasons(row: dict, steps: list, versions: list, project_id: str) -> t
     recompute_unavailable: dict = {}
     if box_code:
         try:
-            current = build_route_steps(box_code, data)
+            if _stored_source_versions(row).get('part_process_hash'):
+                from . import packaging_process_instances
+                live = packaging_process_instances.collect(project_id)
+                current = {'steps':packaging_process_instances.expand(live['records'])}
+            else:
+                current = build_route_steps(box_code, data)
         except RouteError as exc:
             current = None
             recompute_unavailable = {"code": _text(getattr(exc, "code", "")),
@@ -663,6 +695,10 @@ def load_route(project_id: str, requirement_no: str = "") -> dict:
     # BOM 轴的两条原因（Spec `packaging-route-bom-version-pinning.md` §2.2）：与既有三条
     # 同构（固定顺序、去重），但**不**受"有没有冻结版本"影响 —— 还没确认过的路线同样要报。
     stored_versions = _stored_source_versions(row)
+    from . import packaging_process_instances
+    part_drift = packaging_process_instances.drift(project_id, stored_versions)
+    if part_drift and part_drift not in reasons:
+        reasons.append(part_drift)
     bom_reasons, bom_unavailable = _bom_drift_reasons(
         stored_versions, project_id, req_no, has_column=_has_source_versions_column(row))
     # 盒型轴（Spec `packaging-route-box-type-drift.md` §2.1）：路线照的盒型 ≠ 当前确认的盒型。
@@ -789,7 +825,11 @@ def build_route(project_id: str, requirement_no: str = "") -> dict:
 
     # 判死之前**先**读零件 / 业务部件文档（Spec `packaging-business-tables-are-answer-keys-only.md`
     # §2.3）：判据是"这个项目有没有零件文档"，不是"业务表（工艺模板表）里有没有模板"。
-    from . import packaging_parts
+    from . import packaging_parts, packaging_process_instances
+    instances = packaging_process_instances.collect(project_id)
+    if instances['active'] and instances['missing']:
+        raise RouteError('以下制造件缺工序推荐：' + '、'.join(instances['missing']),
+                         409, 'part_process_incomplete')
     parts_doc = packaging_parts.load_parts(project_id) or {}
     business_parts_doc = packaging_parts.load_business_parts(project_id) or {}
     has_result_document = bool([row for row in (parts_doc.get("parts") or [])
@@ -797,7 +837,7 @@ def build_route(project_id: str, requirement_no: str = "") -> dict:
         or bool([row for row in (business_parts_doc.get("business_parts") or [])
                  if isinstance(row, dict)])
     template_gap: dict = {}
-    if not kb_repo.packaging_process_templates(box_type_code=box_code):
+    if not instances['active'] and not kb_repo.packaging_process_templates(box_type_code=box_code):
         if not has_result_document:
             # 没有零件文档、也没有工艺模板：照旧的 `no_process_template` 409，读数与文案一字不改。
             raise RouteError("盒型 %s 没有工艺模板，无法生成工艺路线" % box_code, 409,
@@ -806,14 +846,23 @@ def build_route(project_id: str, requirement_no: str = "") -> dict:
         template_gap = _template_gap_detail(box_code)
 
     bom_rows = da_repo.load_packaging_bom(project_id, req_no)
-    if not bom_rows or not any(_text(row.get("bom_category")) == "process"
-                               for row in bom_rows):
+    if not bom_rows or (not instances['active'] and not any(_text(row.get("bom_category")) == "process"
+                               for row in bom_rows)):
         raise RouteError("包装 BOM 尚未建立，请先展开部件（Spec §2.1）", 409,
                          "bom_not_built")
 
     _save_template_gap(project_id, req_no, template_gap)
-    result = (_build_route_steps_from_bom(box_code, data, bom_rows) if template_gap
-              else build_route_steps(box_code, data))
+    if instances['active']:
+        unified_steps = packaging_process_instances.expand(instances['records'])
+        known_seconds = [_num(s.get('standard_seconds')) for s in unified_steps
+                         if _num(s.get('standard_seconds')) is not None]
+        seconds = sum(known_seconds) if known_seconds else None
+        result = {'steps': unified_steps, 'total_seconds': seconds,
+                  'batch_seconds': seconds * (_num(data.get('quote_quantity')) or 0) if seconds is not None else None,
+                  'has_incomplete_time': any(s['needs_standard_time'] for s in unified_steps)}
+    else:
+        result = (_build_route_steps_from_bom(box_code, data, bom_rows) if template_gap
+                  else build_route_steps(box_code, data))
     fingerprint, surface_json, quantity = route_fingerprint(box_code, result["steps"], data)
     # **排产那一刻**那一版 BOM 的身份（Spec `packaging-route-bom-version-pinning.md` §2.2）：
     # 指纹取刚读到的行、版本与盒型取同一份 BOM 文档，随主表一起落库 —— 事后才回答得出
@@ -841,6 +890,12 @@ def build_route(project_id: str, requirement_no: str = "") -> dict:
         # 与被排路线的盒型不一致时**以 BOM 为准**记录事实（Spec §2.2），不修正任何一方。
         "box_type_code": bom_box,
     }
+    if instances['active']:
+        source_versions['part_process_hash'] = instances['hash']
+        source_versions['operation_instances'] = result['steps']
+        source_versions['part_process_evidence'] = [
+            {'part_code':r['part_code'],'record_hash':r.get('record_hash'),
+             'lookup':r.get('lookup') or {}} for r in instances['records']]
     now = da_db.now()
     route = {
         "industry": PACKAGING_INDUSTRY,
@@ -895,6 +950,10 @@ def confirm_route(project_id: str, requirement_no: str, *, actor: Any = None) ->
     # 幂等重复确认不冻结任何新东西：指纹一致就照旧早退，不再要求输入版本可比
     # （历史行没有来源也不该让"重复确认"变成 409 —— 那条纪律属于"要追加新版本"的路径）。
     stored_versions = _stored_source_versions(row)
+    from . import packaging_process_instances
+    part_drift = packaging_process_instances.drift(project_id, stored_versions)
+    if part_drift:
+        raise RouteError('单件工序已变化或不可读取，请重算路线后再确认',409,part_drift)
     stored_hash = _text(stored_versions.get("bom_hash"))
     live_rows, bom_unavailable = _current_bom_rows(project_id, req_no)
     current_hash = bom_input_hash(live_rows) if live_rows is not None else ""

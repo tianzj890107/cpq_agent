@@ -9462,15 +9462,21 @@ async def packaging_business_part_process(
                               % (size_text, str(inputs.get("material_text") or "未填")))
         # 复用既有工艺链路（`process.outline_process()` 只吃 Part）：业务件与图纸零件走
         # **同一个**模型口径，区别只在输入 —— 这里没有整体 IR、没有几何，只有清单原文。
+        from .services import da_process_routing
+        da_lookup = da_process_routing.for_row(row) if not inputs.get('sections') else {
+            'status': 'per_section', 'notice': '各组成独立检索，不沿用父件路线'}
+        tasks.report_progress('DA 工艺路线：' + str(da_lookup.get('notice') or da_lookup.get('status')))
         sections = []
         if inputs.get('sections'):
             from .services import packaging_sections
             plan_dict, coverage, sections = packaging_sections.recommend_process(
                 inputs, process.outline_process, note=note, attachments=atts)
+            da_lookup['sections'] = [{'section_id': section['section_id'],
+                                      'lookup': section.get('lookup') or {}} for section in sections]
         else:
             plan, coverage = process.outline_process(
                 part, overall=None, geom=None,
-                note=_packaging_business_part_process_note(inputs, note), attachments=atts)
+                note=_packaging_business_part_process_note(inputs, note) + '\n' + da_process_routing.grounding(da_lookup), attachments=atts)
             plan_dict = plan.model_dump()
         steps_total = len(plan_dict.get("steps") or [])
         library = (coverage or {}).get("summary") or {}
@@ -9493,7 +9499,8 @@ async def packaging_business_part_process(
             "plan": plan_dict, "validation": validation, "coverage": coverage,
             "sections": sections,
             # 业务件没有知识库检索依据，不装样子（与业务件成本那条同口径）。
-            "lookup": {}, "assumptions": [assumption] if assumption else [],
+            "lookup": da_lookup, "assumptions": ([assumption] if assumption else []) + [da_process_routing.grounding(da_lookup)],
+            "process_origin": "model_recommendation_with_da_reference",
             "size_source": inputs["size_source"], "size_source_ref": inputs["size_source_ref"],
             "size_text": inputs["size_text"], "geometry": geometry_label,
             # 这份结论是照哪份清单原文编的 —— 刷新一次页面也说得出来。
@@ -9508,6 +9515,7 @@ async def packaging_business_part_process(
         # 同上：任务返回值带口径四键（Spec §C3），面板生成完立刻说得清按哪套尺寸编的。
         return {"part_code": inputs["part_code"], "part_id": part.part_id,
                 "plan": plan_dict, "validation": validation, "coverage": coverage, "sections": sections,
+                "lookup": da_lookup, "process_origin": "model_recommendation_with_da_reference",
                 "size_source": inputs["size_source"],
                 "size_source_ref": inputs["size_source_ref"],
                 "size_text": inputs["size_text"], "geometry": geometry_label}
@@ -9532,6 +9540,8 @@ def get_packaging_business_part_process(pid: str, code: str,
     record = packaging_parts.load_part_process(pid, code) or {}
     body = {"part_code": str(record.get("part_code") or code),
             "sections": record.get('sections') or [],
+            "lookup": record.get('lookup') or {},
+            "process_origin": record.get('process_origin') or 'legacy_model_recommendation',
             "plan": record.get("plan") if record else None,
             "validation": record.get("validation") if record else None,
             "coverage": record.get("coverage") if record else None,

@@ -1,5 +1,251 @@
 # 变更日志（10-5 ~ 10-9）
 
+## 544. 真并行分片回归：把「分片」变成「同时跑」+ 全量验收（10-9，本地）
+
+- **根因**：`scripts/run_tests_sharded.py::run_shards()` 只在 `for` 循环里逐个阻塞
+  `subprocess.run` —— 只切分片、不并发，所以 `--shards 8` 的墙钟 ≈ 串行，仍是 10 分钟级。
+  批 2 的 Spec/红测只要求「分片 + 隔离 + 结论一致」，**从未要求并发**，属规格漏项。
+- **修复**：`run_shards(..., jobs=)` 用 `concurrent.futures.ThreadPoolExecutor` 并发跑分片
+  （分片本体是阻塞子进程，线程即可真并行）；新增 `--jobs`，默认取 **CPU 数的一半**（跑满核会
+  超订）。分片隔离（`TMPDIR`/`CPQ_TEST_SHARD*`）、聚合口径、`shards` 升序、`jobs=1` 串行全部保留。
+- Spec：`docs/specs/parallel-sharded-regression.md`；红测
+  `tests/test_parallel_sharded_regression_red.py`（5 条：实现前 **4 红 1 绿**，现 5 绿）。
+- **全量实测（436 模块）**：串行 628.79s → `--jobs 4`（默认）**292.30s，Ran=7067 failures=0
+  errors=0 skipped=28 全绿**；`--jobs 8` 216~239s 更快，但会出 2 条**负载相关**红
+  （`packaging_drawing_flow_red::e26_concurrent_reruns` 并发竞态、
+  `dwg_conversion_quality_repair_red::e5_real_oda` 真实 ODA 转换超时）—— 二者单跑均绿，
+  故默认取半核。3 分钟级目标未达标（约 4.9 分钟）。
+- **顺带修掉的 2 条全量红**：`test_spec_status_truth_red` 的 c1/c2 —— 我自己新写的
+  `parallel-sharded-regression` 声明「未实现」却无处说明原因、且红测已转绿；已按仓库口径改为
+  「已实现」，元测试恢复绿。
+- 回归：`test_release_assurance_batch2_red`、`test_spec_status_truth_red` 全绿；
+  `git diff --check` 干净。
+- 残留（登记不改）：`E26` 的并发竞态像是**真缺陷**（非仅抖动），建议单独开批定位；
+  自带 ODA/xvfb/node 子进程的用例是尾片候选，可进一步压时间。
+- 未改任何业务实现；未提交、未推送、未部署。
+
+## 543. 可用性与服务边界（批次 5）实现：能力隔离 + 发布门禁 + 统一解析守卫（10-9，本地）
+
+- 落地 `## 539` 之后的 Spec `docs/specs/capability-isolation-and-shared-parse-batch5.md`
+  （状态改为已实现，补 §8 实现记录），红测 `tests/test_capability_isolation_and_shared_parse_batch5_red.py`
+  由 `Ran 12 … FAILED (failures=8)` 转 **`Ran 12 … OK`**（T17 四条守卫本来就绿）。
+- 新增 `tech_app/backend/services/capability_isolation.py`（纯函数、绝不抛异常）：
+  `isolation_view`（两种能力形状都认；脏入参按 disabled；`documents` 恒 enabled 红线）、
+  `release_verdict`（fail + manual_unacknowledged 阻断，生产环境 skip 也阻断；
+  非法报告 → `no_go` + `gate_report_invalid`；只判发布、不判运行）。
+- `scripts/create_release.py`：新增 `--gate-report` / `--force` 与 `require_release_gate()`，
+  创建 Release 前必须过生产门禁，未过则拒绝并打印 blocking；`--force` 显式覆盖并告警。
+  既有 tag 口径（`repository/tags`、`不得隐式创建 tag`、`vMAJOR.MINOR.PATCH`）逐字保留。
+- 边界：不动 `cad_converter` 的 `available = 主 or 回退`、不装第二套 ODA、不在报价侧 import
+  `ezdxf`、不在 CI 加部署；T17 只验收。
+- 不回归：`test_repository_workflow_contract + test_dwg_file_capability_preflight_red` → `Ran 38 … OK`。
+- 按 Spec §5 **未提交 / 未推送 / 未部署**；并行会话在途改动一行未碰。
+
+## 542. 可用性与服务边界（批次 5）Spec 与红测（10-9，本地）
+
+- Spec：`docs/specs/capability-isolation-and-shared-parse-batch5.md`，把「转换器坏了」与
+  「系统坏了」分开：部署验收失败只阻止发布，运行时转换器故障只禁用 DWG 解析并告警，
+  登录 / 历史报价 / 文字·Excel·PDF·图片 快速报价一律不受影响。
+- `T8` 运行侧**只验收不重做**（10-9 实测已是能力隔离）：`cad_converter.capability()`
+  `available = 主可用 or 回退可用` 且探测不抛；`unified_parse.capability()` 明确「能力查询绝不许
+  500」；`file_preflight` 的缺转换器是单文件 415 业务错误。缺的是**统一投影**
+  `capability_isolation.isolation_view()`（哪些能力可用 / 被禁用 / 为什么）与把「发布 / 运行」
+  分开的 `release_verdict()`。
+- `T8` 发布侧未接线：`scripts/create_release.py` 只校验 tag 存在，**不消费**生产门禁报告的
+  `verdict`（`dwg_deploy_gate --env production` 的 `go`/`no_go`）；`deploy_34_bare.sh` 里那行门禁
+  命令只是打印提示。本批要求 Release 前过 `release_verdict`（`--gate-report`，`--force` 才可覆盖）。
+- `T17` **只验收加守卫**（10-9 实测已是共用同一服务）：`unified_parse.SERVICE_PATH /
+  CAPABILITY_PATH` 是唯一事实源、`main.py` 用它登记免登录白名单、`cpq_quick_quote_file` 与之逐字
+  一致且**不 import** `ezdxf`/ODA，转换只有 `cad_converter/adapters/local_cli.py` 一处。
+- 红测：`tests/test_capability_isolation_and_shared_parse_batch5_red.py`，实现前实跑
+  **12 条：8 红 4 绿**——8 红=新模块缺失（7）+ `create_release.py` 未接线（1）；
+  4 绿=T17 守卫（地址唯一、报价侧不自解析、能力查询不抛、能力转述 provider）。
+- 相关既有回归：`test_repository_workflow_contract` + `test_dwg_file_capability_preflight_red`
+  合计 38 OK，零新增回归；`T17` 真机判定（34 `capability` 真探测）列为验收项。
+- 边界：不改 `available = 主 or 回退` 口径与错误码闭集；不装第二套 ODA；不在 CI 里加部署
+  （发布门禁放 Release 工具）；运行时故障不得升级成登录/历史报价/文字快速报价停机。
+- 未改任何业务实现；未提交、未推送、未部署。五批（0~5）Spec + 红测已全部交付。
+
+## 541. 真实数据与识别覆盖（批次 3）+ 体验与可观察性（批次 4）实现（10-9，本地）
+
+- 落地两份 Spec，红测由红转绿：
+  `tests.test_data_and_recognition_coverage_batch3_red` 改前 9 红 → **`Ran 11 … OK`**；
+  `tests.test_observability_and_experience_batch4_red` 改前 23 红 → **`Ran 23 … OK`**。
+- 批次 3（只新增三个只读工具，未改既有业务代码）：
+  `tech_app/tools/packaging_box_type_range_audit.py`（分类 + issue 闭集 + no_lower_bound/inverted；
+  `--strict` 才非零，审计永远退出 0）、`tech_app/tools/packaging_parts_accuracy.py`
+  （漏识别/误识别/归属/尺寸/证据覆盖分开度量；`manual_fix_minutes` 原样透传；`summary` 无单一正确率标量）、
+  `tech_app/tools/packaging_routing_diagnostic.py`（按编码/名称命中、孤儿步骤、草稿头、工时空头，
+  verdict attention|ok；纯函数不改入参）。本仓种子 12 行审计 `issues==[]`、`adjustable==12`。
+- 批次 4：新增 `tech_app/backend/services/packaging_observability.py`（P3/P4/P6/P7/P11/P1/P12/P13/P10
+  九个纯函数投影：正式导出剩余步骤、成本版本+暂估+缺口分类、排模缺参、转换器 banner、表达式口径文案、
+  业务零件优先、人工建档建议、草稿按操作细分、在等谁+已等多久）与 `kb_health.py`
+  （`usable_for_current_route` 只由 `required_tables` 决定，无关表为空不判死）；
+  `cpq_quick_quote_match` 新增 `explain_ranking` / `transfer_compare`；
+  `project_access` 新增 `visible_scope_note`（只给有权数量，`hidden_count` 恒 `None`）；
+  `cad_ir/parser` 曲线采样步长配置化（`DEFAULT_LIMITS.curve_sample_step`、
+  `ENV_CURVE_SAMPLE_STEP`、3 处改用解析值、`parser.options` 落盘）。
+- 前端接线（唯一口径来自后端，不在前端另算）：`cost-review.js` 新增 `crCostDisplayNote` 引用
+  `cost_display`；`quick-quote-panel.js` 候选表新增「为什么不是更高分」列读 `why_not_higher`；
+  `tech-task.js` 新增 `converterBannerNote` 消费 `converter_banner`。
+- 实跑：批次 3 不回归 `test_packaging_match_undecidable_and_size_guard_red +
+  test_packaging_parts_extraction_red` → `Ran 55 … OK`；批次 4 §6 不回归
+  `test_dxf_cad_ir_red + test_tech_home_timeline_and_publish_closure_red` → `Ran 81 … OK (skipped=1)`；
+  引用本批改动模块/文件的 71 个模块 → `Ran 1465 … OK (skipped=2)`；
+  `test_doc_path_and_root_consistency_red + test_spec_status_truth_red` → `Ran 17 … OK`
+  （批次 3 新建的 3 个工具路径补齐了 `test_a1` 的路径守卫、两份 Spec 状态行改为已实现后 `test_c1` 不再点名）。
+- 边界与边界外的另一路：三份前端文件（`cost-review.js` / `quick-quote-panel.js` / `tech-task.js`）
+  与本批改动互不重叠；按两份 Spec §5 **未提交 / 未推送 / 未部署**。
+- 注：`docs/specs/packaging-business-part-process-by-authority-route.md`、
+  `packaging-unified-route-cost`、`da-process-routing-live` 等并行会话的在途改动本批一行未碰。
+
+## 540. 体验与可观察性（批次 4）Spec 与红测（10-9，本地）
+
+- Spec：`docs/specs/observability-and-experience-batch4.md`，把「缺什么 / 哪一版 / 谁算的 /
+  为什么排在后面」做成统一投影，并让 `P1`/`P2` 按「主界面只突出业务零件 + 只显示有权数量」降级落地。
+- 覆盖项：`P3` 导出还差哪几步、`P4` 成本版本 + 暂估 + 缺口分类（闭集，未知归「其它」）、
+  `P11` 排模点名缺什么、`P6` 转换主/回退 + 版本 + 许可、`P7` 表达式口径文案（恰为
+  「变量映射后的表达式匹配」，禁「逐字」）、`P8` 知识库健康面板、`P9` 候选「为什么不是更高分」
+  + 转精准对照、`P10` 在等谁 + 已等多久、`P12` 草稿角标按操作细分、`P1` 业务零件主、`P13`
+  不建议自动识别建议人工建档、`P2` 可见范围说明（不泄露无权数量）、`T15` 曲线采样参数配置化写入 IR。
+- 现状缺口（10-9 实测）：`packaging_observability.py` / `kb_health.py` 不存在；
+  `converter_role` 只在前端之外的工具里出现；`cpq_quick_quote_match._rank_reason()` 只解释
+  「为何排在这里」；`home_card._waiting_for()` 无「已等多久」；`cad_ir/parser.py` 的
+  `sample_step: 0.01` 硬编码在 3 处、不进 `DEFAULT_LIMITS` 与 `parser.options`。
+- 红测：`tests/test_observability_and_experience_batch4_red.py`，实现前实跑 **23 条全红**
+  （23 failures / 0 errors），红点分三类：新模块不存在（12+2）、既有模块缺新函数（P9/P2）、
+  前端未接线（3）与 T15 未配置化（3）。
+- 相关既有回归：`test_dxf_cad_ir_red` + `test_tech_home_timeline_and_publish_closure_red`
+  合计 81 OK (skipped=1)，零新增回归。
+- 边界：不改成本公式/费率/匹配算法/缺口裁决源；缺口分类、是否暂估、相似度一律以后端为准，
+  前端不另算；不做前端大规模重构；`P2` 范围说明不替代修 ACL。
+- 未改任何业务实现；未提交、未推送、未部署。
+
+## 539. 真实数据与识别覆盖（批次 3）Spec 与红测（10-9，本地）
+
+- Spec：`docs/specs/data-and-recognition-coverage-batch3.md`，把「识别得准不准、区间数据对不对、
+  工序编码能不能命中」从口头判断收敛为三份**可执行的只读报告**。
+- T6 区间审计：匹配代码**已支持**逐轴下限（`packaging_match._dimension_size()`，`size_guard`
+  红测 23 OK），本仓种子 `da_seed_packaging.BOX_TYPES` 12 行边界齐全、零倒挂；缺的是对生产
+  `kb_packaging_box_type` 跑同一套不变量的工具。新增只读
+  `tech_app/tools/packaging_box_type_range_audit.py`（`classify_sizes` 分固定规格/可调尺寸/参考；
+  `audit_box_types` 出 `range_missing`/`range_inverted`/`range_not_positive`）。
+- T14 + O6 识别度量：全仓无 accuracy/precision/recall/留出图实现（10-9 grep 为空），只有在位性
+  门禁。新增只读 `tech_app/tools/packaging_parts_accuracy.py`（`load_holdout` / `score_parts`）：
+  漏识别、误识别、归属、尺寸、证据覆盖、人工修正耗时**六个维度分开计**，人工耗时只透传不推算，
+  `summary` 不得出现任何单一正确率标量。
+- T16 路线诊断：只有只读桥 `da_process_routing.py`，无离线诊断。新增只读
+  `tech_app/tools/packaging_routing_diagnostic.py`（`diagnose_routing` 出按编码命中、仅按名称命中、
+  未命中、孤儿步骤、草稿头、空工时头、`verdict`），不改桥、不自动采纳模糊匹配。
+- T13 只验收不重做（`import_da_kb_to_pg.py` 默认 dry-run、`kb_deploy_preflight` 含
+  `box_type_missing_fit_clearance`），本批只放两条守卫。
+- 红测：`tests/test_data_and_recognition_coverage_batch3_red.py`，实现前实跑 **11 条：9 红 2 绿**
+  （9 failures 全部是三个工具模块不存在，按 T6/T14/T16 各 3 条；2 绿为 T13 守卫，符合预期）。
+- 相关既有回归：`packaging_match_undecidable_and_size_guard` + `packaging_parts_extraction`
+  合计 55 OK，零新增回归。
+- 边界：不改 `packaging_match` 算法与权重、不给所有盒型统一补下限、不按样本件数或金标尺寸调参、
+  不把答案键喂进提取链路（只在**对答案**阶段用）、不动 `da_process_routing.py` 与前端。
+- 未改任何业务实现；未提交、未推送、未部署。
+
+## 538. 发布保障（批次 2）实现：分片回归 + 共享测试件 + CI 全量语法门禁（10-9，本地）
+
+- 落地 `## 537` 的 Spec `docs/specs/release-assurance-batch2.md`（状态改为已实现，补 §8 实现记录），
+  红测 `tests/test_release_assurance_batch2_red.py` 由 **13 全红** 转 **13 全绿**。
+- 新增 `scripts/run_tests_sharded.py`：`discover_modules` / `plan_shards` / `shard_env` 三个纯函数 +
+  `--list` / `--shards N --dry-run` / `--shards N [--json]` 三段 CLI。分片按排序后轮转分配，
+  确定性、两两不相交、并集等于全集；每个分片一个独立进程 + **独立 TMPDIR 根**（跑前建根），
+  避免 `tests/_tmp_guard.py`「一次运行一个根」在多进程下互删临时目录。
+- 新增 `scripts/ci_checks.py`：`compile_all(roots)` / `whitespace(base, cwd)` 两个 API；
+  `--compile-all` 默认覆盖 `cpq_*.py` / `tech_app/` / `scripts/` / `tests/` 四个根，
+  `--whitespace` 等价 `git diff --check`（`--base` 为空则退化为工作区差异）。
+- 新增 `tests/support/{__init__,js_source,frozen,stage_table}.py`：唯一 JS 函数体抠取
+  （字符串 / 注释 / 模板串 / `${...}` / 正则里的括号不算结尾，找不到函数名返回空串）、
+  集合封闭断言（分开列出「新增」与「缺失」）、前后端编号表按 id 逐字段比对。
+- 改 `.gitlab-ci.yml` 的 `python_contract`：`py_compile` 四个文件改为
+  `python scripts/ci_checks.py --compile-all --whitespace --base "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"`，
+  失败即拦合入（无 `allow_failure`）；CI 仍无 deploy / ssh / scp / rsync / systemctl / git pull。
+- 实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+  `test_release_assurance_batch2_red` 改前 `Ran 13 … FAILED (failures=13)`、改后 `Ran 13 … OK`；
+  `run_tests_sharded.py --list | wc -l` = 434 = `ls tests/test_*.py | wc -l`；
+  `ci_checks.py --compile-all --json` → `{"ok": true, "checked": 663, "failures": []}`；
+  `test_packaging_stage_order_red test_cpq_eval_ci_contract` → `Ran 31 … OK`（不回归）。
+- 边界：只做本地测试编排与 CI 检查，未迁移既有 17 份 JS 抠取与 419 处计数断言（后续批次），
+- 全量（冻结后）：`Ran 7050 … FAILED (failures=34, skipped=28)`；34 条**全部**落在另一路在途的
+  两份新红测与它们的 Spec 守卫（`observability-and-experience-batch4_red` 23 条、
+  `data-and-recognition-coverage-batch3_red` 9 条、`test_spec_status_truth_red::test_c1`、
+  `test_doc_path_and_root_consistency_red::test_a1`）；本批新增/改动文件 **0 红**
+  （改前基线 48 红 = 本批 13 条红测 + `test_repo_leftovers_red::test_c1` 误判 1 条）。
+  误判已修：`run_tests_sharded.py` docstring 里的 `_tmp_guard.py` 字面量命中
+  「入库脚本不许引用一次性脚本」正则（`tmp_[A-Za-z0-9_]*\.py`），改写为 `_tmp_guard` 后转绿。
+  未动前端运行时与 `workflow_stages.py`；按 Spec §5 **未提交 / 未推送 / 未部署**。
+- 注：`docs/specs/data-and-recognition-coverage-batch3.md`（另一路在途、未跟踪）的状态行
+  「未实现」缺原因，会让 `test_spec_status_truth_red::test_c1` 保持一条红；本批未碰该文件。
+
+## 537. 发布保障（批次 2）Spec 与红测（10-9，本地）
+
+- Spec：`docs/specs/release-assurance-batch2.md`，把「全量回归从 10~11 分钟压到 3 分钟级」
+  拆成五件可验收的事：分片运行器、唯一稳健的 JS 抠取、集合枚举断言件、前后端编号逐行比对、
+  CI 语法检查补齐。
+- 现状实测：`scripts/` 无分片/并行入口（432 模块 / 约 6970 项串行 10~11 分钟）；`tests/` 里
+  至少 17 份各自实现的 JS 括号计数抠取（函数体出现 `}` 字面量即抠错、集体报红）；
+  冻结清单一律用计数断言（实测 419 处 `assertEqual(len(...), <数字>)`）；
+  `tech-workbench.js:19` 的 `const STAGES` 仍是手抄 9 行，没有任何测试与后端
+  `workflow_stages.py` 逐行比对（10-9 只读比对：当前 0 漂移）；CI 的 `python_contract`
+  只 `py_compile` 4 个文件（一方 Python 共 660 个），也没有空白检查。
+- 红测：`tests/test_release_assurance_batch2_red.py`，实现前实跑 **13 条全红**
+  （13 failures / 0 errors）：T1 分片 6 条、T3 JS 抠取 3 条、T4 集合断言 1 条、
+  T5 逐行比对 1 条、T12 CI 门禁 3 条。
+- 边界：分片运行器只做本地测试编排、每个分片独立 TMPDIR 根；CI 只加检查，保持
+  「CI 不部署」；不迁移既有 17 份抠取与 419 处计数断言（后续批次分批做）；不动前端运行时
+  与 `workflow_stages.py`。
+- 相关既有回归：`packaging_stage_order 7`、`cpq_eval_ci_contract 24` 全绿，零新增回归。
+- 未改任何业务实现；未提交、未推送、未部署。
+
+## 536. 架构复盘事实校准 + 链路一致性（批次 1）Spec 与红测（10-9，本地）
+
+- 架构复盘 12 份文档完成 10-9 事实复核：订正 8 条陈旧结论并加三态标注（本地已实现 /
+  已上线待验收 / 仍缺实现）。案例库并非为零（导入脚本已在，本地 2 条案例全部达标、
+  含价且已审核）；最小收费口径已裁决；配合间隙缺失已不再扣总分上限；CI 已跑全量；
+  上线门禁实为 19 项、知识库实为 32 张表；同源路线在本地尚未上线；成本公式表述改为
+  「登记源公式 + 变量映射后匹配」。产物：`docs/reports/architecture-review-20261009/`。
+- 批次 1「链路一致性」Spec：`docs/specs/chain-consistency-batch1.md`，定位两个**可复现**的
+  真实分歧：① 2.3 成本确认按布尔 `has_gaps` 判可用，与 readiness gate 的 severity 分层
+  结论相反（实测 gate=formal、ready=False）；② 报价金额无唯一投影，展示单价 1.14 × 3 = 3.42
+  而含税总额显示 3.41。另发现 `stale`（依据漂移）只在 2.3 生效、gate 不认。
+- 红测：`tests/test_chain_consistency_batch1_red.py`，实现前实跑 **9 条中 8 条红**
+  （5 failures / 3 errors，1 条前提校验绿）；相关既有回归
+  `severity_layering 8 / panel 26 / input_version_pinning 7 / route_bom_version_pinning 14 /
+  quote_close_loop 96` 全绿，零新增回归。
+- 同批把「同源路线、回传版本、输入版本钉扎、缺口分层」列为**验收项**（已实现、不重做）。
+- 金额尾差口径（单价权威 / 总额权威）留给业务拍板，本批只做唯一投影与如实披露。
+- 未改任何业务实现；未提交、未推送、未部署。
+
+## 535. 包装单件推荐—项目路线—公式成本同源（10-9，本地）
+
+- 项目路线优先汇入已保存单件/组成工序；保留部件、组成、原序号、用量、公式及
+  DA 依据。完整性检查不允许缺件或过期推荐混成完整路线；历史无单件结果路径兼容。
+- 成本只消费确认路线，不再从 BOM 拼同名去重列表；机裱等加工公式不重复计人工。
+  单件拼版/上机参数缺失给缺口，不用包围盒猜参数；模型分钟不冒充标准秒数。
+- 保存/冻结来源指纹和参数，推荐或用量变化使路线过期并阻止成本继续算旧方案。
+  前端路线表显示部件/组成/用量/公式，公式计费不误提示必须补标准工时。
+- 修复整项目工艺/成本结果最多 20 条的截断，各部件各自保留最多 20 个版本。
+- Spec：`packaging-unified-route-cost`；实现前 6 红（2 failures/4 errors）。
+- 新增 15 条测试；相关回归合计 346 条通过，Python/JavaScript 语法及 diff 检查通过。
+- 未新增排模算法、参数编辑 API 或 CLM 工序编码规则维护平台；未提交、推送、部署，
+  未改线上数据，不能把隔离测试通过视为现场正式成本已核准。
+
+## 534. DA CLM 工艺路线真实 PG 接入（10-9，本地）
+
+- 只读核实线上 27 个头、124 行；26 个包装路线均为草稿，全部行的三类工时为空。
+- 新增内部令牌保护的只读路线查询，技术侧通过 HTTP 读取；按产品编码或精确件名
+  查询并关联工序，保留顺序、原文、来源、状态及空工时。各组成独立检索。
+- 将真实依据加入模型工艺推荐输入并随结论保存；名称/草稿不视为批准标准，
+  服务不可用明确披露，工序输出仍标记模型推荐。DA 表目前属于 pending 条目。
+- Spec/red：`da-process-routing-live`；实现前 4 条红（2 errors/2 failures）。
+- 实际适配器只读验证：左盖面纸名称/编码均命中 8 道工序；圆盘盒名称无匹配，
+  头行和工序关联无孤儿。相关 77 条测试通过，语法与 diff 检查通过。
+- 未写线上主数据、未提交、未推送、未部署；不构成标准工时或正式成本验收。
+
 ## 521. 本周 changelog 文件预建（10-8，Codex）
 
 - 按“changelog 只按自然周维护、每个文件覆盖周一至周五”的规则，预建本周文件

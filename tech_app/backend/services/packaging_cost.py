@@ -1821,7 +1821,10 @@ def _item(seq: int, category: str, *, part_code: Optional[str] = None,
 
 def _line_to_item(seq: int, line: dict, *, source_ref: str, source: str = "formula",
                   expression: str = "") -> dict:
-    inputs = line.get("inputs") or {}
+    inputs = dict(line.get("inputs") or {})
+    for key in ('section_id','usage_qty','parameter_source'):
+        if key in line and (key == 'parameter_source' or line.get('part_code')):
+            inputs[key] = line[key]
     item = _item(seq, line.get("cost_category") or "", part_code=line.get("part_code"),
                  part_name=line.get("part_name") or "", formula_code=line.get("formula_code"),
                  content_code=line.get("content_code"), tooling_code=line.get("tooling_code"),
@@ -1879,6 +1882,12 @@ READINESS_PROVISIONAL = "provisional"
 
 #: 缺口码前缀 → 结构化字段（变量 / 补数入口 / 严重度）。有冒号的码按前缀匹配。
 GAP_RESOLUTIONS = {
+    'process_formula_missing': {'missing_variable':['formula_code'],
+        'resolution_action':'给该工序关联公式或补人工报价','entry':'packaging-route','severity':'blocking'},
+    'process_parameters_missing': {'missing_variable':['machine_length','machine_width','imposition_count'],
+        'resolution_action':'补该零件的排模计费参数','entry':'packaging-route','severity':'blocking'},
+    'process_usage_invalid': {'missing_variable':['usage_qty'],
+        'resolution_action':'补工序每套用量','entry':'packaging-route','severity':'blocking'},
     "part_size_missing": {"missing_variable": ["length_mm", "width_mm"],
                           "resolution_action": "补零件展开尺寸（2.1 零件提取或盒型尺寸确认）",
                           "entry": "packaging-parts", "severity": "blocking"},
@@ -2104,19 +2113,80 @@ def packaging_cost_readiness_gate(cost: Any) -> dict:
     }
 
 
+#: 缺口「能不能用」的唯一对外结论版本（Spec `chain-consistency-batch1.md` §2.1）。
+VERDICT_VERSION = "packaging-cost-verdict/1"
+#: 四态闭集：阻断缺口 / 演示豁免 / 只有提示缺口 / 正式报价资格。
+VERDICT_STATES = ("blocking_gaps", "demo_waived", "advisory_only", "formal_eligible")
+
+
+def readiness_verdict(cost: Any, waiver: Any = None) -> dict:
+    """这份成本「能不能用」的**唯一**结论入口（Spec §2.1）。
+
+    结论只由 `packaging_cost_readiness_gate()` 的阻断口径 + `stale` 决定：本函数**不改**
+    gate 的字段与口径，只把它的结果原样放进 `gate`，再翻译成四态 ——
+
+      · `blocking_gaps`   阻断缺口 / 静默按 0 / 尚未测算 / **依据已变化（stale）**；
+      · `demo_waived`     命中阻断条件但有业务签字（`signed_by` / `by` / `reason`）；
+      · `advisory_only`   `formal` 且只有提示缺口（提示不阻断，但必须看得见）；
+      · `formal_eligible` `formal` 且一条缺口都没有。
+
+    **`stale` 纳入阻断**是本批唯一的口径新增：BOM / 路线 / 业务件清单 / 规则快照漂移过的
+    旧成本，不得再算「当前正式成本」（此前只有 2.3 的 `summarize()` 认它，报价门禁不认）。
+    """
+    payload = cost if isinstance(cost, dict) else {}
+    gate = packaging_cost_readiness_gate(payload)
+    stale = bool(payload.get("stale"))
+    stale_reasons = [_text(row) for row in (payload.get("stale_reasons") or []) if _text(row)]
+    unbuilt = payload.get("built") is False
+    blocked = bool(gate.get("blocking_total") or gate.get("silent_zero_total")
+                   or unbuilt or stale)
+    reasons = [str(row) for row in (gate.get("reasons") or [])]
+    if stale:
+        reasons.append("成本依据已变化（%s），旧结论不得继续当当前成本用"
+                       % ("、".join(stale_reasons) or "未注明原因"))
+    waiver = waiver if isinstance(waiver, dict) else {}
+    waived_by = _text(waiver.get("signed_by") or waiver.get("by"))
+    waiver_reason = _text(waiver.get("reason"))
+    if blocked:
+        state = "demo_waived" if (waived_by or waiver_reason) else "blocking_gaps"
+    elif _text(gate.get("verdict")) == READINESS_FORMAL and (gate.get("advisory_total") or 0) > 0:
+        state = "advisory_only"
+    else:
+        state = "formal_eligible"
+    return {
+        "version": VERDICT_VERSION,
+        "state": state,
+        "states": VERDICT_STATES,
+        "formal_ready": state in ("advisory_only", "formal_eligible"),
+        "stale": stale,
+        "stale_reasons": stale_reasons,
+        "waived_by": waived_by,
+        "waiver_reason": waiver_reason,
+        "reasons": reasons,
+        # 原样透传（Spec §2.1：不许另起口径）。
+        "gate": gate,
+    }
+
+
 def formal_cost_or_raise(cost: Any, waiver: Any = None) -> dict:
     """正式成本才放行；带缺口必须有 POC 豁免签字（Spec §2.1）。
 
     `waiver` 只表达"业务签字带缺口继续"，缺口本身以服务端算出的为准（调用方不得
     用前端传来的缺口清单替换这里的结果）。
+
+    结论取**唯一入口** `readiness_verdict()`（Spec `chain-consistency-batch1.md` §2.1）：
+    除了 gate 原本的阻断缺口 / 静默按 0 / 尚未测算，**依据已漂移（`stale`）的成本也一律
+    不再放行** —— 这正是此前「工序 / BOM / 排模或费率变化后旧成本继续当当前成本」那条路。
+    放行与拒绝返回的仍是 gate 本体（字段与口径不变）。
     """
     gate = packaging_cost_readiness_gate(cost)
-    if gate["formal_ready"]:
+    verdict = readiness_verdict(cost, waiver)
+    if verdict["formal_ready"]:
         return gate
-    if isinstance(waiver, dict) and (waiver.get("signed_by") or waiver.get("reason")):
+    if verdict["state"] == "demo_waived":
         return {**gate, "waived": True,
-                "waived_by": _text(waiver.get("signed_by") or waiver.get("by")),
-                "waiver_reason": _text(waiver.get("reason"))}
+                "waived_by": verdict.get("waived_by") or "",
+                "waiver_reason": verdict.get("waiver_reason") or ""}
     raise CostError(
         "这份成本还是暂定（%s）：%s。补齐缺口，或由业务签字带缺口放行"
         % (gate["verdict"], "；".join(gate["reasons"]) or "存在未清零缺口"),
@@ -2148,6 +2218,19 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     if not route or _text(route.get("status")) != "confirmed":
         raise _fatal("route_not_confirmed", "工艺路线尚未确认，人工费无从取工时（Spec §2.13）")
     steps = [dict(row) for row in da_repo.load_packaging_route_steps(project_id, req_no)]
+    from . import packaging_process_instances
+    try:
+        route_sources = json.loads(route.get('source_versions_json') or '{}')
+    except (TypeError, ValueError):
+        route_sources = {}
+    drift = packaging_process_instances.drift(project_id, route_sources)
+    if drift:
+        raise _fatal(drift, '单件工序已变化或无法读取，请重算并确认项目路线后再测算')
+    if route_sources.get('part_process_hash'):
+        from . import packaging_route
+        route_view = packaging_route.load_route(project_id, req_no)
+        if route_view.get('stale'):
+            raise _fatal('route_stale','项目路线已过期，请重新生成并确认后再测算')
 
     quantity = _num(data.get("quote_quantity"))
     if quantity is None or quantity <= 0:
@@ -2272,30 +2355,35 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         lines.append(line)
 
     # 2) 工序类（BOM process 行 + 第 6 批工序） ---------------------------- #
-    process_names: list = []
-    for row in bom_rows:
-        if _text(row.get("bom_category")) == "process":
-            name = _text(row.get("item_name") or row.get("item_key"))
-            if name and name not in process_names:
-                process_names.append(name)
-    for step in steps:
-        name = _text(step.get("step_name"))
-        if name and name not in process_names:
-            process_names.append(name)
     sheet_length = machine_length
     sheet_width = machine_width
-    for name in process_names:
-        category = STEP_CATEGORY_MAP.get(name)
-        if not category:
+    for step in steps:
+        name = _text(step.get('step_name'))
+        decision = packaging_process_instances.billing(step)
+        category = decision['cost_category']
+        if category == 'labor':
+            continue
+        if decision['gap']:
+            gaps.append({'code':('no_formula:'+category) if category else 'process_formula_missing',
+                         'where':str(step.get('step_no')),
+                         'detail':'工序「%s」未关联计费公式，需选择公式或人工报价' % name})
             continue
         codes = formula_codes_for(category)
         if not codes:
             gaps.append({"code": "no_formula:%s" % category, "where": name,
                          "detail": "类别 %s 在 0903 里是手填列，本批没有公式" % category})
             continue
-        entry = resolve_formula(codes[0], rows=formula_rows)
+        entry = resolve_formula(decision['formula_code'], rows=formula_rows)
         variables = dict(entry.get("defaults") or {})
-        variables.update({"quote_quantity": quantity, "imposition_count": imposition,
+        usage = _num(step.get('usage_qty')) if step.get('usage_qty') is not None else 1.0
+        if step.get('usage_assumed'):
+            gaps.append({'code':'usage_qty_missing','where':str(step.get('step_no')),
+                         'detail':'部件工序缺每套用量，本次按 1 使用，请核对'})
+        if usage is None or usage <= 0:
+            gaps.append({'code':'process_usage_invalid','where':str(step.get('step_no')),
+                         'detail':'工序用量无效，不能测算'})
+            continue
+        variables.update({"quote_quantity": quantity * usage, "imposition_count": imposition,
                           "tax_factor": tax_factor})
         if category in ("print", "print_uv", "lamination", "hot_stamp_flat", "glue",
                         "v_groove", "die_cutting", "mounting"):
@@ -2306,11 +2394,34 @@ def compute_project(project_id: str, requirement_no: str = "", *,
             if area is None:
                 area = _num(data.get("process_area"))
             variables["hot_area_mm2"] = area
+        variables.update(step.get('cost_parameters') or {})
+        variables['quote_quantity'] = quantity * usage
+        if step.get('part_code'):
+            # Unified part route must carry its own imposition evidence, not whole-box defaults.
+            for key in ('machine_length','machine_width','imposition_count'):
+                if key not in (step.get('cost_parameters') or {}):
+                    variables.pop(key, None)
+        inputs_source = 'part_route_parameters' if step.get('part_code') else 'legacy_project_parameters'
+        if step.get('part_code'):
+            required = set(expression_variables(entry['expression']))
+            absent = [key for key in ('machine_length','machine_width','imposition_count')
+                      if key in required and _num(variables.get(key)) is None]
+            if absent:
+                gaps.append({'code':'process_parameters_missing','where':str(step.get('step_no')),
+                             'detail':'部件工序缺排模参数：'+','.join(absent)})
+                line={'cost_category':category, 'part_code':step['part_code'],
+                      'part_name':name, 'formula_code':entry['formula_code'], 'amount':None,
+                      'expression':entry['expression'],'inputs':variables,'source':'formula',
+                      'source_ref':'route_step:%s' % step.get('step_no'), 'loss_rate':None,
+                      'min_charge_applied':False}
+                line.update(_trace_fields(entry,snapshot=rule_version))
+                lines.append(line)
+                continue
         #: 缺上机尺寸只在**表达式真的要用**它时才是缺口：库里的 reviewed 公式可能
         #: 只吃数量（Spec 修复第 1 批 §3.1 起的唯一入口语义），此时不该被这条拦掉。
         needs_sheet = bool(set(expression_variables(entry["expression"]))
                            & {"machine_length", "machine_width"})
-        if sheet_length is None and needs_sheet and category in ("print_uv", "lamination", "glue"):
+        if _num(variables.get('machine_length')) is None and needs_sheet and category in ("print_uv", "lamination", "glue"):
             gaps.append({"code": "part_size_missing", "where": name,
                          "detail": "缺上机尺寸，%s 行不出金额" % category})
             gap_line = {"cost_category": category, "part_code": None, "part_name": name,
@@ -2341,6 +2452,11 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                 "amount": result.get("amount"),
                 "min_charge_applied": bool(result.get("min_charge_applied")),
                 "source": "formula"}
+        line.update({'part_code':step.get('part_code'), 'section_id':step.get('section_id'),
+                     'source_ref':'route_step:%s' % step.get('step_no'),
+                     'parameter_source':inputs_source, 'usage_qty':usage})
+        if line['amount'] is not None:
+            line['amount'] *= usage
         line.update(_trace_fields(entry, result=result, snapshot=rule_version))
         rate = loss_rate_for(name)
         if rate is None and line["amount"] is not None:
@@ -2355,8 +2471,13 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     entry_labor = resolve_formula("PKG-C-LABOR", rows=formula_rows)
     for step in steps:
         name = _text(step.get("step_name"))
-        rate_code = STEP_RATE_MAP.get(name)
+        decision = packaging_process_instances.billing(step)
+        if decision['includes_labor'] or decision['formula_code'] != 'PKG-C-LABOR':
+            continue
+        rate_code = STEP_RATE_MAP.get(name) or ('RATE-PKG-LABOR-ASSEMBLY' if name == '包盒' else None)
         if not rate_code:
+            gaps.append({'code':'rate_missing','where':str(step.get('step_no')),
+                         'detail':'人工工序「%s」没有工时费率编码' % name})
             continue
         seconds = _num(step.get("standard_seconds"))
         step_no = _text(step.get("step_no"))
@@ -2392,7 +2513,8 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         min_applied = bool(result.get("min_charge_applied"))
         minimum_charge = _num(rate_row.get("minimum_charge")) or 0.0
         if amount is not None and minimum_charge and quantity:
-            threshold = minimum_charge / quantity
+            labor_usage = _num(step.get('usage_qty')) if step.get('usage_qty') is not None else 1.0
+            threshold = minimum_charge / (quantity * labor_usage) if labor_usage and labor_usage > 0 else 0
             if threshold > amount:
                 amount = threshold
                 min_applied = True
@@ -2402,6 +2524,14 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                 "inputs": result.get("inputs") or variables, "amount": amount,
                 "min_charge_applied": min_applied, "source": "formula",
                 "source_ref": "step:%s" % step_no, "quantity_basis": "按工时"}
+        usage = _num(step.get('usage_qty')) if step.get('usage_qty') is not None else 1.0
+        line.update({'part_code':step.get('part_code'), 'section_id':step.get('section_id'),
+                     'usage_qty':usage, 'parameter_source':step.get('time_source') or 'legacy_standard_time'})
+        if usage is None or usage <= 0:
+            line['amount'] = None
+            gaps.append({'code':'process_usage_invalid','where':step_no,'detail':'人工工序用量无效'})
+        elif line['amount'] is not None:
+            line['amount'] *= usage
         line.update(_trace_fields(entry_labor, result=result, snapshot=rule_version))
         rate = loss_rate_for(name)
         if rate is None and amount is not None:

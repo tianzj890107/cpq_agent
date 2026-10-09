@@ -752,5 +752,53 @@ def seed_weights(rows=None, *, conn=None) -> dict:
             "changed": int(changed), "kb_version": int(version)}
 
 
+
+# --------------------------------------------------------------------------- #
+# P9：候选「为什么不是更高分」+ 转精准「基准 vs 当前」对照（体验与可观察性批次 4，Spec §2.3）
+# --------------------------------------------------------------------------- #
+def explain_ranking(candidates) -> list:
+    """对**已排序**候选逐名给「为什么不是更高分」。
+
+    第 1 名没有「为什么不是更高分」（`why_not_higher == []`）；第 N(>1) 名相对**第 N-1 名**
+    比较 `diff_items`：多出的差异项给「比上一名多差异项：<标签>」，少掉的给
+    「比上一名少差异项：<标签>」；两者一致 → 给一条「差异项相同，相似度更低」（不许空理由）。
+    纯函数：不改入参。
+    """
+    out = []
+    previous = None
+    for index, candidate in enumerate(list(candidates or []), start=1):
+        candidate = candidate or {}
+        reasons = []
+        if previous is not None:
+            prev_fields = {_text(item.get("field")): _text(item.get("label"))
+                           for item in (previous.get("diff_items") or []) if isinstance(item, dict)}
+            cur_fields = {_text(item.get("field")): _text(item.get("label"))
+                          for item in (candidate.get("diff_items") or []) if isinstance(item, dict)}
+            for key, label in cur_fields.items():
+                if key not in prev_fields:
+                    reasons.append("比上一名多差异项：%s" % label)
+            for key, label in prev_fields.items():
+                if key not in cur_fields:
+                    reasons.append("比上一名少差异项：%s" % label)
+            if not reasons:
+                reasons.append("差异项相同，相似度更低")
+        out.append({"case_code": _text(candidate.get("case_code")),
+                    "rank": index, "why_not_higher": reasons})
+        previous = candidate
+    return out
+
+
+def transfer_compare(base, current) -> dict:
+    """逐字段对照基准案例与当前参数；`changed` 为两值是否不同（纯函数，不改入参）。"""
+    base = base or {}
+    current = current or {}
+    fields = list(base.keys()) + [key for key in current.keys() if key not in base]
+    rows = []
+    for field in fields:
+        left = base.get(field)
+        right = current.get(field)
+        rows.append({"field": field, "base": left, "current": right, "changed": left != right})
+    return {"rows": rows, "changed_total": sum(1 for row in rows if row["changed"])}
+
 if __name__ == "__main__":                                  # pragma: no cover - 手工跑
     print("weight rows =", len(DEFAULT_WEIGHTS), "dimensions =", len(DIMENSIONS))

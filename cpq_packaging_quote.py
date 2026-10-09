@@ -119,6 +119,38 @@ def _rate_text(value: Any) -> str:
     return "%.2f" % (_num(value) or 0.0)
 
 
+#: 报价金额唯一投影的版本号（Spec `chain-consistency-batch1.md` §2.3）。
+MONEY_VERSION = "packaging-quote-money/1"
+
+
+def money_view(quote: dict) -> dict:
+    """报价金额/税金的**唯一渲染投影**（纯函数：不改入参、不重算权威数字）。
+
+    · `fields` 的键集 = 既有 `_MONEY_FIELDS` 闭集（一件不多、一件不少），每个值由对应
+      权威字段**只取整一次**（`_money()`，即 `"%.2f"`）；
+    · `untaxed_total` / `taxed_total` 取权威数字本身，**不由展示单价 × 数量重算**；
+    · `reconciles` / `difference` 如实回答「客户按展示含税单价 × 数量复算，会不会与展示
+      含税总额差几分」。不自洽时由 `document()` 在报价单上披露口径 —— 两种尾差口径
+      （① 单价权威 / ② 总额权威，Spec §2.4 待业务拍板）本函数都成立。
+    """
+    q = quote if isinstance(quote, dict) else {}
+    fields = {key: _money(q.get(key)) for key, _label in _MONEY_FIELDS}
+    quantity = _num(q.get("quote_quantity")) or 0.0
+    unit = _num(fields.get("taxed_unit_price")) or 0.0
+    total = _num(fields.get("taxed_total")) or 0.0
+    difference = round(unit * quantity - total, 6)
+    return {
+        "version": MONEY_VERSION,
+        "currency": _text(q.get("currency")) or "CNY",
+        "quantity": quantity,
+        "fields": fields,
+        # 总额是权威数字；单价是渲染值（Spec §2.3 硬约束 3）。
+        "authority": "total",
+        "reconciles": difference == 0,
+        "difference": "%.2f" % abs(difference),
+    }
+
+
 def _digest(payload: Any) -> str:
     text = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
@@ -491,6 +523,18 @@ def document(quote: dict, *, publish: bool = False) -> dict:
         lines.append("> 本报价为缺口草稿，不得对外发布（缺口 %d 项；清账后重新定价才能出正式报价单）。"
                      % count)
         lines.append("")
+    # 展示单价 × 数量与总额不自洽时必须在报价单上披露（Spec `chain-consistency-batch1.md`
+    # §2.3 硬约束 6）：客户按展示单价复算会得到第二个总额，不许静默。
+    money = money_view(q)
+    if not money["reconciles"]:
+        fields = money["fields"]
+        rendered = _money((_num(fields.get("taxed_unit_price")) or 0.0)
+                          * (_num(money.get("quantity")) or 0.0))
+        lines.append("> 金额口径：含税总额 %s 以系统计算为准；展示含税单价 %s × 数量 = %s，"
+                     "两者尾差 %s（单价是渲染值），请以总额为准。"
+                     % (fields.get("taxed_total"), fields.get("taxed_unit_price"),
+                        rendered, money["difference"]))
+        lines.append("")
     for section in sections:
         lines.append("## " + section["title"])
         for row in section["rows"]:
@@ -517,12 +561,16 @@ def _row(item: str, value: Any, *, source: str = "", formula: str = "") -> dict:
 
 
 def _money_rows(quote: dict) -> List[dict]:
-    return [_row(label, _money(quote.get(key)), source="packaging_quote")
+    """金额行一律来自唯一投影（Spec `chain-consistency-batch1.md` §2.3 硬约束 5）。"""
+    fields = money_view(quote)["fields"]
+    return [_row(label, fields.get(key), source="packaging_quote")
             for key, label in _MONEY_FIELDS]
 
 
 def _doc_sections(quote: dict) -> List[dict]:
     q = quote or {}
+    # 金额一律走唯一投影（Spec §2.3）：本节不再自己 `"%.2f"`。
+    money = money_view(q)["fields"]
     cost = q.get("cost_totals") or {}
     mode = _text(q.get("pricing_mode"))
     rate = q.get("gross_margin_rate") if mode == "gross_margin" else q.get("markup_rate")
@@ -570,25 +618,25 @@ def _doc_sections(quote: dict) -> List[dict]:
             _row("运输", _money(cost.get("freight_total")), source="包装成本引擎"),
             _row("损耗", _money(cost.get("loss_amount")), source="包装成本引擎"),
             _row("小计", _money(cost.get("subtotal")), source="包装成本引擎"),
-            _row("成本总额", _money(q.get("cost_total")), source="第 7 批 total_cost"),
+            _row("成本总额", money.get("cost_total"), source="第 7 批 total_cost"),
         ]},
         {"id": DOC_SECTIONS[5][0], "title": DOC_SECTIONS[5][1], "rows": (
             [
                 _row("定价模式", _text(q.get("pricing_mode_label")), source="Spec §1.2"),
                 _row(RATE_FIELDS.get(mode, "费率"), _rate_text(rate),
                      formula="成本 ÷ (1-毛利率)" if mode == "gross_margin" else "成本 × (1+加成率)"),
-                _row("毛利后单价", _money(q.get("margin_price")), source="定价引擎"),
+                _row("毛利后单价", money.get("margin_price"), source="定价引擎"),
             ] + [_row(f"加价：{_text(item.get('label'))}", _money(item.get("amount")),
                       source="Spec §2.4") for item in (q.get("addons") or [])]
-            + [_row("加价合计", _money(q.get("addon_total")), source="定价引擎"),
-               _row("加价后单价", _money(q.get("subtotal_unit")), source="定价引擎"),
+            + [_row("加价合计", money.get("addon_total"), source="定价引擎"),
+               _row("加价后单价", money.get("subtotal_unit"), source="定价引擎"),
                _row("折扣比例", _rate_text(q.get("discount_rate")), source="Spec §2.4"),
-               _row("折扣金额", _money(q.get("discount_amount")), source="定价引擎"),
-               _row("未税单价", _money(q.get("net_unit_price")), formula="加价后单价 − 折扣金额")]
+               _row("折扣金额", money.get("discount_amount"), source="定价引擎"),
+               _row("未税单价", money.get("net_unit_price"), formula="加价后单价 − 折扣金额")]
         )},
         {"id": DOC_SECTIONS[6][0], "title": DOC_SECTIONS[6][1],
          "rows": _money_rows(q) + [
-             _row("税金", _money(q.get("tax_amount")), formula="未税单价 × 税率"),
+             _row("税金", money.get("tax_amount"), formula="未税单价 × 税率"),
              _row("税率", _rate_text(q.get("tax_rate")), source="Spec §2.4")]},
         {"id": DOC_SECTIONS[7][0], "title": DOC_SECTIONS[7][1], "rows": [
             _row("来源技术项目", _text(q.get("source_tech_project_id")) or "—",
@@ -616,26 +664,28 @@ def _doc_sections(quote: dict) -> List[dict]:
 def sections(quote: dict) -> dict:
     """报价工作台四段分区：``s3_markup`` / ``s4_markup`` / ``s5_basic`` / ``s5_detail``。"""
     q = quote or {}
+    # 金额一律走唯一投影（Spec `chain-consistency-batch1.md` §2.3 硬约束 5）。
+    money = money_view(q)["fields"]
     mode = _text(q.get("pricing_mode"))
     rate = q.get("gross_margin_rate") if mode == "gross_margin" else q.get("markup_rate")
     rate_label = "毛利率" if mode == "gross_margin" else "加成率"
     markup_fields = [
         {"key": "pricing_mode", "label": "定价模式", "value": mode},
         {"key": RATE_FIELDS.get(mode, "rate"), "label": rate_label, "value": _rate_text(rate)},
-        {"key": "cost_total", "label": "成本总额", "value": _money(q.get("cost_total"))},
-        {"key": "untaxed_unit_price", "label": "未税单价", "value": _money(q.get("untaxed_unit_price"))},
+        {"key": "cost_total", "label": "成本总额", "value": money.get("cost_total")},
+        {"key": "untaxed_unit_price", "label": "未税单价", "value": money.get("untaxed_unit_price")},
     ]
     markup_rows = [
-        {"定价模式": mode, "费率": _rate_text(rate), "成本总额": _money(q.get("cost_total")),
-         "未税单价": _money(q.get("untaxed_unit_price")), "来源": "Spec §1.2"},
+        {"定价模式": mode, "费率": _rate_text(rate), "成本总额": money.get("cost_total"),
+         "未税单价": money.get("untaxed_unit_price"), "来源": "Spec §1.2"},
     ]
     for item in (q.get("addons") or []):
         markup_rows.append({"加价": _text(item.get("label")),
                             "金额": _money(item.get("amount")), "来源": "Spec §2.4"})
     detail_rows = [
-        {"项目": label, "值": _money(q.get(key)), "来源": "定价引擎"}
+        {"项目": label, "值": money.get(key), "来源": "定价引擎"}
         for key, label in _MONEY_FIELDS]
-    detail_rows.append({"项目": "税金", "值": _money(q.get("tax_amount")),
+    detail_rows.append({"项目": "税金", "值": money.get("tax_amount"),
                         "公式": "未税单价 × 税率"})
     detail_rows.append({"项目": "税率", "值": _rate_text(q.get("tax_rate")), "来源": "Spec §2.4"})
     return {

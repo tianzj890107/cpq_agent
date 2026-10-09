@@ -937,15 +937,17 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     if (source.indexOf('requirement:') === 0) return `需求补齐（${prEsc(source.slice('requirement:'.length))}）`;
     if (source.indexOf('template:') === 0) return `模板展开（${prEsc(source.slice('template:'.length))}）`;
     if (source === 'template') return '模板';
+    if (source.indexOf('model_recommendation') === 0) return '单件推荐（含数据库参考，不代表已批准标准）';
     return prEsc(source || '—');
   }
   function prRow(item) {
-    const needsTime = item.needs_standard_time || item.standard_seconds === null || item.standard_seconds === undefined;
+    const formulaPriced = item.part_code && !item.gap && item.formula_code && item.formula_code !== 'PKG-C-LABOR';
+    const needsTime = !formulaPriced && (item.needs_standard_time || item.standard_seconds === null || item.standard_seconds === undefined);
     return `<tr class="pr-step${needsTime ? ' pr-step-pending' : ''}" data-step-no="${prEsc(item.step_no)}">
       <td class="pr-no">${prEsc(item.step_no)}</td>
-      <td class="pr-name">${prEsc(item.step_name)}</td>
+      <td class="pr-name">${prEsc(item.step_name)}${item.part_code ? `<div class="muted">零件 ${prEsc(item.part_code)}${item.section_id ? ` / 组成 ${prEsc(item.section_id)}` : ''} · 用量 ${prEsc(item.usage_qty)}<br>计费：${prEsc(item.formula_code || '待关联公式')}</div>` : ''}</td>
       <td class="pr-station">${prEsc(item.workstation || '—')}</td>
-      <td class="pr-seconds">${needsTime ? '<span class="pr-todo">待补</span>' : prEsc(prSeconds(item.standard_seconds))}</td>
+      <td class="pr-seconds">${formulaPriced ? '按加工公式计费' : needsTime ? '<span class="pr-todo">待补</span>' : prEsc(prSeconds(item.standard_seconds))}</td>
       <td class="pr-auto">${prEsc(item.automation || '—')}</td>
       <td class="pr-control">${prEsc(item.control_point || '—')}</td>
       <td class="pr-source">${prSource(item)}</td>

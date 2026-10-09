@@ -3017,7 +3017,18 @@ def _save_part_doc(project_id: str, key: str, payload: Dict[str, Any], *,
     kept = [item for item in items
             if not all(_text(item.get(name)) == _text(record.get(name)) for name in identity)]
     kept.insert(0, record)
-    get_backend().put_doc(project_id, key, {"items": kept[:MAX_VERSIONS]})
+    # 工艺/成本需要保留所有部件的当前结果；20 不能成为整项目部件数上限。
+    if key in (DOC_KEY_PROCESS, DOC_KEY_COST):
+        counts = {}
+        saved = []
+        for item in kept:
+            item_code = _text(item.get('part_code'))
+            counts[item_code] = counts.get(item_code, 0) + 1
+            if counts[item_code] <= MAX_VERSIONS:
+                saved.append(item)
+    else:
+        saved = kept[:MAX_VERSIONS]
+    get_backend().put_doc(project_id, key, {"items": saved})
     return record
 
 
