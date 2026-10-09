@@ -1,5 +1,37 @@
 # 变更日志（10-5 ~ 10-9）
 
+## 545. `## 536~544` 的提交、双远端推送与 34 部署记录（10-9，本地）
+
+- 提交 `28d22ba`（`## 536~544 批次 1~5 实现与真并行分片回归；DA 工艺路线真实接入、单件—项目路线—公式成本同源`），
+  入库 64 个文件：21 个既有文件改动 + 43 个新增（批次 1~5 与真并行分片 5 份 Spec、8 份红测、
+  `tests/support/`、`scripts/run_tests_sharded.py`、`scripts/ci_checks.py`、
+  `capability_isolation.py`/`da_process_routing.py`/`kb_health.py`/`packaging_observability.py`/`packaging_process_instances.py`、
+  三个只读工具、`cpq_process_routing.py`、`docs/reports/architecture-review-20261009/`）。
+  不入库未跟踪项不变：`拆分程序/`、`.~南京锂能DA梳理.xlsx`。
+- 提交前回归：`./open-claude/.venv/bin/python -W ignore scripts/run_tests_sharded.py --shards 8 --jobs 4`
+  → **`Ran=7067 failures=0 errors=0 skipped=28` 全部通过**；改动 Python 的 `py_compile`、
+  改动 JS 的 `node --check`、`git diff --check` 全过。
+- 双远端：GitLab 与 GitHub 的 `ytbz` 均回读为 `28d22bad48b8eb38b9c3ed3daa0837f04798217c`
+  （`31aad47..28d22ba`），与本地 HEAD 三方一致。
+  · 本机当日仍解析不到 `gitlab.boulderaitech.com`（`ssh` 报 `Could not resolve hostname`）：
+    按 `## 534` 的办法改问内网 DNS `172.16.99.114` 得到 `172.16.5.150`，以
+    `HostKeyAlias=gitlab.boulderaitech.com` 直连该 IP 完成推送；未改 remote 配置、未写 `/etc/hosts`、未改凭据。
+- 34 部署：`bash scripts/deploy_34_bare.sh ytbz`，`5720a3b → 28d22ba`（纯快进）；
+  `build.commit=28d22bad48b8…`、`branch=ytbz`、`deployed_at=2026-10-09T13:58:57+0800`、
+  8010 pid=`276480`；`/api/health` status=ok、`/`（174,105 B）与 8012 `/api/health` 全 200。
+- 部署后核对（部署脚本自检）：ODA 27.1 主转换器直出、`converter_role=primary`、`fallback_used=false`；
+  酒盒.dwg 6711 实体 / 8 层、圆盘盒.dwg 3457 实体 / 32 层，dxf + preview 齐全。
+  隔离端到端自检 `verdict=ok`：酒盒八步 8/8、零件 263 件（`closed_ratio=0.510`）、可算 13 / 可挤出 13；
+  圆盘盒八步 8/8、零件 312 件（`closed_ratio=0.840`）、可算 101 / 可挤出 262；
+  两条权威实样路线 `confirm=confirmed`；隔离自检未写运行目录（`tech_app/tech_data` 78 → 78、`tech_app/data` 0 → 0）。
+- 部署后核对（只读）：13 个代表文件（`run_tests_sharded.py`、`ci_checks.py`、`capability_isolation.py`、
+  `da_process_routing.py`、`packaging_process_instances.py`、`kb_health.py`、`packaging_observability.py`、
+  `cpq_process_routing.py`、`packaging_cost.py`、`packaging_parts.py`、`packaging_route.py`、
+  `quick-quote-panel.js`、`cad_ir/parser.py`）在 34 与本机 sha256 逐字节一致（不一致数 0）。
+- 本提交同时入库并部署了「DA CLM 工艺路线真实接入」与「单件推荐—项目路线—公式成本同源」两条在途改动
+  （changelog `## 534`、`## 535`）。未创建 MR/tag/Release，未改任何生产数据，门禁两项人工项仍未代签。
+  能力声明不变：**DWG 编排能力完成，真实转换能力未验收**。
+
 ## 544. 真并行分片回归：把「分片」变成「同时跑」+ 全量验收（10-9，本地）
 
 - **根因**：`scripts/run_tests_sharded.py::run_shards()` 只在 `for` 循环里逐个阻塞
