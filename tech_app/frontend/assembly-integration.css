@@ -2,6 +2,20 @@
    卡片、表格、工序行全部沿用 inline-analysis.css —— 与 2.1 的工艺/成本面板是同一套。 */
 
 .ai-tabs { display: flex; gap: 4px; margin-left: auto; }
+.ai-layout-row { padding: 12px 0; border-bottom: 1px solid var(--oc-border-3, #e2e5ea); min-width: 0; }
+.ai-layout-row .inline-cov-row { flex-wrap: wrap; gap: 8px; }
+.ai-layout-picker { margin-top: 10px; min-width: 0; }
+.ai-layout-picker summary { cursor: pointer; padding: 8px; border-radius: 6px; color: var(--oc-accent, #0060E6); }
+.ai-layout-picker summary:hover { background: var(--color-primary-light, #E6F0FD); }
+.ai-layout-picker summary:focus-visible { outline: 2px solid var(--oc-accent, #0060E6); }
+.ai-layout-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 8px; max-height: 280px; overflow-y: auto; padding: 8px 0; }
+.ai-layout-option { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border: 1px solid var(--oc-border-3, #e2e5ea); border-radius: 6px; background: #fff; cursor: pointer; min-width: 0; }
+.ai-layout-option span { overflow-wrap: anywhere; }
+.ai-layout-option:hover, .ai-layout-option:has(input:checked) { background: var(--color-primary-light, #E6F0FD); border-color: var(--color-primary-border, #B4D0F8); }
+.ai-layout-option input { flex: 0 0 auto; width: 14px; height: 14px; margin: 3px 0 0; accent-color: var(--oc-accent, #0060E6); }
+.ai-layout-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.ai-layout-row .inline-action { width: auto; flex: 0 0 auto; padding: 5px 12px; font-size: 12px; }
+.ai-layout-row .inline-action:disabled { opacity: .6; cursor: wait; }
 .ai-tabs button {
   padding: 5px 12px; border: .5px solid var(--oc-border-3, #e2e5ea); border-radius: 999px;
   background: transparent; color: var(--oc-text-2, #4b5563); font-size: 12.5px; cursor: pointer;

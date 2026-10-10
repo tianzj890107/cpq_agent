@@ -2161,9 +2161,18 @@ function packagingPartAnnotationEntities(binding, doc) {
   });
   const seen = {};
   const rows = [];
+  const box = Array.isArray(row.bbox) && row.bbox.length === 4 ? row.bbox.map(Number) : null;
+  const validBox = box && box.every(Number.isFinite);
+  const references = new Set(row.dimension_refs || []);
   (Array.isArray(scene.entities) ? scene.entities : []).forEach(raw => {
     const id = String(((raw && raw.cad_entity_id) || ""));
-    if (!id || !marks[id] || seen[id]) return;
+    const targets = Array.isArray(raw.dimension_targets) ? raw.dimension_targets : [];
+    const belongs = raw.dimension_id && (references.has(raw.dimension_id)
+      || (validBox && targets.length >= 2 && targets.every(p => Array.isArray(p)
+        && p.length >= 2 && p.every(Number.isFinite)
+        && p[0] >= box[0] - 1 && p[0] <= box[2] + 1
+        && p[1] >= box[1] - 1 && p[1] <= box[3] + 1)));
+    if (!id || (!marks[id] && !belongs) || seen[id]) return;
     seen[id] = true;
     rows.push(raw);
   });
@@ -2477,6 +2486,7 @@ function packagingCadSceneEntitySvg(entity, visibility) {
     const size = Number(row.height) > 0 ? Number(row.height) : 2.5;
     return `<text class="packaging-cad-scene-text${mark}"${data} fill="${esc(color)}"`
       + ` x="${esc(String(x))}" y="${esc(String(-y))}"`
+      + ` transform="rotate(${-Number(row.rotation || 0)} ${x} ${-y})"`
       + ` font-size="${esc(String(size))}">${esc(text)}</text>`;
   }
   const points = (Array.isArray(row.points) ? row.points : []).map(pair => {
@@ -3968,7 +3978,12 @@ function packagingCandidateConfidence(candidate) {
   if (item.anchor_in_region === true) score += 0.20;
   if (item.dimension_spatial === true) score += 0.20;
   if (item.geometry_status === "supported") score += 0.10;
-  if (item.name_anchor_entity_id && (item.evidence_reasons || []).includes('compound_name_anchor')) score += 0.25;
+  const evidenceReasons = item.evidence_reasons || [];
+  if (evidenceReasons.includes('closed_outline_enclosure')) score += 0.20;
+  if (evidenceReasons.includes('complete_closed_outline')) score += 0.15;
+  if (evidenceReasons.includes('internal_fragment_only')) score -= 0.30;
+  if (evidenceReasons.includes('other_name_anchor') || evidenceReasons.includes('mixed_name_owners')) return 0;
+  if (item.name_anchor_entity_id && (item.evidence_reasons || []).includes('compound_name_anchor')) score += 0.35;
   const box = Array.isArray(item.bbox) ? item.bbox.map(Number) : [];
   const hasDistance = item.distance_mm !== null && item.distance_mm !== undefined
     && String(item.distance_mm).trim() !== "";
@@ -4008,7 +4023,7 @@ function packagingAutoSelectionReason(binding) {
   const blocked = (binding || {}).auto_selection || {};
   return ({
     highest_candidate_geometry_incomplete: "最高分候选图元不完整，暂不能自动确认归属",
-    candidate_entities_already_assigned_to_another_part: "最高分候选已被另一零件占用，暂不能自动确认归属",
+    candidate_entities_already_assigned_to_another_part: "候选已被图纸顺序在前的零件选用，请选择其他候选",
     highest_candidate_has_no_cad_evidence: "最高分候选缺少真实 CAD 图元，暂不能自动确认归属",
     candidate_id_not_in_project_review_queue: "最高分候选已失效，请重新解析图纸",
   })[String(blocked.reason || "")] || "";
@@ -4128,13 +4143,33 @@ function bindPackagingSectionsEditor(row, editable) {
   });
 }
 
+function packagingCandidateOwnership(part, candidate, doc) {
+  const rows = Array.isArray(doc && doc.business_parts) ? doc.business_parts : [];
+  const index = rows.findIndex(row => row.business_part_code === (part || {}).business_part_code);
+  const rank = Number((part || {}).sequence_no) || index + 1;
+  const entities = new Set((candidate || {}).entity_ids || []);
+  const components = new Set((candidate || {}).component_ids || []);
+  const owners = [], displaces = [];
+  rows.forEach((other, otherIndex) => {
+    if (otherIndex === index) return;
+    const binding = other.geometry_binding || {};
+    if (!['bound','partial'].includes(binding.status)) return;
+    if (!(binding.entity_ids || []).some(id => entities.has(id))
+        && !(binding.component_ids || []).some(id => components.has(id))) return;
+    const earlier = (Number(other.sequence_no) || otherIndex + 1) < rank;
+    (earlier ? owners : displaces).push(other.name || other.business_part_code);
+  });
+  return {blocked: owners.length > 0, owners, displaces};
+}
+
 function packagingCandidateSourceText(candidate) {
   const item = candidate || {};
   const names = {compound_name_anchor:'名称锚点组合', shared_block_instance:'同一 CAD 块',
     layout_frame:'排版区域', raw_cad_entities:'原始 CAD 图元',
     single_connected_fragment:'连通图形', cut_lines_complementary:'互补刀线组合',
     spatial_neighborhood:'空间邻近', layout_frame_unavailable:'无排版区域证据'};
-  Object.assign(names,{spatial_bbox_cluster:'相邻图形聚合',same_view:'同一方案区域',same_boundary_role:'同类刀线轮廓'});
+  Object.assign(names,{spatial_bbox_cluster:'相邻图形聚合',same_view:'同一方案区域',same_boundary_role:'同类刀线轮廓',
+    closed_outline_enclosure:'完整闭合外轮廓及内部图形',complete_closed_outline:'完整闭合轮廓',internal_fragment_only:'外轮廓内的局部图形'});
   const reasons = (item.evidence_reasons || []).map(key => names[key] || `证据：${key}`);
   if (item.dimension_spatial) reasons.push('尺寸标注空间吻合');
   if (item.anchor_in_region) reasons.push('件名位于图形范围');
@@ -4148,7 +4183,7 @@ function packagingCandidateGalleryMarkup(candidates, selectedIndex, plan) {
     + '<div class="packaging-part-note">这是不同证据生成的备选组合，不是新增零件；查看不修改归属，下拉选用才保存。</div>'
     + '<div class="packaging-candidate-grid">' + packagingRankedCandidates(candidates).map(entry => {
       const item = entry.candidate || {};
-      const svg = packagingPartSceneSvg({...item,bbox:null,exact_entities:true},plan,{includeAnnotations:false});
+      const svg = packagingPartSceneSvg({...item,exact_entities:true},plan,{includeAnnotations:true});
       const size = packagingBusinessPartSizeText({geometry_binding:{candidates:[item]}});
       return `<article class="packaging-candidate-tile${entry.index === selectedIndex ? ' is-selected' : ''}">`
         + `<button class="packaging-candidate-preview" type="button" data-qq-preview-candidate="${entry.index}" aria-label="查看候选 ${entry.index+1}">`
@@ -4191,19 +4226,20 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
     // geometry list. Draw exactly their verified entity IDs, not every neighbour
     // merely lying inside the candidate bbox.
     entity_ids: candidateEntityIds,
-    bbox: candidateEntityIds.length ? null : (candidate.bbox || null),
+    bbox: candidate.bbox || null,
+    exact_entities: candidateEntityIds.length > 0,
   } : null;
   let figureBinding = (String(binding.status || "") === "bound"
     || (String(binding.status || "") === "partial" && binding.candidate_id
         && Array.isArray(binding.entity_ids) && binding.entity_ids.length))
-    ? (binding.candidate_id ? Object.assign({}, binding, {bbox: null, component_ids: []}) : binding)
+    ? (binding.candidate_id ? Object.assign({}, binding, {exact_entities: true}) : binding)
     : (candidateBinding || binding);
   const sections = Array.isArray(row.sections) ? row.sections : [];
   const sectionKey = `${currentProject}:${wanted}`;
   const viewedSection = sections.find(s=>s.section_id === packagingSectionViews.get(sectionKey));
   if (previewingCandidate && candidateBinding) figureBinding = {...candidateBinding,exact_entities:true};
-  else if (viewedSection) figureBinding = {...viewedSection,bbox:null,exact_entities:true};
-  else if (sections.length > 1) figureBinding = {...binding,bbox:null,exact_entities:true};
+  else if (viewedSection) figureBinding = {...viewedSection,exact_entities:true};
+  else if (sections.length > 1) figureBinding = {...binding,exact_entities:true};
   const block = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
   const reference = block(row.reference) || block(row["author" + "ity"]) || {};
   const disclosures = packagingAuthorityDisclosureLines(currentPackagingBusinessParts || {});
@@ -4262,8 +4298,13 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
         + (candidates.length > 1 ? `<select id="packagingPartCandidateSelect"`
           + `${canEditCandidates ? "" : " disabled"}`
           + ` aria-label="切换候选图形">`
-          + rankedCandidates.map(entry => `<option value="${entry.index}"${entry.index === candidateIndex ? " selected" : ""}>`
-            + `候选 ${entry.index + 1} · ${entry.confidence}% · ${esc(packagingCandidateSourceText(entry.candidate))}</option>`).join("")
+          + rankedCandidates.map(entry => {
+            const ownership = packagingCandidateOwnership(row,entry.candidate,currentPackagingBusinessParts);
+            const hint = ownership.blocked ? ` · 前件已选：${ownership.owners.join('、')}`
+              : ownership.displaces.length ? ` · 将接管后件：${ownership.displaces.join('、')}` : '';
+            return `<option value="${entry.index}"${entry.index === candidateIndex ? " selected" : ""}${ownership.blocked ? ' disabled' : ''}>`
+              + `候选 ${entry.index + 1} · ${entry.confidence}%${esc(hint)} · ${esc(packagingCandidateSourceText(entry.candidate))}</option>`;
+          }).join("")
           + `</select>` : "")
         + (previewingCandidate && canEditCandidates && candidates.length > 1 ? `<button id="packagingCandidateUse" class="part-row-action" type="button">选用当前候选</button>` : '')
         + `<button id="packagingPartReset" class="part-row-action" type="button">适应窗口</button>`
@@ -4432,13 +4473,13 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
     const confirmedSize = row.confirmed_size || {};
     const sizeAction = canEditCandidates && manualBinding && sections.length <= 1 && row.sections_source !== 'manual'
       ? `<div class="packaging-part-note">按原 CAD 标注逐件核对尺寸；确认后才能进入 BOM，不能照候选包围盒直接填。</div>`
-        + `<label>长(mm) <input id="packagingConfirmedLength" type="number" min="0.001" step="0.001"`
-        + ` value="${esc(String(confirmedSize.length_mm || ""))}" style="width:90px"></label> `
+        + `<div class="packaging-size-form"><label>长(mm) <input id="packagingConfirmedLength" type="number" min="0.001" step="0.001"`
+        + ` value="${esc(String(confirmedSize.length_mm || ""))}"></label> `
         + `<label>宽(mm) <input id="packagingConfirmedWidth" type="number" min="0.001" step="0.001"`
-        + ` value="${esc(String(confirmedSize.width_mm || ""))}" style="width:90px"></label> `
+        + ` value="${esc(String(confirmedSize.width_mm || ""))}"></label> `
         + `<input id="packagingSizeNote" type="text" placeholder="核对依据（图纸标注/人工测量）"`
-        + ` value="${esc(String(confirmedSize.note || ""))}" style="max-width:240px"> `
-        + `<button id="packagingConfirmSize" class="part-row-action" type="button">确认尺寸</button>`
+        + ` value="${esc(String(confirmedSize.note || ""))}" aria-label="尺寸核对依据"> `
+        + `<button id="packagingConfirmSize" class="part-row-action" type="button">确认尺寸</button></div>`
       : "";
     actions.innerHTML = downstream + note + sizeAction + packagingSectionsMarkup(row,currentPackagingBusinessParts,canEditCandidates);
     bindPackagingSectionsEditor(row,canEditCandidates);

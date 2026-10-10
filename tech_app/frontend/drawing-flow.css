@@ -370,6 +370,19 @@
 .packaging-sections input { min-width: 0; width: 100px; max-width: 100%; }
 .packaging-sections [data-section-name], .packaging-sections [data-section-note] { width: 180px; }
 .packaging-sections select { min-width: 0; max-width: 100%; }
+.packaging-size-form { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 10px 0; min-width: 0; }
+.packaging-size-form label { display: inline-flex; align-items: center; gap: 6px; }
+.packaging-size-form input, .packaging-sections input, .packaging-sections select {
+  box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--border-color, #e2e5ea);
+  border-radius: 6px; background: #fff; color: var(--text-primary, #24252b); font-size: 12px;
+}
+.packaging-size-form input { width: 90px; min-width: 0; max-width: 100%; }
+.packaging-size-form #packagingSizeNote { width: 240px; }
+.packaging-sections select[multiple] { width: min(100%, 280px); }
+.packaging-sections select[multiple] option { padding: 6px 8px; }
+.packaging-size-form input:focus-visible, .packaging-sections input:focus-visible, .packaging-sections select:focus-visible {
+  outline: 2px solid var(--color-primary-border, #B4D0F8); border-color: var(--color-primary, #0060E6);
+}
 .packaging-part-shape-bar { max-width: 100%; flex-wrap: wrap; justify-content: flex-end; }
 .packaging-part-shape-bar select { max-width: 150px; }
 

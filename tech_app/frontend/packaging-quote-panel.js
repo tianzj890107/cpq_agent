@@ -213,6 +213,7 @@
     var style = document.createElement('style'); style.id = 'packagingQuoteStyles';
     style.textContent = '.pkg-quote-section{background:#fff;border:1px solid var(--color-border,#e5e7eb);border-radius:12px;padding:12px;margin:10px 0;overflow:auto}.pkg-quote-section summary{cursor:pointer;padding:8px;border-radius:6px}.pkg-quote-section summary:hover{background:var(--color-primary-light,#eff6ff)}.pkg-quote-fields{display:grid;grid-template-columns:minmax(100px,160px) minmax(0,1fr);gap:8px 12px}.pkg-quote-fields dt{color:var(--color-text-muted,#64748b)}.pkg-quote-fields dd{margin:0;overflow-wrap:anywhere}.pkg-quote-rows{width:100%;border-collapse:collapse}.pkg-quote-rows th,.pkg-quote-rows td{padding:8px;text-align:left;border-bottom:1px solid var(--color-border,#e5e7eb)}@media(max-width:640px){.pkg-quote-fields{grid-template-columns:1fr}.pkg-quote-fields dd{padding-bottom:8px}}';
     document.head.appendChild(style);
+    style.textContent += '.pkg-quote-warning{margin:8px 0 12px;padding:9px 12px;border:1px solid var(--color-primary-border,#B4D0F8);border-radius:8px;background:var(--color-primary-light,#E6F0FD);color:var(--color-primary-active,#00419F);font-size:12px;line-height:1.5;overflow-wrap:anywhere}.pkg-quote-empty{margin:6px 0;color:var(--color-text-muted,#6b7280);font-size:12px}.pkg-quote-section-title{margin:0 0 10px;font-size:14px}.pkg-quote-rows th{background:var(--color-primary-light,#E6F0FD);font-weight:600}.pkg-quote-rows td{overflow-wrap:anywhere}';
   }
 
   function render(target, payload) {

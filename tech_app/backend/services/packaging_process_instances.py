@@ -83,6 +83,11 @@ def collect(project_id):
         if not (record.get('plan') or {}).get('steps'):
             missing.append(code)
             continue
+        # Retain historical results, but do not use the old mechanical fallback for packaging billing.
+        plans = [record.get('plan') or {}] + [section.get('plan') or {} for section in record.get('sections') or []]
+        if any(plan.get('part_class') in ('machining','sheet_metal','welded') for plan in plans):
+            missing.append(code)
+            continue
         record=dict(record)
         if (record.get('business_parts_hash') and doc.get('business_parts_hash')
                 and record['business_parts_hash'] != doc['business_parts_hash']):

@@ -56,8 +56,8 @@ class AutoBindingTest(unittest.TestCase):
         self.assertEqual("needs_input", bom["status"])
         self.assertIsNone(bom["length_mm"])
 
-    def test_top_conflict_or_partial_geometry_does_not_fall_through(self):
-        for source in (document(conflict=True), document(partial=True)):
+    def test_partial_geometry_does_not_fall_through(self):
+        for source in (document(partial=True),):
             with self.subTest(source=source):
                 result = packaging_parts.auto_bind_business_candidates(source)
                 self.assertEqual("ambiguous", result["business_parts"][0]["geometry_binding"]["status"])
@@ -74,7 +74,7 @@ class AutoBindingTest(unittest.TestCase):
         workbook["derived_from_drawing"] = False
         self.assertEqual(workbook, packaging_parts.auto_bind_business_candidates(workbook))
 
-    def test_global_conflict_is_awarded_to_stronger_candidate_not_first_row(self):
+    def test_global_conflict_obeys_drawing_order_not_stronger_later_candidate(self):
         source = document()
         first = source["business_parts"][0]
         first["geometry_binding"]["candidates"] = [{
@@ -89,8 +89,9 @@ class AutoBindingTest(unittest.TestCase):
                 "anchor_in_region": True, "dimension_spatial": True,
                 "geometry_status": "supported"}]}})
         result = packaging_parts.auto_bind_business_candidates(source)
-        self.assertEqual("ambiguous", result["business_parts"][0]["geometry_binding"]["status"])
-        self.assertEqual("auto", result["business_parts"][1]["geometry_binding"]["bound_by"])
+        self.assertEqual("bound", result["business_parts"][0]["geometry_binding"]["status"])
+        self.assertEqual("ambiguous", result["business_parts"][1]["geometry_binding"]["status"])
+        self.assertEqual('blocked', result['business_parts'][1]['geometry_binding']['auto_selection']['status'])
 
     def test_auto_owner_can_later_confirm_size_without_human_rebinding(self):
         result = packaging_parts.auto_bind_business_candidates(document())

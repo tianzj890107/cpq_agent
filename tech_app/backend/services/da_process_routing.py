@@ -62,6 +62,25 @@ def _similar_route(row, payload):
             for route in routes:
                 route.update(approved=False,match_method='feature_similarity',notice=result['notice'])
             result['routes']=routes
+        # 工艺借鉴不改变身份匹配：方向/编号不同仍可作为同材料参照。
+        analogy = rank_route_features(feature,response.get('candidates') or [],analogy=True)
+        references = []
+        for candidate in analogy['candidates'][:3]:
+            if candidate.get('score',0) < .25:
+                continue
+            if candidate.get('route'):
+                found = [candidate['route']]
+            elif candidate.get('code'):
+                loaded = _fetch(candidate['code'],'')
+                found = loaded.get('routes',[]) if loaded.get('status') == 'matched' else []
+            else:
+                found = []
+            for route in found[:1]:
+                if route.get('steps'):
+                    references.append({**route,'approved':False,'reference_name':candidate.get('name'),
+                        'reference_code':candidate.get('code'),'similarity_score':candidate['score'],
+                        'scores':candidate['scores'],'missing_features':candidate['missing_features']})
+        result['reference_routes'] = references
         return result
     except Exception:
         return {**payload,'similarity_status':'unavailable','notice':'相似路线读取失败，以下仅为模型建议，不是空库结论'}

@@ -649,7 +649,8 @@ class Handler(BaseHTTPRequestHandler):
                 return True
             try:
                 import cpq_process_routing
-                result = cpq_process_routing.lookup(arg("product_item_code"), arg("name"))
+                result = (cpq_process_routing.packaging_candidates() if arg('mode') == 'packaging_candidates'
+                          else cpq_process_routing.lookup(arg("product_item_code"), arg("name")))
                 # PG dates/Decimal/large IDs retain lossless JSON strings.
                 result = json.loads(json.dumps(result, default=str))
                 self._send_json(200, {"ok": True, **result})

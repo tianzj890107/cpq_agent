@@ -1,10 +1,40 @@
 """Controlled DA CLM header/line reader. No writes, no free-form SQL."""
 from datetime import date
+import os
+import re
 import cpq_db
 
 HEADER = 'md_clm_process_routing_base_info'
 LINE = 'md_clm_process_routing_operation'
 OP = 'md_clm_operation_info'
+
+
+def material_features(row):
+    dimensions = re.fullmatch(r'\s*(\d+(?:\.\d+)?)\s*[xX×*]\s*(\d+(?:\.\d+)?)\s*mm\s*',str(row.get('spec') or ''), re.I)
+    material = re.search(r'材料[：:]\s*([^；;\n]+)',str(row.get('desc') or ''))
+    return {'material_text':material.group(1).strip() if material else '',
+            'length_mm':float(dimensions.group(1)) if dimensions else None,
+            'width_mm':float(dimensions.group(2)) if dimensions else None,
+            'spec':row.get('spec'), 'feature_source':'DA_CLM_MATERIAL_PG'}
+
+
+def packaging_candidates():
+    """Only allowlisted packaging sources; one bounded header/material read, lines for selected candidates."""
+    from psycopg import sql
+    from psycopg.rows import dict_row
+    sources = [s.strip() for s in os.getenv('CPQ_PACKAGING_ROUTE_SOURCES','yutong_wine_box_quote').split(',') if s.strip()]
+    if not sources:
+        return {'status':'scope_missing','candidates':[]}
+    with cpq_db.connect(readonly=True) as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute("SET statement_timeout = '5000ms'")
+        cur.execute(sql.SQL('SELECT h.*, m.spec AS part_spec, m."desc" AS part_material_description FROM {}.{} h LEFT JOIN {}.md_clm_material_base_info m ON m.number=h.product_item_code AND m.is_deleted IS NOT TRUE AND m.latest IS NOT FALSE WHERE h.data_source=ANY(%s) AND h.is_deleted IS NOT TRUE AND h.latest IS NOT FALSE ORDER BY h.product_item_code,h.md_clm_process_routing_base_info_id LIMIT 201').format(
+            sql.Identifier(cpq_db.PG_SCHEMA),sql.Identifier(HEADER),sql.Identifier(cpq_db.PG_SCHEMA)),(sources,))
+        heads = cur.fetchall()
+    if len(heads)>200:
+        return {'status':'candidate_limit_exceeded','candidates':[]}
+    return {'status':'ok','source':'DA_CLM_PG','candidates':[
+        {'name':h.get('name'),'code':h.get('product_item_code'),'header':h,
+         **material_features({'spec':h.get('part_spec'),'desc':h.get('part_material_description')})} for h in heads]}
 
 def normalize(header, steps, match_method):
     h = dict(header)

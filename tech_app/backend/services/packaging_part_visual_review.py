@@ -114,18 +114,37 @@ def _candidates(anchor: Tuple[float, float], regions: Any,
         region_id = str(region.get("region_id") or "")
         if box is None or not region_id:
             continue
+        if _distance(anchor, _center(box)) > 650:
+            continue
         records.append({
             "id": region_id, "candidate_id": region_id, "region_id": region_id,
             "component_ids": list(region.get("component_ids") or []),
             "entity_ids": list(region.get("entity_ids") or []),
             "bbox": list(box), "layers": list(region.get("layers") or []),
-            "member_total": 1, "evidence_reasons": [], "geometry_status": "supported",
+            "member_total": 1,
+            "evidence_reasons": ['complete_closed_outline'] if region.get('outline_status') == 'closed' else [],
+            "geometry_status": "supported",
+            "name_anchor_entity_id": region.get('name_anchor_entity_id') or '',
         })
+    for record in records:
+        if record.get('name_anchor_entity_id') and anchor_entity_id and record['name_anchor_entity_id'] != anchor_entity_id:
+            record['evidence_reasons'].append('other_name_anchor')
+        if any('closed_outline_enclosure' in (group.get('evidence_reasons') or [])
+               and set(record['entity_ids']) < set(group.get('entity_ids') or [])
+               and record['region_id'] != group.get('outer_region_id') for group in groups or []):
+            record['evidence_reasons'].append('internal_fragment_only')
     records.sort(key=lambda row: (_distance(anchor, _center(_bbox(row["bbox"]))), row["id"]))
     whole = [dict(row, id=str(row.get("candidate_id") or "")) for row in (groups or [])
              if not row.get("name_anchor_entity_id") or not anchor_entity_id
              or row.get("name_anchor_entity_id") == anchor_entity_id]
+    whole = [row for row in whole if _bbox(row.get('bbox')) and
+             _distance(anchor,_center(_bbox(row['bbox']))) <= 650]
     whole.sort(key=lambda row: (_distance(anchor, _center(_bbox(row["bbox"]))), row["id"]))
+    for record in whole:
+        if any('closed_outline_enclosure' in (group.get('evidence_reasons') or [])
+               and set(record.get('entity_ids') or []) < set(group.get('entity_ids') or [])
+               for group in whole):
+            record['evidence_reasons'] = list(record.get('evidence_reasons') or []) + ['internal_fragment_only']
     chosen_groups = [row for row in whole if current_id and current_id in (row.get("region_ids") or [])]
     current = [row for row in records if row["id"] == current_id]
     # A nearby whole candidate must not be pushed out by eight single fragments.
@@ -133,7 +152,13 @@ def _candidates(anchor: Tuple[float, float], regions: Any,
                     + [row for row in whole if row not in chosen_groups],
                     key=lambda row: (_distance(anchor, _center(_bbox(row["bbox"]))),
                                      0 if row.get("member_total", 1) > 1 else 1, row["id"]))
-    ordered = chosen_groups + current + nearby
+    enclosure = [row for row in whole if 'closed_outline_enclosure' in (row.get('evidence_reasons') or [])
+                 and (current_id in (row.get('region_ids') or [])
+                      or _distance(anchor, _center(_bbox(row['bbox']))) <= 650)]
+    named = [row for row in whole if row.get('name_anchor_entity_id') == anchor_entity_id
+             and 'compound_name_anchor' in (row.get('evidence_reasons') or [])]
+    ordered = named + enclosure[:3] + chosen_groups + current + nearby
+    ordered = list({row['id']:row for row in ordered}.values())
     out: List[Dict[str, Any]] = []
     for record in ordered[:8]:
         box = _bbox(record.get("bbox"))
@@ -159,6 +184,7 @@ def _candidates(anchor: Tuple[float, float], regions: Any,
             "name_anchor_entity_id": str(record.get('name_anchor_entity_id') or ''),
             "declared_section_names": list(record.get('declared_section_names') or []),
             "portion_components": list(record.get('portion_components') or []),
+            "outer_region_id": record.get('outer_region_id'),
             "section_dimension_evidence": _section_dimension_proofs(record, regions, rects),
         })
     return out
@@ -898,20 +924,31 @@ def _compound_named_groups(ir: Any, regions: Any, views: Any, frames: Any) -> Li
             point = _point(anchor.get("position"))
             if frame_id and not _point_in_box(point, _bbox(frame.get("bbox")), 1.0):
                 continue
-            distance = _distance(point, _center(box))
+            distance = math.hypot(max(box[0]-point[0],0,point[0]-box[2]),
+                                  max(box[1]-point[1],0,point[1]-box[3]))
             if distance <= max(100.0, 2 * math.hypot(box[2] - box[0], box[3] - box[1])):
                 candidates.append((distance, str(anchor.get("entity_id") or ""), anchor))
         if candidates:
             _, key, _ = min(candidates, key=lambda item: (item[0], item[1]))
             owners.setdefault(key, []).append(region)
     out = []
+    enclosed = _outline_enclosure_groups(doc, regions, views, frames)
     for anchor in anchors:
         sections = packaging_layout.declared_sections(anchor.get("name"))
         members = owners.get(str(anchor.get("entity_id") or ""), [])
+        # Collapse an outer outline and its internal strokes into one physical
+        # portion before counting/grouping portions of the same named part.
+        bundles = [g for g in enclosed if g.get('name_anchor_entity_id') == anchor.get('entity_id')]
+        bundles = [g for g in bundles if not any(set(g['entity_ids']) < set(other['entity_ids']) for other in bundles)]
+        covered = {eid for g in bundles for eid in g['entity_ids']}
+        bare = [r for r in members if not set(r.get('entity_ids') or []).intersection(covered)]
+        portions = [list(g['component_ids']) for g in bundles] + [list(r.get('component_ids') or []) for r in bare]
+        bundled_components = {cid for g in bundles for cid in g['component_ids']}
+        members = [r for r in regions or [] if set(r.get('component_ids') or []).intersection(bundled_components)] + bare
         # 单一件名也可声明多个物理部分，但碎线不能据此变成部分。
-        if not (max(2,len(sections)) <= len(members) <= MAX_GROUP_MEMBERS):
+        if not (max(2,len(sections)) <= len(portions) <= MAX_GROUP_MEMBERS):
             continue
-        if len(sections) <= 1 and not all(row.get('outline_status') == 'closed' for row in members):
+        if len(sections) <= 1 and not bundles and not all(row.get('outline_status') == 'closed' for row in bare):
             continue
         frame_ids = {_frame_for_region(str(row.get("region_id") or ""), frames) for row in members}
         if len(frame_ids) > 1:
@@ -920,7 +957,7 @@ def _compound_named_groups(ir: Any, regions: Any, views: Any, frames: Any) -> Li
         group["evidence_reasons"].append("compound_name_anchor")
         group["name_anchor_entity_id"] = str(anchor.get("entity_id") or "")
         group["declared_section_names"] = [row["name"] for row in sections]
-        group['portion_components'] = [list(row.get('component_ids') or []) for row in members]
+        group['portion_components'] = portions
         out.append(group)
     return sorted(out, key=lambda row: row["candidate_id"])
 
@@ -953,9 +990,11 @@ def _block_part_groups(ir: Any, regions: Any, views: Any, frames: Any) -> List[D
 
 def _combined_groups(ir: Any, regions: Any, views: Any,
                      frames: Any) -> List[Dict[str, Any]]:
+    _assign_local_name_owners(ir,regions,frames)
     groups = _spatial_part_groups(ir, regions, views, frames)
     groups.extend(_compound_named_groups(ir, regions, views, frames))
     groups.extend(_block_part_groups(ir, regions, views, frames))
+    groups.extend(_outline_enclosure_groups(ir, regions, views, frames))
     # Endpoint evidence is stronger for the same member set; replace only that
     # proposal, never erase the weaker mechanism's distinct alternatives.
     by_members = {tuple(row["component_ids"]): row for row in groups}
@@ -966,8 +1005,85 @@ def _combined_groups(ir: Any, regions: Any, views: Any,
                 row[key] = previous[key]
         row['evidence_reasons'] = sorted(set(row.get('evidence_reasons') or []) | set(previous.get('evidence_reasons') or []))
         by_members[tuple(row["component_ids"])] = row
-    return sorted(list(by_members.values()) + _raw_layout_groups(ir, regions, frames, views),
-                  key=lambda row: row["candidate_id"])
+    combined = list(by_members.values()) + _raw_layout_groups(ir, regions, frames, views)
+    by_component = {cid:region for region in regions or [] for cid in region.get('component_ids') or []}
+    for group in combined:
+        if group.get('name_anchor_entity_id'):
+            continue
+        owners = {by_component[cid].get('name_anchor_entity_id') for cid in group.get('component_ids') or []
+                  if cid in by_component and by_component[cid].get('name_anchor_entity_id')}
+        if len(owners) == 1:
+            group['name_anchor_entity_id'] = next(iter(owners))
+        elif len(owners) > 1:
+            group['evidence_reasons'].append('mixed_name_owners')
+    return sorted(combined,key=lambda row: row['candidate_id'])
+
+
+def _assign_local_name_owners(ir, regions, frames):
+    """Use label-to-outline distance, not label-to-centre."""
+    from . import packaging_business_part_resolver as resolver
+    anchors = [a for a in resolver.extract_text_anchors(ir,layout_aware=True)
+               if not a.get('excluded') and a.get('name') and _point(a.get('position'))]
+    for region in regions or []:
+        box = _bbox(region.get('bbox'))
+        if box is None:
+            continue
+        frame_id = _frame_for_region(region.get('region_id'),frames)
+        frame = next((f for f in frames or [] if f.get('frame_id') == frame_id),{})
+        scores = []
+        for anchor in anchors:
+            point = _point(anchor.get('position'))
+            if frame_id and not _point_in_box(point,_bbox(frame.get('bbox')),1):
+                continue
+            distance = math.hypot(max(box[0]-point[0],0,point[0]-box[2]),
+                                  max(box[1]-point[1],0,point[1]-box[3]))
+            if distance <= 650:
+                scores.append((distance,str(anchor.get('entity_id'))))
+        region['name_anchor_entity_id'] = min(scores)[1] if scores else ''
+
+
+def _outline_enclosure_groups(ir, regions, views, frames):
+    """Complete physical outlines plus internal strokes, not bbox-overlap clusters."""
+    from .packaging_sections import _inside
+    entities = {row.get('entity_id'): row for row in (ir.get('entities') or [])}
+    out = []
+    for outer in regions or []:
+        if outer.get('excluded') or outer.get('outline_status') != 'closed':
+            continue
+        polygon = outer.get('outline_points') or []
+        if len(polygon) < 3:
+            for eid in outer.get('entity_ids') or []:
+                entity = entities.get(eid) or {}
+                if entity.get('type') == 'CIRCLE' or entity.get('closed'):
+                    polygon = [list(p) for p in _entity_points(entity)]
+                    break
+        if len(polygon) < 3:
+            continue
+        members = [outer]
+        ob = _bbox(outer.get('bbox'))
+        if ob is None:
+            continue
+        for child in regions or []:
+            cb = _bbox(child.get('bbox'))
+            if child is outer or child.get('excluded') or cb is None:
+                continue
+            if not (ob[0] <= cb[0] and ob[1] <= cb[1] and cb[2] <= ob[2] and cb[3] <= ob[3]):
+                continue
+            if all(abs(a-b) < 1e-6 for a,b in zip(ob,cb)):
+                continue
+            points = [p for eid in child.get('entity_ids') or []
+                      for p in _entity_points(entities.get(eid) or {})]
+            if not points or not all(_inside(p,polygon) for p in points):
+                continue
+            members.append(child)
+        if len(members) < 2:
+            continue
+        group = _group_record(members,ir,views,frames,'closed_outline_enclosure')
+        group['outer_region_id'] = outer.get('region_id')
+        group['portion_components'] = [group['component_ids']]
+        group['name_anchor_entity_id'] = outer.get('name_anchor_entity_id') or ''
+        out.append(group)
+    return out
 
 
 def _single_view_candidate(ir: Dict[str, Any], region: Dict[str, Any], views: Any,
@@ -1244,6 +1360,13 @@ def _section_dimension_proofs(candidate, regions, rects):
             length, width = resolver._region_size(region)
             proofs.append({'entity_ids':sorted(region['entity_ids']),'length_mm':length,'width_mm':width,
                            'source':'verified_cad_dimension'})
+    if 'closed_outline_enclosure' in (candidate.get('evidence_reasons') or []):
+        outer = next((r for r in regions or [] if r.get('region_id') == candidate.get('outer_region_id')),None)
+        if outer and resolver._region_is_size_confirmed(outer,rects):
+            length,width = resolver._region_size(outer)
+            proofs.append({'entity_ids':sorted(candidate.get('entity_ids') or []),
+                           'length_mm':length,'width_mm':width,'source':'verified_cad_dimension',
+                           'outline_entity_ids':list(outer.get('entity_ids') or [])})
     return proofs
 
 

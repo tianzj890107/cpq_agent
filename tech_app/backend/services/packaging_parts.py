@@ -2714,7 +2714,7 @@ def as_ir_part(row: Any) -> Any:
         "material=%s" % (_material_source_kind(payload, "material_source") or "unknown"),
         "thickness=%s" % (_material_source_kind(payload, "thickness_source") or "unknown"),
     ) if part)
-    return Part(part_id=part_id, name=name, role=_text(payload.get("role")) or None,
+    return Part(part_id=part_id, name=name, industry='packaging', role=_text(payload.get("role")) or None,
                 quantity=1, features=features,
                 material={"spec": material} if material else None,
                 confidence=confidence, provenance=Provenance(note=note))
@@ -4100,6 +4100,8 @@ def business_parts_document(reference: Any, geometry: Any, *,
                 reference_block["size_source"] = _text(size_evidence.get("size_source"))
         business_parts.append({
             "business_part_code": code,
+            "sequence_no": _int_or(row.get('sequence_no'), len(business_parts)+1),
+            "drawing_order": copy.deepcopy(row.get('drawing_order') or {}),
             "name": _text(row.get("name")),
             "declared_sections": [dict(item) for item in (row.get("declared_sections") or [])
                                   if isinstance(item, dict)],
@@ -4453,6 +4455,41 @@ def reference_thumbnail_of(project_id: str, doc: Any, code: Any) -> Dict[str, An
             "content": content, "bytes": len(content), "key": key}
 
 
+def resolve_ordered_geometry_claim(record, wanted, ids, selected_entities):
+    """Resolve an already-validated claim in a copied document; shared by all editors."""
+    rows = [item for item in record.get('business_parts') or [] if isinstance(item,dict)]
+    rank = {item.get('business_part_code'): (_num(item.get('sequence_no')) or index+1,index)
+            for index,item in enumerate(rows)}
+    displaced = []
+    for other in rows:
+        other_code = other.get('business_part_code')
+        binding = other.get('geometry_binding') or {}
+        if other_code == wanted or binding.get('status') not in ('bound','partial'):
+            continue
+        if not (set(selected_entities).intersection(binding.get('entity_ids') or [])
+                or set(ids).intersection(binding.get('component_ids') or [])):
+            continue
+        if rank[other_code] < rank[wanted]:
+            raise ValueError('candidate_entities_already_assigned_to_another_part')
+        displaced.append(other)
+    for other in displaced:
+        other.setdefault('geometry_binding_history',[]).append(copy.deepcopy(other.get('geometry_binding') or {}))
+        old_size = other.pop('confirmed_size',None)
+        if old_size:
+            other.setdefault('confirmed_size_history',[]).append(old_size)
+        if other.get('sections'):
+            other.setdefault('sections_history',[]).append(copy.deepcopy(other['sections']))
+        other['sections'] = []
+        other.pop('sections_source',None)
+        candidates = copy.deepcopy((other.get('geometry_binding') or {}).get('candidates') or [])
+        other['geometry_binding'] = {'status':'unbound','component_ids':[],'entity_ids':[],
+            'bbox':None,'length_mm':None,'width_mm':None,'size_confirmed':False,
+            'candidates':candidates,'reasons':['reassigned_to_earlier_drawing_part'],
+            'displaced_by':wanted,'bound_by':'','size_source':'none'}
+        other['truth_state'] = 'pending_confirmation'
+        other['cad_fragments'] = []
+
+
 def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
                          bound_by: str = "manual", reason: str = "",
                          candidate_id: str = "") -> Dict[str, Any]:
@@ -4482,16 +4519,12 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
                          and _text(item.get("candidate_id") or item.get("id")) == selected_id), {})
         if not selected or not selected.get("entity_ids"):
             raise ValueError("candidate_id_not_in_project_review_queue")
-        already_assigned = {str(eid) for item in (record.get("business_parts") or [])
-                            if isinstance(item, dict)
-                            and _text(item.get("business_part_code")) != wanted
-                            and (item.get("geometry_binding") or {}).get("status") in ("bound", "partial")
-                            for eid in ((item.get("geometry_binding") or {}).get("entity_ids") or [])}
-        if already_assigned.intersection(str(eid) for eid in (selected.get("entity_ids") or [])):
-            raise ValueError("candidate_entities_already_assigned_to_another_part")
         # Never accept client-supplied entity membership. The reviewed server
         # candidate is the only source of raw CAD IDs and its known components.
         ids = [_text(item) for item in (selected.get("component_ids") or []) if _text(item)]
+    selected_entities = set(selected.get('entity_ids') or []) if selected_id else {
+        str(eid) for cid in ids for eid in (components.get(cid) or {}).get('entity_ids') or []}
+    resolve_ordered_geometry_claim(record,wanted,ids,selected_entities)
     for row in (record.get("business_parts") or []):
         if not isinstance(row, dict) or _text(row.get("business_part_code")) != wanted:
             continue
@@ -4546,7 +4579,8 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
             "rule_id": BUSINESS_BINDING_RULE_ID, "geometry_component_ref": known,
             "candidate_id": selected_id, "size_confirmed": False,
             "section_dimension_evidence": copy.deepcopy(selected.get('section_dimension_evidence') or []),
-            "portion_component_groups": ([known] if 'cut_lines_complementary' in (selected.get('evidence_reasons') or []) else []),
+            "portion_component_groups": ([known] if set(selected.get('evidence_reasons') or []).intersection(
+                ('cut_lines_complementary','closed_outline_enclosure')) else selected.get('portion_components') or []),
             "size_source": "none" if candidate_mismatch else "geometry_binding",
             "attribution": {"status": ("auto_selected" if status == "bound" and source == "auto" else
                                        "human_confirmed_candidate" if candidate_mismatch else
@@ -4572,12 +4606,12 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
                         and (part.get("geometry_binding") or {}).get("status") == "bound"
                         for eid in ((part.get("geometry_binding") or {}).get("entity_ids") or [])}
     if isinstance(record.get("unassigned_candidates"), list):
-        record["unassigned_candidates"] = [candidate for candidate in record["unassigned_candidates"]
-                                           if isinstance(candidate, dict)
-                                           and _text(candidate.get("candidate_id")) != selected_id
-                                           and (not set(candidate.get("entity_ids") or []) <= claimed_entities
-                                                if "raw_cad_entities" in (candidate.get("evidence_reasons") or [])
-                                                else not set(candidate.get("component_ids") or []) <= claimed)]
+        # Keep the review catalogue: a later owner must not make a candidate
+        # disappear from an earlier part's selection interface.
+        for candidate in record['unassigned_candidates']:
+            if isinstance(candidate, dict):
+                candidate['assigned'] = bool(set(candidate.get('entity_ids') or []).intersection(claimed_entities)
+                                             or set(candidate.get('component_ids') or []).intersection(claimed))
     record["stats"] = business_parts_stats(record.get("business_parts") or [])
     record["business_parts_id"], record["business_parts_hash"] = _business_identity(record)
     return record
@@ -4594,8 +4628,14 @@ def candidate_confidence_percent(candidate: Any) -> int:
     score += 0.20 if item.get("anchor_in_region") is True else 0
     score += 0.20 if item.get("dimension_spatial") is True else 0
     score += 0.10 if item.get("geometry_status") == "supported" else 0
+    reasons = item.get('evidence_reasons') or []
+    score += 0.20 if 'closed_outline_enclosure' in reasons else 0
+    score += 0.15 if 'complete_closed_outline' in reasons else 0
+    score -= 0.30 if 'internal_fragment_only' in reasons else 0
+    if set(reasons).intersection(('other_name_anchor','mixed_name_owners')):
+        return 0
     if item.get('name_anchor_entity_id') and 'compound_name_anchor' in (item.get('evidence_reasons') or []):
-        score += 0.25  # 该名字拥有完整多组成候选，优于只按距离拿一个轮廓。
+        score += 0.35  # 该名字拥有完整多组成候选，优于只按距离拿一个轮廓。
     box = item.get("bbox")
     distance = _num(item.get("distance_mm"))
     if isinstance(box, (list, tuple)) and len(box) >= 4 and distance is not None and distance >= 0:
@@ -4618,10 +4658,8 @@ def auto_bind_business_candidates(doc: Any) -> Dict[str, Any]:
             continue
         code = _text(original.get("business_part_code"))
         binding = original.get("geometry_binding") if isinstance(original.get("geometry_binding"), dict) else {}
-        has_multipart = any(c.get('name_anchor_entity_id') and c.get('member_total',1) > 1
-                            for c in binding.get('candidates') or [])
         if (not code or binding.get('bound_by') == 'manual'
-                or (binding.get('status') == 'bound' and (not has_multipart or binding.get('bound_by') == 'auto'))):
+                or (binding.get('status') == 'bound' and binding.get('bound_by') == 'auto')):
             continue
         candidates = [item for item in (binding.get("candidates") or []) if isinstance(item, dict)]
         if not candidates:
@@ -4630,11 +4668,13 @@ def auto_bind_business_candidates(doc: Any) -> Dict[str, Any]:
             -candidate_confidence_percent(pair[1]),
             _text(pair[1].get("id") or pair[1].get("candidate_id")), pair[0]))
         best = ranked[0][1]
-        proposals.append((-candidate_confidence_percent(best), code, best))
-    # 多个件抢同一组图元时，先给证据更强的一件，不让清单行序决定归属。
-    for negative_score, code, best in sorted(proposals, key=lambda item: (item[0], item[1])):
+        proposals.append((len(proposals), code, best))
+    # 按图纸阅读顺序处理归属；证据分只决定同一件内部的候选排序。
+    order = {row.get('business_part_code'): (_num(row.get('sequence_no')) or index+1, index)
+             for index,row in enumerate(record.get('business_parts') or []) if isinstance(row,dict)}
+    for _, code, best in sorted(proposals, key=lambda item: order[item[1]]):
         candidate_id = _text(best.get("id") or best.get("candidate_id"))
-        score = -negative_score
+        score = candidate_confidence_percent(best)
         reason = "highest_candidate_has_no_cad_evidence" if score <= 0 else ""
         if not reason:
             try:
@@ -4652,6 +4692,12 @@ def auto_bind_business_candidates(doc: Any) -> Dict[str, Any]:
         current = next((row for row in (record.get("business_parts") or [])
                         if isinstance(row, dict) and _text(row.get("business_part_code")) == code), None)
         if current is not None:
+            if (current.get('geometry_binding') or {}).get('bound_by') != 'manual':
+                old = current.get('geometry_binding') or {}
+                current['geometry_binding'] = {**old, 'status':'ambiguous', 'component_ids':[],
+                    'entity_ids':[],'bbox':None,'length_mm':None,'width_mm':None,'size_confirmed':False}
+                current['sections'] = []
+                current.pop('sections_source',None)
             current.setdefault("geometry_binding", {})["auto_selection"] = {
                 "candidate_id": candidate_id, "confidence_percent": score,
                 "status": "blocked", "reason": reason}
@@ -4712,6 +4758,20 @@ def verified_business_part_input_row(row: Any, doc: Any) -> Dict[str, Any]:
         result[REFERENCE_BLOCK_KEY], result[LEGACY_REFERENCE_BLOCK_KEY] = reference, dict(reference)
         return result
     binding = result.get("geometry_binding") if isinstance(result.get("geometry_binding"), dict) else {}
+    if len(result.get('sections') or []) == 1 and binding.get('status') == 'bound':
+        section = result['sections'][0]
+        section_size = section.get('confirmed_size') or {}
+        if (section_size.get('source') == 'verified_cad_dimension'
+                and set(section.get('entity_ids') or []) == set(binding.get('entity_ids') or [])
+                and set(section.get('component_ids') or []) == set(binding.get('component_ids') or [])
+                and not result.get('section_gaps')
+                and (_num(section_size.get('length_mm')) or 0) > 0
+                and (_num(section_size.get('width_mm')) or 0) > 0):
+            reference = dict(business_part_reference_block(result))
+            reference.update(length_mm=section_size['length_mm'],width_mm=section_size['width_mm'],
+                             size_source='verified_cad_dimension',size_quality='unfolded')
+            result[REFERENCE_BLOCK_KEY],result[LEGACY_REFERENCE_BLOCK_KEY] = reference,dict(reference)
+            return result
     confirmed = result.get("confirmed_size") if isinstance(result.get("confirmed_size"), dict) else {}
     cad_verified = (binding.get("status") == "bound" and binding.get("size_confirmed") is True
                     and binding.get("size_source") == "size_dimension"
@@ -4948,16 +5008,38 @@ def business_cost_inputs(row: Any, *, requirement: Any = None,
                             "不许拿需求里的整盒面纸克重兜底")
     gsm = _gsm_of(material_text)
     if not gsm:
+        for source in (record.get('cost_parameters') or {},reference.get('cost_parameters') or {},reference):
+            value = _num(source.get('gsm')) if isinstance(source,dict) else None
+            if value is not None and math.isfinite(value) and value > 0:
+                gsm = value
+                break
+    if not gsm:
         data = requirement.get("data") if isinstance(requirement, dict) else {}
-        gsm = _num((data or {}).get("face_paper_gsm")) if isinstance(data, dict) else None
+        can_use_face_gsm = ('面纸' in _text(record.get('name')) or '面纸' in material_text) and not any(
+            word in material_text for word in ('灰板','双灰','EVA','磁铁','纸管'))
+        gsm = _num((data or {}).get("face_paper_gsm")) if can_use_face_gsm and isinstance(data, dict) else None
     if not gsm:
         return dict(base, code=BUSINESS_COST_REJECT_CODES[2], missing_variables=["gsm"],
                     message="这一件的材料原文里没有克重（材料：%s）：补上克重，或按需求整盒口径"
-                            "填面纸克重后再算" % (material_text or "未填"))
+                            "填这件材料的克重后再算（非面纸不得借用整盒面纸克重）" % (material_text or "未填"))
     wanted = int(_num(quantity) or 1)
-    return dict(base, ok=True, gsm=gsm, size_source=BUSINESS_COST_SIZE_SOURCES[0],
-                variables={"cut_length": length, "cut_width": width, "gsm": gsm,
-                           "quote_quantity": max(1, wanted)})
+    variables = {"cut_length":length,"cut_width":width,"gsm":gsm,"quote_quantity":max(1,wanted)}
+    data = requirement.get('data') if isinstance(requirement,dict) else {}
+    data = data if isinstance(data,dict) else {}
+    if data.get('tax_factor') not in (None,''):
+        variables['tax_factor'] = data['tax_factor']
+    material_code = _text(record.get('material_code') or reference.get('material_code') or record.get('product_item_code') or reference.get('product_item_code'))
+    if material_code and material_code == _text(data.get('material_code')):
+        for key in ('ton_price','material_price'):
+            if data.get(key) not in (None,''):
+                variables[key]=data[key]
+    allowed = ('ton_price','tax_factor','imposition_count','proof_base','material_price')
+    for source in (reference,reference.get('cost_parameters') or {},record.get('cost_parameters') or {}):
+        if isinstance(source,dict):
+            for key in allowed:
+                if source.get(key) not in (None,''):
+                    variables[key]=source[key]
+    return dict(base,ok=True,gsm=gsm,size_source=BUSINESS_COST_SIZE_SOURCES[0],variables=variables)
 
 
 def business_cost_assumption(inputs: Any, *, geometry_part_code: Any = "") -> str:
@@ -5096,7 +5178,7 @@ def business_as_ir_part(row: Any) -> Any:
         "outline=none",
         "thickness=unknown",
     ))
-    return Part(part_id=part_id, name=name, role=None, quantity=1, features=[],
+    return Part(part_id=part_id, name=name, industry='packaging', role=None, quantity=1, features=[],
                 material={"spec": material_text} if material_text else None,
                 confidence=0.4 if material_text else 0.3,
                 provenance=Provenance(note=note))

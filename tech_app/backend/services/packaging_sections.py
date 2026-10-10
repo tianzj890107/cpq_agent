@@ -170,9 +170,6 @@ def assign_sections(doc, code, selections, *, actor):
     record = copy.deepcopy(doc)
     row = _target(record, code)
     components = {r['component_id']: r for r in (record.get('geometry_evidence') or {}).get('components') or []}
-    foreign = {str(e) for part in record.get('business_parts') or [] if part.get('business_part_code') != code
-               and (part.get('geometry_binding') or {}).get('status') in ('bound','partial')
-               for e in (part.get('geometry_binding') or {}).get('entity_ids') or []}
     old = {r['section_id']: r for r in row.get('sections') or []}
     used, section_ids, sections = set(), set(), []
     for index, selection in enumerate(selections):
@@ -191,8 +188,6 @@ def assign_sections(doc, code, selections, *, actor):
             raise ValueError('section_has_no_cad_entities')
         if used & available:
             raise ValueError('section_duplicate_entities')
-        if foreign & available:
-            raise ValueError('section_entities_already_assigned')
         quantity = positive(selection.get('quantity',1))
         if quantity is None:
             raise ValueError('section_quantity_must_be_positive')
@@ -205,6 +200,14 @@ def assign_sections(doc, code, selections, *, actor):
         if set(previous.get('entity_ids') or []) == available and set(previous.get('component_ids') or []) == set(ids):
             section['confirmed_size'] = copy.deepcopy(previous.get('confirmed_size') or {})
         section_ids.add(section['section_id']); used.update(available); sections.append(section)
+    from . import packaging_parts
+    try:
+        packaging_parts.resolve_ordered_geometry_claim(record,code,
+            {cid for s in sections for cid in s['component_ids']},used)
+    except ValueError as exc:
+        if str(exc) == 'candidate_entities_already_assigned_to_another_part':
+            raise ValueError('section_entities_already_assigned') from exc
+        raise
     row['sections'], row['sections_source'], row['sections_complete'] = sections, 'manual', True
     row['section_gaps'] = []
     row['geometry_binding'] = {**(row.get('geometry_binding') or {}), 'status':'bound','bound_by':'manual',
@@ -266,13 +269,19 @@ def section_input_rows(row):
     out = []
     for section in verified_sections(row):
         reference = dict(packaging_parts.business_part_reference_block(row))
+        # Each physical portion may be a different material. Parent price is not evidence.
+        if len(row.get('sections') or []) > 1:
+            for key in ('ton_price','material_price','material_code','product_item_code','gsm','cost_parameters'):
+                reference.pop(key,None)
         reference.update(section['confirmed_size'],size_quality='unfolded')
         if section.get('material_text'):
             reference['material_text'] = section['material_text']
         child = {'business_part_code':row['business_part_code']+'::'+section['section_id'],
                  'parent_part_code':row['business_part_code'],'section_id':section['section_id'],
                  'name':section['name'],'reference':reference,'material':row.get('material'),
-                 'quantity':section['quantity'],'entity_ids':section['entity_ids']}
+                 'quantity':section['quantity'],'entity_ids':section['entity_ids'],
+                 'material_code':section.get('material_code'),
+                 'cost_parameters':copy.deepcopy(section.get('cost_parameters') or {})}
         out.append(child)
     return out
 
@@ -307,7 +316,7 @@ def recommend_process(inputs, recommend, *, note='', attachments=None):
             '组成：'+section['name']+'；用量：'+str(section['quantity'])+'；CAD 图元：'+','.join(section['entity_ids']),note])
         da_lookup = da_process_routing.for_row(section['row'])
         grounding += '\n' + da_process_routing.grounding(da_lookup)
-        plan, coverage = recommend(part, overall=None, geom=None, note=grounding, attachments=attachments or [])
+        plan, coverage = recommend(part, overall=None, geom=None, note=grounding, attachments=attachments or [],lookup=da_lookup)
         payload = plan.model_dump() if hasattr(plan,'model_dump') else dict(plan)
         warnings.extend(section['name']+'：'+w for w in process.compute(payload)['warnings'])
         results.append({'section_id':section['section_id'],'section_name':section['name'],'lookup':da_lookup,

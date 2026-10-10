@@ -51,7 +51,7 @@ assert.strictEqual(shape.style.transform,'scale(1)');
         self.node('\n'.join(function(n) for n in ['packagingCandidateConfidence','packagingRankedCandidates','packagingCandidateSelectionIndex','packagingBusinessPartSizeText','packagingCandidateSourceText','packagingCandidateGalleryMarkup']) + '''
 const assert=require('assert');const drawn=[];
 function esc(s){return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');}
-function packagingPartSceneSvg(binding,plan){assert(binding.exact_entities);assert.strictEqual(binding.bbox,null);drawn.push(binding.entity_ids);return '<svg></svg>';}
+function packagingPartSceneSvg(binding,plan,options){assert(binding.exact_entities);assert(Array.isArray(binding.bbox));assert(options.includeAnnotations);drawn.push(binding.entity_ids);return '<svg></svg>';}
 const rows=Array.from({length:8},(_,i)=>({id:String(i),entity_ids:['e'+i],bbox:[0,0,i+1,i+2],layers:['<刀线>'],evidence_reasons:['compound_name_anchor']}));
 const html=packagingCandidateGalleryMarkup(rows,2,{});
 assert.strictEqual((html.match(/<svg>/g)||[]).length,8);assert.strictEqual(drawn.length,8);

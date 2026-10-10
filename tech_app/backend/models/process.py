@@ -135,6 +135,11 @@ class ProcessStep(BaseModel):
     )
     note: Optional[str] = Field(None, description="备注")
     confidence: float = Field(0.6, description="该工序的置信度 0~1")
+    operation_code: Optional[str] = None
+    original_step_no: Optional[float] = None
+    standard_seconds: Optional[float] = None
+    time_source: Optional[str] = None
+    source_ref: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod

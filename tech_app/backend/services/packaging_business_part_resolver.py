@@ -552,6 +552,7 @@ def extract_text_anchors(cad_ir: Any, *, layout_aware: bool = False) -> List[Dic
             "layer": layer,
             "raw_text": raw,
             "position": list(row.get("position") or []) or None,
+            "height": _num(row.get("height")),
             "anchor_version": ANCHOR_VERSION,
         }
         position = row.get("position") or []
@@ -577,7 +578,28 @@ def extract_text_anchors(cad_ir: Any, *, layout_aware: bool = False) -> List[Dic
     # `cad_ir` 解析文本时也已按它排过；这里再排一次是为了让「调用方拿到的 IR 列表顺序」不影响任何下游判定 ——
     # 同一件名在图上出现两次（真样本是"原图 + 镜像"两套排版），`_derived_rows()` 的"取第一条"因此有了确定含义：
     # 取**句柄序最小**的那一条，与传进来的 `texts` 是否被倒序无关（原来是"谁先被遍历到算谁"）。
-    return sorted(anchors, key=lambda item: (_text(item.get("entity_id")), _text(item.get("raw_text"))))
+    return drawing_reading_order(anchors)
+
+
+def drawing_reading_order(anchors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """CAD top-to-bottom rows, then left-to-right; never entity traversal order."""
+    positioned = [row for row in anchors if _xy(row.get('position')) is not None]
+    missing = [row for row in anchors if _xy(row.get('position')) is None]
+    heights = sorted(h for row in positioned if (h := _num(row.get('height'))) and h > 0)
+    tolerance = max(0.01, (heights[len(heights)//2] if heights else 1.0) * 2)
+    positioned.sort(key=lambda row: (-float(row['position'][1]), float(row['position'][0]),
+                                     _text(row.get('entity_id'))))
+    ordered, band, top = [], [], None
+    for row in positioned:
+        y = float(row['position'][1])
+        if top is not None and top-y > tolerance:
+            ordered.extend(sorted(band, key=lambda r: (float(r['position'][0]), _text(r.get('entity_id')))))
+            band = []
+        if not band:
+            top = y
+        band.append(row)
+    ordered.extend(sorted(band, key=lambda r: (float(r['position'][0]), _text(r.get('entity_id')))))
+    return ordered + sorted(missing, key=lambda row: (_text(row.get('entity_id')), _text(row.get('raw_text'))))
 
 
 def _bbox_size(bbox: Any) -> Optional[Tuple[float, float]]:
@@ -734,6 +756,7 @@ def regions_from_geometry_parts(geometry_parts: Any) -> List[Dict[str, Any]]:
             row.get("outline_status"),
             "" if rect else REASON_NO_OUTLINE_BBOX,
         ))
+        regions[-1]['outline_points'] = (row.get('outline') or {}).get('points') or []
     return regions
 
 
@@ -1528,6 +1551,7 @@ def _derived_rows(anchors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         index_by_name[normalized] = len(rows)
         rows.append({
             "sequence_no": len(rows) + 1,
+            "drawing_order": {"position": anchor.get('position'), "rule": "cad_spatial_rows/1"},
             "business_part_code": "%s%02d" % (DERIVED_CODE_PREFIX, len(rows) + 1),
             "name": name,
             "declared_sections": packaging_layout.declared_sections(name),

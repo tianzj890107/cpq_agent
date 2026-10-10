@@ -135,6 +135,7 @@ class Part(BaseModel):
         None, description="型号联网核验的简要证据；完整来源保存在型号核验记录中"
     )
     role: Optional[str] = Field(None, description="在装配中的角色/功能")
+    industry: Optional[str] = Field(None, description="明确的业务行业；不用于推测装配角色")
     features: List[Feature] = Field(
         default_factory=list, description="构成该零件的特征列表(按建模顺序)"
     )

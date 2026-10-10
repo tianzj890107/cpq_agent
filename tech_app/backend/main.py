@@ -7386,6 +7386,21 @@ def _packaging_cad_scene(pid: str) -> Dict[str, Any]:
                      "closed": False, "points": [], "bbox": [x, y, x, y],
                      "text": text, "x": x, "y": y,
                      "height": _cad_scene_number(row.get("height")) or 0.0})
+    for dimension in ir.get('dimensions') or []:
+        if not isinstance(dimension, dict):
+            continue
+        targets = [cad_ir.geometry.point_of(str(target)[6:].split(','))
+                   for target in dimension.get('target_entity_ids') or []
+                   if str(target).startswith('point:')]
+        targets = [list(point) for point in targets if point is not None]
+        for index, primitive in enumerate(dimension.get('display_entities') or []):
+            if not isinstance(primitive,dict):
+                continue
+            layer = str(primitive.get('layer') or dimension.get('layer') or '0')
+            rows.append({**primitive, 'cad_entity_id':str(dimension.get('entity_id'))+':display:'+str(index),
+                         'dimension_id':dimension.get('entity_id'), 'dimension_targets':targets,
+                         'annotation':True, 'role':'dimension', 'layer':layer,
+                         'layer_aci_color':layer_colors.get(layer)})
     drawable = [row for row in rows
                 if len(row.get("points") or []) >= 2 or row.get("kind") == "text"]
     entities = drawable[:PACKAGING_CAD_SCENE_LIMIT]
@@ -9342,9 +9357,10 @@ async def packaging_business_part_cost(
             else "  ↳ 缺输入变量，暂给不出金额：%s" % ((line.get("gap") or {}).get("code") or ""))
         analysis = _packaging_business_cost_analysis(inputs, line, qty, geometry_label)
         summary = cost.compute(analysis)
-        if line.get('sections') and line.get('amount') is None:
+        if line.get('amount') is None:
             summary.update(computed_total=None, complete=False)
-            summary.setdefault('warnings',[]).append('部分组成未算出成本，不能使用部分合计作为完整金额')
+            summary.setdefault('warnings',[]).append('部分组成未算出成本，不能使用部分合计作为完整金额'
+                if line.get('sections') else '材料成本输入缺失，未形成完整金额')
         packaging_parts.save_part_cost(pid, {
             "part_code": inputs["part_code"],
             # 这份结论**不是**按几何零件算的：`parts_id` 必须为空，免得读侧拿它去比几何版本。
@@ -9476,7 +9492,7 @@ async def packaging_business_part_process(
         else:
             plan, coverage = process.outline_process(
                 part, overall=None, geom=None,
-                note=_packaging_business_part_process_note(inputs, note) + '\n' + da_process_routing.grounding(da_lookup), attachments=atts)
+                note=_packaging_business_part_process_note(inputs, note) + '\n' + da_process_routing.grounding(da_lookup), attachments=atts,lookup=da_lookup)
             plan_dict = plan.model_dump()
         steps_total = len(plan_dict.get("steps") or [])
         library = (coverage or {}).get("summary") or {}
@@ -9500,7 +9516,7 @@ async def packaging_business_part_process(
             "sections": sections,
             # 业务件没有知识库检索依据，不装样子（与业务件成本那条同口径）。
             "lookup": da_lookup, "assumptions": ([assumption] if assumption else []) + [da_process_routing.grounding(da_lookup)],
-            "process_origin": "model_recommendation_with_da_reference",
+            "process_origin": coverage.get('process_origin') or "model_recommendation_with_da_reference",
             "size_source": inputs["size_source"], "size_source_ref": inputs["size_source_ref"],
             "size_text": inputs["size_text"], "geometry": geometry_label,
             # 这份结论是照哪份清单原文编的 —— 刷新一次页面也说得出来。
@@ -9515,7 +9531,7 @@ async def packaging_business_part_process(
         # 同上：任务返回值带口径四键（Spec §C3），面板生成完立刻说得清按哪套尺寸编的。
         return {"part_code": inputs["part_code"], "part_id": part.part_id,
                 "plan": plan_dict, "validation": validation, "coverage": coverage, "sections": sections,
-                "lookup": da_lookup, "process_origin": "model_recommendation_with_da_reference",
+                "lookup": da_lookup, "process_origin": coverage.get('process_origin') or "model_recommendation_with_da_reference",
                 "size_source": inputs["size_source"],
                 "size_source_ref": inputs["size_source_ref"],
                 "size_text": inputs["size_text"], "geometry": geometry_label}

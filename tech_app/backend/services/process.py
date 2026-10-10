@@ -64,6 +64,10 @@ def outline_process(
     这边要 6 字段的 OutlineStep。输入几乎一样大(~5.7k 字符)，慢的是输出 ——
     十来道工序的描述/参数/质量要求就是上千个 token，而这些字段没有下游依赖。
     """
+    if part.industry == 'packaging' or part.role == 'packaging':
+        from . import packaging_manufacturing
+        return packaging_manufacturing.outline(part,lookup=lookup,note=note,
+            attachments=attachments,run=claude_client.run)
     part_class = classify_part(part)
     gaps = input_gaps(part)
     profile = sop.industry_profile([
@@ -256,6 +260,11 @@ def decompose_process(
     给了它，模型就该在企业既有工序编号和标准工时上排产；没给（库为空或检索失败），
     仍退回原来的通用工艺口径 —— 那种情况下必须禁止编造企业资源编号。
     """
+    if part.industry == 'packaging' or part.role == 'packaging':
+        from . import packaging_manufacturing
+        plan,_ = packaging_manufacturing.outline(part,note=note+'\n'+library,
+            attachments=attachments,run=claude_client.run)
+        return plan
     part_class = classify_part(part)
     gaps = input_gaps(part)
     profile = sop.industry_profile([

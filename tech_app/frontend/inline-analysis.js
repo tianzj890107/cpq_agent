@@ -431,26 +431,31 @@
   // 不是模型自己宣布的 —— 模型只说"这道用的是库内哪一条"，编号对不上就算缺失。
   function processCoverageCard(coverage) {
     if (!coverage || !coverage.summary) return "";
+    const references = coverage.reference_routes || [];
+    let referenceHtml = '';
+    if (references.length) {
+      referenceHtml = `<details class="inline-row"><summary>相似件工艺借鉴 · ${references.length} 个参考（未审核）</summary>${references.map(ref => `<div class="inline-row"><b>${esc(ref.reference_name || ref.header?.name || '库内参考件')}</b> ${esc(ref.reference_code || '')}<div>${esc((ref.steps || []).map(step => step.operation_name).join(' → '))}</div><div>按本件要求调整；不继承参考工时与价格${ref.similarity_score == null ? '' : ' · 检索得分 '+esc(ref.similarity_score)}</div></div>`).join('')}</details>`;
+    }
     const { reused = [], missing = [] } = coverage;
     const row = (item, kind) =>
       `<div class="inline-cov-row ${kind}"><span class="inline-cov-no">${esc(item.step_no)}</span>`
       + `<span class="inline-cov-name">${esc(item.name || "")}</span>`
       + (kind === "reused"
           ? `<span class="inline-cov-code">${esc(item.step_code)}</span>`
-          : `<span class="inline-cov-code new">需新建</span>`)
+          : `<span class="inline-cov-code new">待审核</span>`)
       + `</div>`;
     let html = `<section class="inline-card"><div class="inline-card-title">工艺库覆盖</div>`;
     html += `<div class="inline-totals">`
       + `<span><strong>${reused.length}</strong>库内已有</span>`
-      + `<span><strong>${missing.length}</strong>缺失待建</span></div>`;
+      + `<span><strong>${missing.length}</strong>建议待审核</span></div>`;
     html += reused.length
       ? reused.map(item => row(item, "reused")).join("")
       : `<div class="inline-hint">没有可沿用的库内工序。</div>`;
     if (missing.length) {
-      html += `<div class="inline-cov-split">以下工序库内没有，需新建工艺文件：</div>`;
+      html += `<div class="inline-cov-split">以下是本件建议工序，尚未确认可直接沿用库内标准：</div>`;
       html += missing.map(item => row(item, "missing")).join("");
     }
-    return html + `</section>`;
+    return referenceHtml + html + `</section>`;
   }
 
   function processStep(step, index, editing) {

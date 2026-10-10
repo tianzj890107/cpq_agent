@@ -719,13 +719,15 @@ function aiRenderPackagingLayout() {
     const sheet = row.sheet_mm?.length === 2 ? `${row.sheet_mm[0]} × ${row.sheet_mm[1]} mm` : '纸张尺寸待确认';
     const options = (aiBusinessParts?.business_parts || []).map(part => {
       const code = String(part.business_part_code || '');
-      return `<option value="${aiAttr(code)}"${(row.part_codes || []).includes(code) ? ' selected' : ''}>${esc(part.name || code)}</option>`;
+      return `<label class="ai-layout-option"><input type="checkbox" data-ai-layout-part-code value="${aiAttr(code)}"${(row.part_codes || []).includes(code) ? ' checked' : ''}><span>${esc(part.name || code)}</span></label>`;
     }).join('');
-    html += `<div class="inline-cov-row"><span class="inline-cov-name">${esc(row.text || row.raw_text)}</span>`
+    html += `<div class="ai-layout-row"><div class="inline-cov-row"><span class="inline-cov-name">${esc(row.text || row.raw_text)}</span>`
       + `<span class="inline-cov-code">${esc(sheet)} · ${row.n_up ? `排 ${Number(row.n_up)} 模` : '模数待确认'} · ${row.confirmed ? '已核对文字' : '待核对'}</span>`
       + `<button type="button" class="inline-action" data-ai-layout-confirm="${aiAttr(row.entity_id)}" data-confirmed="${row.confirmed ? 'true' : 'false'}">${row.confirmed ? '撤销确认' : '确认图上排模'}</button></div>`;
-    html += `<label>关联零件（可多选，不推导用量）<select multiple data-ai-layout-parts="${aiAttr(row.entity_id)}">${options}</select></label>`
-      + `<button type="button" class="inline-action" data-ai-layout-save="${aiAttr(row.entity_id)}">保存关联</button>`;
+    html += `<details class="ai-layout-picker"><summary>关联零件 · 已选 ${(row.part_codes || []).length} 项</summary>`
+      + `<div class="ai-hint">可多选；关联不推导用量，请单独核实排模与用量。</div>`
+      + `<div class="ai-layout-options" data-ai-layout-parts="${aiAttr(row.entity_id)}">${options || '<div class="inline-empty">尚无可关联零件</div>'}</div></details>`
+      + `<div class="ai-layout-actions"><button type="button" class="inline-action save" data-ai-layout-save="${aiAttr(row.entity_id)}">保存关联</button></div></div>`;
   });
   return html + '</section>';
 }
@@ -1691,18 +1693,39 @@ async function aiRunOp(kind, dispatch) {
   }
 }
 
+function aiLayoutSelectedCodes(group) {
+  return Array.from(group?.querySelectorAll('[data-ai-layout-part-code]:checked') || []).map(input => input.value);
+}
+
 function aiBindBody() {
+  document.querySelectorAll('[data-ai-layout-parts]').forEach(group => {
+    group.onchange = () => {
+      const summary = group.closest('details')?.querySelector('summary');
+      if (summary) summary.textContent = `关联零件 · 已选 ${aiLayoutSelectedCodes(group).length} 项`;
+    };
+  });
   document.querySelectorAll('[data-ai-layout-save]').forEach(button => {
     button.onclick = async () => {
-      const select = Array.from(document.querySelectorAll('[data-ai-layout-parts]'))
+      const group = Array.from(document.querySelectorAll('[data-ai-layout-parts]'))
         .find(el => el.dataset.aiLayoutParts === button.dataset.aiLayoutSave);
+      const selectedCodes = aiLayoutSelectedCodes(group);
+      button.disabled = true;
+      button.textContent = '保存中…';
+      button.setAttribute('aria-busy', 'true');
+      group?.querySelectorAll('input').forEach(input => { input.disabled = true; });
       try {
         aiBusinessParts = await api(`/api/projects/${encodeURIComponent(aiPid)}/requirement/packaging-layout/${encodeURIComponent(button.dataset.aiLayoutSave)}/confirmation`, {
           method: 'PUT', body: JSON.stringify({ confirmed: false,
-            part_codes: Array.from(select?.selectedOptions || []).map(option => option.value) }),
+            part_codes: selectedCodes }),
         });
         aiRender();
       } catch (error) { aiToast(error.message || '排模关联保存失败', true); }
+      finally {
+        button.disabled = false;
+        button.textContent = '保存关联';
+        button.removeAttribute('aria-busy');
+        group?.querySelectorAll('input').forEach(input => { input.disabled = false; });
+      }
     };
   });
   document.querySelectorAll('[data-ai-layout-confirm]').forEach(button => {

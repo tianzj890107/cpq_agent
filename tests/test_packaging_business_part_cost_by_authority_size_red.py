@@ -212,9 +212,11 @@ class AAuthoritySizeInputs(unittest.TestCase):
 
     def test_a5_requirement_gsm_is_the_documented_fallback(self):
         row = dict(ROW)
-        row["authority"] = {"length_mm": 300.0, "width_mm": 200.0, "material_text": "双灰板"}
+        # 2026-10-09: fallback applies to actual face paper, never grayboard.
+        # Negative guard lives in test_packaging_reference_process_cost_closure_red.
+        row["authority"] = {"length_mm": 300.0, "width_mm": 200.0, "material_text": "面纸"}
         got = _inputs(row=row, requirement={"data": {"face_paper_gsm": 300}})
-        self.assertIs(True, got.get("ok"), "需求整盒口径那条兜底必须留着（Spec §C1）")
+        self.assertIs(True, got.get("ok"), "已明确为面纸时保留需求面纸克重兜底")
         self.assertEqual(300, got.get("variables", {}).get("gsm"))
 
     def test_a6_missing_code_is_not_found(self):

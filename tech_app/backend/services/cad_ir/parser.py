@@ -573,9 +573,58 @@ def _dimension_row(entity: Any, item: Dict[str, Any], handle: str, builder: _Bui
         "delta": delta,
         "tolerance": tolerance,
         "target_entity_ids": _dimension_targets(entity),
+        "display_entities": _dimension_display_entities(entity, builder),
         "confidence": 0.5 if fallback else 0.8,
         "evidence_ref": blocks.evidence_ref_of(item, handle),
     }
+
+
+def _dimension_display_entities(entity: Any, builder: _Builder) -> List[Dict[str, Any]]:
+    """Native anonymous DIM block primitives; display only, never part geometry."""
+    rows = []
+    try:
+        primitives = entity.virtual_entities()
+        for index, primitive in enumerate(primitives):
+            if index >= 512:
+                builder.warn('dimension_display_truncated', '尺寸显示图元超过上限，保留原始标注引用')
+                break
+            kind = primitive.dxftype()
+            row = {'kind': kind.lower(), 'layer': str(primitive.dxf.get('layer','0')),
+                   'aci_color': int(primitive.dxf.get('color',256)), 'closed': False}
+            if kind in ('TEXT','MTEXT'):
+                position = geometry.point_of(primitive.dxf.get('insert'))
+                if position is None:
+                    continue
+                text = primitive.plain_text()
+                row.update(kind='text', text=text, x=position[0], y=position[1],
+                           height=geometry.finite(primitive.dxf.get('char_height' if kind == 'MTEXT' else 'height')) or 2.5,
+                           rotation=geometry.finite(primitive.dxf.get('rotation')) or 0,
+                           bbox=[position[0],position[1],position[0],position[1]])
+                # Include real text extents in fit, rather than cropping dimension text.
+                try:
+                    from ezdxf import bbox as dxf_bbox
+                    bounds = dxf_bbox.extents([primitive])
+                    if bounds.has_data:
+                        row['bbox'] = [bounds.extmin.x,bounds.extmin.y,bounds.extmax.x,bounds.extmax.y]
+                except Exception:
+                    pass
+            else:
+                if kind == 'LINE':
+                    points = geometry.points_of([primitive.dxf.start,primitive.dxf.end])
+                elif kind in ('SOLID','TRACE','3DFACE'):
+                    points = geometry.points_of([primitive.dxf.get('vtx%d' % i) for i in range(4)])
+                    row['closed'] = True
+                elif kind in ('ARC','CIRCLE','LWPOLYLINE','POLYLINE','ELLIPSE','SPLINE'):
+                    from ezdxf.path import make_path
+                    points = geometry.points_of(make_path(primitive).flattening(0.1))
+                    row['closed'] = kind == 'CIRCLE' or bool(getattr(primitive,'is_closed',False))
+                else:
+                    continue
+                row.update(points=[list(p) for p in points],bbox=geometry.bbox_of(points))
+            rows.append(row)
+    except Exception:
+        builder.warn('dimension_display_unavailable', '原生标注图块缺失，无法还原尺寸线与文字')
+    return rows
 
 
 def _dimension_targets(entity: Any) -> List[str]:
@@ -895,7 +944,9 @@ def _stats(entities: Sequence[Dict[str, Any]], layers: Sequence[Dict[str, Any]],
 
 
 def _geometry_block(entities: Sequence[Dict[str, Any]], tolerance: float) -> Dict[str, Any]:
-    closed = [row for row in entities if row.get("kind") == "polyline" and row.get("closed")]
+    manufacturing = [row for row in entities if row.get('kind') in
+                     ('polyline','line','circle','arc','ellipse','spline')]
+    closed = [row for row in manufacturing if row.get('closed')]
     open_rows = [row for row in entities
                  if row.get("kind") == "line"
                  or (row.get("kind") == "polyline" and not row.get("closed"))]
@@ -954,7 +1005,7 @@ def _geometry_block(entities: Sequence[Dict[str, Any]], tolerance: float) -> Dic
     return {
         "closed_outlines": [outline(row) for row in closed],
         "open_outlines": [outline(row) for row in open_rows],
-        "components": geometry.components_of(closed + open_rows, tolerance),
+        "components": geometry.components_of(manufacturing, tolerance),
         "holes": hole_rows,
         "repeated_groups": repeated_groups,
         "overlaps": overlaps,

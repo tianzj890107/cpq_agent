@@ -41,14 +41,14 @@ def _material_types(text):
     return {word for word in ('灰板', '白卡', '铜版', 'EVA', 'PET', '瓦楞', '坑纸', '纸管') if word in text}
 
 
-def rank_route_features(part, candidates):
+def rank_route_features(part, candidates, *, analogy=False):
     """Rank packaging reference routes, never promote similarity to an approved standard."""
     name = normalize_part_name(part.get('name'))
     material = str(part.get('material_text') or '').strip().upper()
     ranked, rejected = [], []
     for candidate in candidates:
         other = normalize_part_name(candidate.get('name'))
-        reason = _constraint_reason(name, other)
+        reason = None if analogy else _constraint_reason(name, other)
         target_material = str(candidate.get('material_text') or '').strip().upper()
         left, right = _material_types(material), _material_types(target_material)
         if left and right and left.isdisjoint(right):

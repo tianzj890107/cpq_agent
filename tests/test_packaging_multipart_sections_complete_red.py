@@ -343,6 +343,9 @@ class MultipartSectionsTest(unittest.TestCase):
         doc = document()
         doc['business_parts'].append({'business_part_code':'BP-B','geometry_binding':{
             'status':'bound','entity_ids':['nearby-e']}})
+        # Only a drawing-earlier owner blocks a claim (2026-10-09 contract).
+        doc['business_parts'][0]['sequence_no'] = 2
+        doc['business_parts'][1]['sequence_no'] = 1
         with self.assertRaisesRegex(ValueError, 'already_assigned'):
             s.assign_sections(doc,'BP-A',[{'component_ids':['nearby']}],actor='PE1')
 
