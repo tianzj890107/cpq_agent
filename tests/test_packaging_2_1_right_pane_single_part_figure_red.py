@@ -75,6 +75,9 @@ const mode = process.argv[4];
 if (mode === "body") { console.log(JSON.stringify({ missing: false, body: fn })); process.exit(0); }
 const cases = JSON.parse(mode, (key, value) => (value === "__NaN__" ? NaN : value));
 const argText = value => (typeof value === "number" && Number.isNaN(value)) ? "NaN" : JSON.stringify(value);
+// 单件图的展示包络使用共享文字范围函数，测试加载真实依赖。
+const displayBox = extract('packagingCadDisplayBox');
+if (displayBox) eval(displayBox);
 eval(fn);
 const out = [];
 for (const args of cases) {

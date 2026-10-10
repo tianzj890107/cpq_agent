@@ -13,6 +13,9 @@
     standard_part: "标准件/外购", heat_treat: "热处理",
     surface: "表面处理", welding: "焊接", assembly: "装配", inspection: "检验",
     tooling: "工装摊销", logistics: "物流包装", overhead: "管理费", profit: "利润", other: "其他",
+    print: "印刷", print_uv: "UV印刷", lamination: "覆膜", die_cutting: "模切",
+    v_groove: "V槽", hot_stamp_flat: "烫金", glue: "胶水", mounting: "裱贴",
+    packaging: "包装费", freight: "运输费",
   };
   const CATS = Object.keys(CAT_LABEL);
   let active = null;
@@ -41,6 +44,9 @@
   function conclusionVersionNote(data) {
     const payload = data || {};
     if (payload.stale === true) {
+      if (payload.source?.cost_scope === "canonical_ledger") {
+        return "整单公式成本依据已变化，请刷新整单成本，单件明细会同步更新。";
+      }
       return `这份结论是上一版零件算的（${payload.stale_reason || "parts_reparsed"}），请重新跑一次。`;
     }
     if (payload.stale_reason === "parts_unknown") {
@@ -174,6 +180,7 @@
         state.validation = data.validation;
         state.coverage = data.coverage;      // 已有工艺 / 缺失工艺，由后端本地比对得出
       } else {
+        state.costScope = data.source?.cost_scope || "";
         state.analysis = data.analysis;
         state.summary = data.summary;
         const quantity = state.root.querySelector("[data-inline-quantity]");
@@ -217,9 +224,15 @@
       generate.removeAttribute("aria-busy");
       generate.textContent = label;
     }
-    edit.hidden = !data || state.editing;
+    const ledgerCost = state.mode === "cost" && state.costScope === "canonical_ledger";
+    if (ledgerCost) {
+      generate.title = "刷新整单公式账，并更新本件成本；报价批量以需求单为准";
+      const quantity = root.querySelector("[data-inline-quantity]");
+      if (quantity) quantity.disabled = true;
+    }
+    edit.hidden = !data || state.editing || ledgerCost;
     edit.disabled = state.busy || !data;
-    save.hidden = !state.editing;
+    save.hidden = !state.editing || ledgerCost;
     save.disabled = state.busy;
   }
 
@@ -260,6 +273,7 @@
         state.validation = result.validation;
         state.coverage = result.coverage;
       } else {
+        state.costScope = result.source?.cost_scope || state.costScope || "";
         state.analysis = result.analysis;
         state.summary = result.summary;
         if (state.summary?.quantity) state.root.querySelector("[data-inline-quantity]").value = state.summary.quantity;
@@ -515,7 +529,9 @@
     const body = state.root.querySelector("[data-inline-body]");
     const analysis = state.analysis;
     if (!analysis) {
-      body.innerHTML = `<div class="inline-empty">尚未生成成本测算。设定批量后点击上方“生成成本测算”，AI 将联网检索材料、外购、加工等行情并拆解结构化成本。</div>`;
+      body.innerHTML = state.costScope === "canonical_ledger"
+        ? `<div class="inline-empty">本件没有当前有效的公式成本明细。请更新尺寸、材料、工艺及库内费率后刷新整单公式成本账；不联网、不独立保存单件材料估价。</div>`
+        : `<div class="inline-empty">尚未生成成本测算。设定批量后点击上方“生成成本测算”。</div>`;
       return;
     }
     const summary = state.summary || {};

@@ -114,45 +114,22 @@ def _part_rows(project_id: str, ir: Optional[DesignIR]) -> List[dict]:
     rows: List[dict] = []
     requirement = store.load_requirement(project_id) or {}
     packaging = (requirement.get("data") or {}).get("industry") == "packaging"
-    business_doc = {}
     if packaging:
-        from . import packaging_parts
-        business_doc = packaging_parts.load_business_parts(project_id) or {}
+        from . import packaging_cost_ledger
+        return packaging_cost_ledger.load(project_id)['parts']
     for part in (ir.parts if ir else []):
-        if packaging:
-            conclusion = packaging_parts.load_part_cost(project_id, part.part_id) or {}
-            from . import packaging_conclusions
-            valid = packaging_conclusions.usable(project_id, conclusion, business_doc)
-            saved = conclusion.get("analysis") if valid else None
-        else:
-            saved = store.load_cost(project_id, part.part_id)
-        if packaging:
-            amounts = []
-            for item in (saved or {}).get("items") or []:
-                try:
-                    amount = float(item["amount"])
-                    if not math.isfinite(amount) or amount < 0:
-                        raise ValueError("invalid material cost")
-                    amounts.append(amount)
-                except (KeyError, TypeError, ValueError):
-                    amounts = []
-                    saved = None
-                    break
-            total = sum(amounts)
-            breakdown = ({"material": total, "labor": 0, "overhead": 0,
-                          "machining": 0, "total": total} if amounts else {})
-        else:
-            breakdown = cost_model.breakdown(saved) if saved else {}
+        saved = store.load_cost(project_id, part.part_id)
+        breakdown = cost_model.breakdown(saved) if saved else {}
         quantity = max(1, int(part.quantity or 1))
         unit = float(breakdown.get("total") or 0)
         rows.append({
             "id": part.part_id,
             "name": part.name or "",
             "kind": "part",
-            "cost_scope": "material_only" if packaging else "part",
+            "cost_scope": "part",
             "quantity": quantity,
             "has_cost": bool(saved and (saved.get("items") or [])),
-            "cost_stale": bool(packaging and conclusion and not valid),
+            "cost_stale": False,
             "item_count": len((saved or {}).get("items") or []),
             "breakdown": breakdown,
             "unit_cost": round(unit, 2),
@@ -193,6 +170,14 @@ def summarize(project_id: str, ir: Optional[DesignIR], plan) -> dict:
                        逐个零件引过来的），再加组装工序的人工与费用。
     所以对外报价用的是 assembly，不是两者相加 —— 相加会把零件成本算两遍。
     """
+    requirement = store.load_requirement(project_id) or {}
+    if (requirement.get('data') or {}).get('industry') == 'packaging':
+        from . import packaging_cost_ledger
+        result = packaging_cost_ledger.load(project_id)
+        from . import packaging_cost
+        result['ready'] = result['ready'] and bool(
+            packaging_cost.readiness_verdict(result['packaging_cost'])['formal_ready'])
+        return result
     parts = _part_rows(project_id, parts_source(project_id, ir))
     assembly = _assembly_row(plan)
     parts_total = merge_totals([row["breakdown"] for row in parts
@@ -207,24 +192,6 @@ def summarize(project_id: str, ir: Optional[DesignIR], plan) -> dict:
     # 包装成本的「能不能用」只有**一个**裁决源（Spec `chain-consistency-batch1.md` §2.2）：
     # 提示缺口不阻断、依据漂移（stale）阻断。这里只取结论，不另判一份。
     packaging_ready = None
-    if (requirement.get("data") or {}).get("industry") == "packaging":
-        from . import packaging_cost
-        packaging_result = packaging_cost.load_cost(project_id) or {}
-        packaging_ready = bool(packaging_cost.readiness_verdict(packaging_result)["formal_ready"])
-        built = bool(packaging_result.get("built"))
-        total = float(packaging_result.get("total_cost") or 0)
-        assembly = dict(assembly, name="包装整单成本", has_cost=built,
-                        unit_cost=total, subtotal=total,
-                        breakdown={"material": float(packaging_result.get("material_total") or 0),
-                                   "labor": float(packaging_result.get("labor_total") or 0),
-                                   "machining": float(packaging_result.get("process_total") or 0),
-                                   "overhead": sum(float(packaging_result.get(key) or 0) for key in
-                                       # 分类及 process_total 已含损耗，不能再次累加 loss_amount。
-                                       ("tooling_total", "packaging_total", "freight_total", "other_total")),
-                                   "total": total} if built else {},
-                        summary="包装确定性公式整单测算；不叠加零件材料费，不套通用成本系数")
-        zero = [row["id"] for row in parts + [assembly]
-                if row["has_cost"] and row["unit_cost"] <= 0]
     return {
         "parts": parts,
         "assembly": assembly,

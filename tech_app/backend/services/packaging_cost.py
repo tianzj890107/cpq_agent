@@ -2802,8 +2802,13 @@ def build_cost(project_id: str, requirement_no: str = "", actor: Any = None, *,
                                            scenario=scenario, actor=actor))
     da_repo.save_packaging_cost(cost["project_id"], cost["requirement_no"],
                                 cost["scenario_code"], cost, cost["items"])
-    from . import wine_poc
-    wine_poc.sync_material_costs(project_id, cost)
+    # 单件视图直接归集本账，不再回填另一份独立的单件材料费记录。
+    review = store.load_cost_review(project_id) or {}
+    if review.get('confirmed'):
+        review = dict(review, confirmed=False, confirmed_by=None, confirmed_at=None)
+        store.save_cost_review(project_id, review, author=_actor_name(actor) or 'system')
+        store.audit(project_id, 'cost_review_invalidated_by_ledger_rebuild',
+                    {'estimate_id':cost['estimate_id'], 'by':_actor_name(actor)})
     store.audit(project_id, "workflow:packaging_cost_rebuilt",
                 {"requirement_no": cost["requirement_no"], "scenario_code": cost["scenario_code"],
                  "total_cost": cost["total_cost"], "has_gaps": cost["has_gaps"],
@@ -2951,6 +2956,18 @@ def load_cost(project_id: str, requirement_no: str = "", *,
         result["stale_reasons"] = list(result["stale_reasons"]) + [business_reason]
     result["stale"] = bool(result["stale"] or business_reason)
     result["business_parts_unavailable"] = dict(business_unavailable)
+    return _with_readiness(with_current_quote_quantity(result, _requirement_data(project_id)))
+
+
+def with_current_quote_quantity(result, data):
+    """所有成本视图共用数量漂移判定，保持历史金额与算时数量不变。"""
+    result = dict(result)
+    expected = _num((data or {}).get('quote_quantity'))
+    computed = _num(result.get('quote_quantity'))
+    if result.get('built') and expected and expected > 0 and computed and expected != computed:
+        result['stale'] = True
+        result['stale_reasons'] = list(dict.fromkeys(
+            list(result.get('stale_reasons') or []) + ['quote_quantity_changed']))
     return result
 
 

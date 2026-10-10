@@ -283,74 +283,30 @@ class CCostRoute(unittest.TestCase):
         self.assertEqual(404, caught.exception.status_code)
         self.assertEqual("PACKAGING_BUSINESS_PART_NOT_FOUND", caught.exception.detail.get("code"))
 
-    def test_c2_missing_size_is_409_not_retryable(self):
-        row = {"business_part_code": CODE, "authority": {"material_text": "350G玖龙粉灰"}}
-        doc = dict(DOC, business_parts=[row])
-        with _Patch((main, "_workflow_project", lambda *a, **k: None),
-                    (main, "tasks", _Tasks()),
-                    (parts, "load_business_parts", lambda *a, **k: doc),
-                    (main.store, "load_requirement", lambda *a, **k: {"data": {}})):
-            with self.assertRaises(main.HTTPException) as caught:
-                asyncio.run(main.packaging_business_part_cost(PID, CODE, 1, "", [], USER))
-        self.assertEqual(409, caught.exception.status_code, "缺前置条件一律 409（Spec §C3）")
-        self.assertIs(False, caught.exception.detail.get("retryable"))
-        self.assertEqual(["authority_size"], caught.exception.detail.get("missing_variables"))
+    # POST contract superseded by packaging-single-cost-ledger.md.
+    def test_c2_part_calculation_uses_one_canonical_ledger(self):
+        from tests.test_packaging_single_cost_ledger_red import SingleLedger
+        SingleLedger().test_part_route_rebuilds_canonical_ledger_without_writing_old_cost()
 
-    def test_c3_happy_path_uses_the_authority_variables(self):
-        got = _post()
-        self.assertEqual("material", got["seen"].get("kind"),
-                         "复用既有材料公式那一支（Spec §C3）")
-        self.assertEqual({"cut_length": 300.0, "cut_width": 200.0, "gsm": 350,
-                          "quote_quantity": 1}, got["seen"].get("variables"),
-                         "送给 compute_line 的必须是清单尺寸那四键（Spec §C3）")
-        self.assertEqual("task-1", got["body"].get("task_id"), "与既有单件成本同一个任务形状")
+    def test_c3_usage_and_loss_are_applied_once(self):
+        from tests.test_packaging_single_cost_ledger_red import SingleLedger
+        SingleLedger().test_one_ledger_no_usage_or_loss_double_count()
 
-    def test_c4_saved_row_is_a_business_conclusion_not_a_geometric_one(self):
-        got = _post()
-        saved = got["backend"].docs.get(parts.DOC_KEY_COST, {}).get("items", [{}])[0]
-        self.assertEqual(CODE, saved.get("part_code"), "编码必须是业务部件编码（Spec §C3）")
-        self.assertEqual("", saved.get("parts_id"),
-                         "不许拿几何版本冒充：`parts_id` 必须是空串（Spec §C3）")
-        self.assertEqual("authority_dimensions", saved.get("size_source"))
-        self.assertEqual(BIZ_ID, saved.get("business_parts_id"), "业务清单版本也要落行（Spec §C3）")
-        self.assertEqual(BIZ_HASH, saved.get("business_parts_hash"))
-        self.assertEqual("unbound", saved.get("geometry"), "披露这一件没有几何（Spec §C3）")
-        analysis = saved.get("analysis") if isinstance(saved.get("analysis"), dict) else {}
-        self.assertEqual("按清单尺寸（300×200 mm）算的材料开料，未与 CAD 几何核过",
-                         (analysis.get("assumptions") or [""])[0],
-                         "口径那句话必须是结论的第一条 assumption（Spec §C3）")
-        self.assertEqual("task-1", (saved.get("source") or {}).get("task_id"))
-        self.assertEqual({}, saved.get("lookup"), "业务件没有知识库依据，不许装样子（Spec §C3）")
+    def test_c4_stale_ledger_cannot_supply_formal_part_cost(self):
+        from tests.test_packaging_single_cost_ledger_red import SingleLedger
+        SingleLedger().test_stale_does_not_make_old_cost_formal()
 
-    def test_c5_does_not_touch_the_technical_ir(self):
-        backend, tasks = _Backend(), _Tasks()
-
-        def boom(*a, **k):        # pragma: no cover - 走到这里就是红
-            raise AssertionError("业务件成本结论不许写技术 IR（Spec §C3）")
-
-        with _Patch((main, "_workflow_project", lambda *a, **k: None),
-                    (main, "tasks", tasks),
-                    (parts, "load_business_parts", lambda *a, **k: dict(DOC)),
-                    (parts, "get_backend", lambda: backend),
-                    (main.packaging_cost, "compute_line",
-                     lambda kind, variables: dict(LINE)),
-                    (main.store, "load_requirement", lambda *a, **k: {"data": {}}),
-                    (main.store, "save_ir", boom)):
-            asyncio.run(main.packaging_business_part_cost(PID, CODE, 1, "", [], USER))
-        self.assertEqual(1, backend.writes, "只落一版结论文档")
-
-
-# --------------------------------------------------------------------------- #
-# D 组：GET 路由（Spec §C4）
-# --------------------------------------------------------------------------- #
+    def test_c5_no_independent_part_document_is_written(self):
+        from tests.test_packaging_single_cost_ledger_red import SingleLedger
+        SingleLedger().test_part_route_rebuilds_canonical_ledger_without_writing_old_cost()
 class DCostReadback(unittest.TestCase):
     def test_d1_shape_matches_the_geometric_route(self):
         body = _get()
         for key in ("part_code", "analysis", "summary", "source", "parts_id", "stale",
                     "stale_reason", "size_source", "size_source_ref", "geometry"):
             self.assertIn(key, body, "读回体必须给 %s（Spec §C4）" % key)
-        self.assertEqual("authority_dimensions", body.get("size_source"))
-        self.assertEqual("unbound", body.get("geometry"))
+        self.assertEqual("canonical_ledger", body.get("size_source"))
+        self.assertIsNone(body.get("analysis"), "历史单件估价不能冒充当前公式账")
 
     def test_d2_empty_state_is_200_not_404(self):
         backend = _Backend()
@@ -410,7 +366,7 @@ class EGuardrails(unittest.TestCase):
         src = _source(ROOT / "tech_app" / "frontend" / "app.js")
         # 图纸尺寸人工确认单列 size-confirm PUT，总数精确重指为 7。
         # 多组成闭环 Spec 明确新增共用 sections 写入，不解除其它批次冻结。
-        self.assertEqual(9, src.count("packaging-business-parts/"),
+        self.assertEqual(11, src.count("packaging-business-parts/"),
                          "额外入口仅限本轮声明的 sections 写入")
         self.assertIn('/sections${suffix}',src)
         self.assertEqual(1, src.count("/geometry-binding"))

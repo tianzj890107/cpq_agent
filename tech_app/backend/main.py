@@ -9073,10 +9073,20 @@ async def packaging_part_cost(
     数字一律来自 packaging_cost 的库内公式；图纸零件缺料/未闭合时**先拒绝**
     （processability 不过 → 409），绝不用包围盒面积冒充零件面积去算。
     """
-    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
+    requirement = store.load_requirement(pid) or {}
+    roles = (packaging_cost.COST_WRITE_ROLES if (requirement.get('data') or {}).get('industry') == 'packaging'
+             else packaging_match.BOX_MATCH_DECIDE_ROLES)
+    _require(user, roles, "需要成本测算权限")
     _workflow_project(pid)
     loaded = _packaging_part_row(pid, part_code)
     row = loaded["row"]
+    if (requirement.get('data') or {}).get('industry') == 'packaging':
+        from .services import packaging_cost_ledger
+        try:
+            code = packaging_cost_ledger.business_code_for_geometry(pid, row)
+        except ValueError as exc:
+            raise HTTPException(409, {'code':str(exc), 'message':'请从业务零件打开统一公式成本；几何分量无法唯一对应业务零件'}) from exc
+        return await packaging_business_part_cost(pid, code, quantity, note, attachments, user)
     verdict = packaging_parts.processability(row)
     if not verdict["ok"]:
         raise _packaging_part_reject(verdict)
@@ -9203,7 +9213,15 @@ def get_packaging_part_cost(pid: str, part_code: str,
     `packaging-parts-conclusion-version-readback.md` §2.2）。
     """
     _workflow_project(pid)
-    _packaging_part_row(pid, part_code)
+    loaded = _packaging_part_row(pid, part_code)
+    requirement = store.load_requirement(pid) or {}
+    if (requirement.get('data') or {}).get('industry') == 'packaging':
+        from .services import packaging_cost_ledger
+        try:
+            code = packaging_cost_ledger.business_code_for_geometry(pid, loaded['row'])
+        except ValueError as exc:
+            raise HTTPException(409, {'code':str(exc), 'message':'请从业务零件读取同一份公式成本明细'}) from exc
+        return packaging_cost_ledger.part_view(pid, code)
     record = packaging_parts.load_part_cost(pid, part_code) or {}
     if not record:
         body = {"part_code": part_code, "analysis": None, "summary": None, "source": {}}
@@ -9324,102 +9342,27 @@ async def packaging_business_part_cost(
     attachments: List[UploadFile] = File(default=[]),
     user: dict = Depends(current_user),
 ):
-    """业务部件的单件材料费（异步任务，与既有成本路由同形状：task_id + 进度上报）。
-
-    没有几何的件也走得通 —— 尺寸只认清单尺寸；缺尺寸/克重一律 409 并说清缺什么。
-    """
+    """更新整单公式成本账，任务返回所选业务零件的同账成本视图。"""
     _require(user, packaging_cost.COST_WRITE_ROLES, "需要财务经理、工艺经理、工艺技术总监或管理员权限")
     _workflow_project(pid)
-    loaded = _packaging_business_part_row(pid, code)
-    doc = loaded["doc"]
-    try:
-        row = packaging_parts.verified_business_part_input_row(loaded["row"], doc)
-    except ValueError as exc:
-        raise HTTPException(409, {"code": str(exc),
-                                  "message": "图纸推导件尚未人工确认几何归属与尺寸，不能按候选尺寸算成本。"}) from exc
-    requirement = store.load_requirement(pid) or {}
-    qty = max(1, int(quantity or 1))
-    inputs = packaging_parts.business_cost_inputs(row, requirement=requirement, quantity=qty)
-    if not inputs["ok"]:
-        raise _packaging_business_part_reject(inputs)
-    geometry_label = _packaging_business_geometry_label(row)
+    _packaging_business_part_row(pid, code)
+    # 包装单件是整单公式账的视图；批量取需求单数量，不将每套用量误作报价数量。
     await _read_attachments(attachments)
-    expected = _digest_value({"part": row, "quantity": qty})
-
-    def job():
-        tasks.report_progress("按清单尺寸（%s）算这一件的材料开料成本"
-                              % (inputs.get("size_text") or
-                                 "%s×%s mm" % (packaging_parts._mm_text(
-                                     inputs["variables"].get("cut_length")),
-                                     packaging_parts._mm_text(
-                                         inputs["variables"].get("cut_width")))))
-        from .services import packaging_sections
-        line = packaging_sections.compute_material(inputs, packaging_cost.compute_line)
-        amount = line.get("amount")
-        tasks.report_progress(
-            "  ↳ 单件 %.4f 元（批量 %d 件）" % (amount, qty) if amount is not None
-            else "  ↳ 缺输入变量，暂给不出金额：%s" % ((line.get("gap") or {}).get("code") or ""))
-        analysis = _packaging_business_cost_analysis(inputs, line, qty, geometry_label)
-        summary = cost.compute(analysis)
-        if line.get('amount') is None:
-            summary.update(computed_total=None, complete=False)
-            summary.setdefault('warnings',[]).append('部分组成未算出成本，不能使用部分合计作为完整金额'
-                if line.get('sections') else '材料成本输入缺失，未形成完整金额')
-        packaging_parts.save_part_cost(pid, {
-            "part_code": inputs["part_code"],
-            # 这份结论**不是**按几何零件算的：`parts_id` 必须为空，免得读侧拿它去比几何版本。
-            "parts_id": "",
-            "engine_version": packaging_parts.ENGINE_VERSION,
-            "analysis": analysis, "summary": summary,
-            # 业务件没有知识库检索依据，不装样子（Spec §C3）。
-            "lookup": {},
-            "sections": line.get('sections') or [],
-            "size_source": inputs["size_source"], "size_source_ref": inputs["size_source_ref"],
-            "size_text": inputs["size_text"], "geometry": geometry_label,
-            "business_part_code": inputs["part_code"],
-            "business_parts_id": str(doc.get("business_parts_id") or ""),
-            "business_parts_hash": str(doc.get("business_parts_hash") or ""),
-            "source": {"task_id": tasks.current_task_id(),
-                       "computed_at": now_cst_str(),
-                       "actor": str(user.get("username") or "")},
-        })
-        # 任务返回值里也带上口径四键（Spec `packaging-business-part-conclusion-basis-in-panel.md`
-        # §C3）：面板拿到 `task.result` 就渲染「按清单尺寸算的…」那一行，不必再读一次。
-        return {"part_code": inputs["part_code"], "analysis": analysis, "summary": summary,
-                "line": line, "sections": line.get('sections') or [],
-                "size_source": inputs["size_source"],
-                "size_source_ref": inputs["size_source_ref"],
-                "size_text": inputs["size_text"], "geometry": geometry_label}
-
-    return {"task_id": tasks.submit(
-        pid, "packaging_business_part_cost", job,
-        dedup_key=_task_key("packaging_business_part_cost", code, expected),
-        actor=user.get("username", ""),
-    )}
-
+    from .services import packaging_cost_ledger
+    def ledger_job():
+        tasks.report_progress("刷新同一份整单公式成本账并读取本件明细")
+        return packaging_cost_ledger.rebuild_part(pid, code, user)
+    return {"task_id": tasks.submit(pid, "packaging_business_part_cost", ledger_job,
+        actor=user.get("username", ""))}
 
 @app.get(PACKAGING_BUSINESS_PART_COST_PATH)
 def get_packaging_business_part_cost(pid: str, code: str,
                                      user: dict = Depends(current_user)):
-    """读业务部件的单件成本结论（最近一版；未跑过 → 空态，不 404，Spec §C4）。
-
-    形状与几何零件那一路逐字同形（`part_code` / `analysis` / `summary` / `source` +
-    版本七键），另加这四键说清"这份金额是按什么尺寸算的"。
-    """
+    """从当前整单公式账读取本件，保留旧面板契约但不读旧单件估价。"""
     _workflow_project(pid)
     _packaging_business_part_row(pid, code)
-    record = packaging_parts.load_part_cost(pid, code) or {}
-    body = {"part_code": str(record.get("part_code") or code),
-            "sections": record.get('sections') or [],
-            "analysis": record.get("analysis") if record else None,
-            "summary": record.get("summary") if record else None,
-            "source": (record.get("source") if isinstance(record.get("source"), dict) else {}),
-            "size_source": str(record.get("size_source") or ""),
-            "size_source_ref": str(record.get("size_source_ref") or ""),
-            "size_text": str(record.get("size_text") or ""),
-            "geometry": str(record.get("geometry") or "")}
-    body.update(_packaging_part_conclusion_version(pid, record))
-    return body
+    from .services import packaging_cost_ledger
+    return packaging_cost_ledger.part_view(pid, code)
 
 
 # --------------------------------------------------------------------------- #

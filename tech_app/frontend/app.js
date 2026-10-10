@@ -2162,7 +2162,8 @@ function packagingPartSceneEntities(binding, doc) {
   const evidence = (doc && doc.geometry_evidence && typeof doc.geometry_evidence === "object")
     ? doc.geometry_evidence : {};
   const bound = {};
-  (Array.isArray(row.component_ids) ? row.component_ids : []).forEach(id => {
+  (Array.isArray(row.annotation_component_ids) ? row.annotation_component_ids
+    : Array.isArray(row.component_ids) ? row.component_ids : []).forEach(id => {
     bound[String(id || "")] = true;
   });
   const ids = {};
@@ -2230,7 +2231,19 @@ function packagingPartAnnotationEntities(binding, doc) {
   });
   const seen = {};
   const rows = [];
-  const box = Array.isArray(row.bbox) && row.bbox.length === 4 ? row.bbox.map(Number) : null;
+  let box = Array.isArray(row.annotation_bbox || row.bbox)
+    ? (row.annotation_bbox || row.bbox).slice(0, 4).map(Number) : null;
+  if (!box || box.length !== 4 || !box.every(Number.isFinite)) {
+    const memberIds = new Set(row.entity_ids || []);
+    box = null;
+    (scene.entities || []).forEach(entity => {
+      if (!memberIds.has(entity.cad_entity_id) || entity.annotation) return;
+      const b = entity.bbox;
+      if (!Array.isArray(b) || b.length !== 4 || !b.every(Number.isFinite)) return;
+      box = box ? [Math.min(box[0], b[0]), Math.min(box[1], b[1]),
+        Math.max(box[2], b[2]), Math.max(box[3], b[3])] : b.slice();
+    });
+  }
   const validBox = box && box.every(Number.isFinite);
   const references = new Set(row.dimension_refs || []);
   (Array.isArray(scene.entities) ? scene.entities : []).forEach(raw => {
@@ -2391,7 +2404,7 @@ function packagingPartSceneSvg(binding, doc, options) {
   if (!drawn) return "";
   // 取框与 viewBox 与整图同一条口径（`packagingCadPlanRange()` + `packagingCadPlanViewBox()`：
   // 命中图元的 bbox 并集、2% 留白、y 轴翻一次）。
-  const boxes = figureRows.map(row => ((row || {}).bbox)).filter(Boolean);
+  const boxes = figureRows.map(row => packagingCadDisplayBox(row)).filter(Boolean);
   let box = null;
   boxes.forEach(raw => {
     if (!Array.isArray(raw) || raw.length < 4) return;
@@ -2409,6 +2422,24 @@ function packagingPartSceneSvg(binding, doc, options) {
 }
 
 // SVG 的 y 轴向下、DWG 的 y 轴向上：翻一次，图纸方向才与 CAD 里一致。
+function packagingCadDisplayBox(entity) {
+  const row = entity || {};
+  const original = Array.isArray(row.bbox) && row.bbox.length === 4
+    && row.bbox.every(Number.isFinite) ? row.bbox.slice() : null;
+  if (row.kind !== 'text' || !Number.isFinite(row.x) || !Number.isFinite(row.y)) return original;
+  // 展示范围保守估算，不作为制造尺寸：包含完整字符串与旋转、字形下伸空间。
+  const height = Number(row.height) > 0 ? Number(row.height) : 2.5;
+  const width = Math.max(Array.from(String(row.text || '')).length, 1) * height;
+  const angle = Number(row.rotation || 0) * Math.PI / 180;
+  const points = [[-height, -height], [width + height, -height],
+    [-height, height * 1.5], [width + height, height * 1.5]].map(([x, y]) =>
+    [row.x + x * Math.cos(angle) - y * Math.sin(angle),
+      row.y + x * Math.sin(angle) + y * Math.cos(angle)]);
+  if (original) points.push([original[0], original[1]], [original[2], original[3]]);
+  return [Math.min(...points.map(p => p[0])), Math.min(...points.map(p => p[1])),
+    Math.max(...points.map(p => p[0])), Math.max(...points.map(p => p[1]))];
+}
+
 function packagingCadPlanViewBox(range) {
   if (!range) return "0 0 1 1";
   const pad = Math.max(range.width, range.height) * 0.02;
@@ -2589,7 +2620,7 @@ function renderPackagingCadScene(host, doc, scene) {
       entity.business_part_code = owners[String(entity.cad_entity_id || "")] || "";
     }
   });
-  const boxes = entities.map(entity => (entity || {}).bbox).filter(Boolean);
+  const boxes = entities.map(entity => packagingCadDisplayBox(entity)).filter(Boolean);
   const range = packagingCadPlanRange(boxes)
     || packagingCadPlanRange([(scene && scene.extents) || null]);
   if (!range) {
@@ -4339,11 +4370,16 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
     // merely lying inside the candidate bbox.
     entity_ids: candidateEntityIds,
     bbox: candidate.bbox || null,
+    dimension_refs: candidate.dimension_refs || [],
     exact_entities: candidateEntityIds.length > 0,
   } : null;
   // 候选件只画这一件**已确认的精确图元**：清掉包围盒与分量口径，别件的线不跟着进来
   // （`exact_entities` 是渲染器里的同一条判据，两个一起给，少一个都可能把邻件带进来）。
-  const candidateExactBinding = binding.candidate_id ? Object.assign({}, binding, {bbox: null, component_ids: []}) : binding;
+  const candidateExactBinding = binding.candidate_id ? Object.assign({}, binding, {
+    annotation_bbox: binding.bbox || (candidate && candidate.bbox) || null,
+    annotation_component_ids: binding.component_ids || [],
+    dimension_refs: binding.dimension_refs || (candidate && candidate.dimension_refs) || [],
+    bbox: null, component_ids: []}) : binding;
   let figureBinding = (String(binding.status || "") === "bound"
     || (String(binding.status || "") === "partial" && binding.candidate_id
         && Array.isArray(binding.entity_ids) && binding.entity_ids.length))

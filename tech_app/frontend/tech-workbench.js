@@ -83,6 +83,8 @@
     { key: 'params', label: '排版排模', no: '3.2', stage: 'process', view: 'params' }, // 3.2 排版排模
     { key: 'process', label: '后道加工与组装工艺', no: '3.3', stage: 'process', view: 'process' }, // 3.3 后道加工与组装工艺
   ];
+  const PACKAGING_COST_TABS = CHILD_TAB_PROXY.cost.tabs.map(tab =>
+    tab.key === 'assembly' ? {...tab, label:'整单成本'} : tab);
 
   function currentMajorStep() {
     return MAJOR_STEPS.find(major => major.stages.includes(state.stage)) || MAJOR_STEPS[0];
@@ -336,8 +338,10 @@
     const major = currentMajorStep();
     const substeps = CONTEXT_SUBSTEPS[major.no] || [];
     const originalProxy = CHILD_TAB_PROXY[state.stage] || null;
-    const proxy = state.stage === 'process' && state.industry === 'packaging'
-      ? { tabs: PACKAGING_PROCESS_TABS } : originalProxy;
+    const proxy = state.industry === 'packaging' && state.stage === 'process'
+      ? { tabs: PACKAGING_PROCESS_TABS }
+      : state.industry === 'packaging' && state.stage === 'cost'
+        ? { tabs: PACKAGING_COST_TABS } : originalProxy;
     const canNav = Boolean(state.project || state.stage === 'requirement-create');
     if (title) title.textContent = major.title || major.label;
     if (header) header.hidden = false;

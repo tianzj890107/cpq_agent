@@ -463,9 +463,20 @@ function crTaskInterrupted(error) {
 /* --------------------------------------------------------------- 渲染 */
 function crBreakdownRow(breakdown) {
   if (!breakdown || !Object.keys(breakdown).length) return '<span class="ai-blank">未测算</span>';
+  if (crData?.packaging_cost) return crPackagingBreakdown(breakdown);
   return Object.keys(CR_COST_LABEL)
     .map(key => `<span class="cr-part"><i>${CR_COST_LABEL[key]}</i>${crMoney(breakdown[key])}</span>`)
     .join('');
+}
+
+function crPackagingBreakdown(breakdown) {
+  const labels = {material:'材料', labor:'人工'};
+  const extras = {processing:'加工费', tooling:'模具摊销', packaging:'包装费', freight:'运输费', other:'其他费用'};
+  const main = Object.entries(labels).map(([key,label]) =>
+    `<span class="cr-part"><i>${label}</i>${crMoney(breakdown[key])}</span>`).join('');
+  return main + `<details class="inline-row"><summary>其他费用 ${crMoney(breakdown.others)}</summary>`
+    + Object.entries(extras).map(([key,label]) =>
+      `<span class="cr-part"><i>${label}</i>${crMoney(breakdown[key])}</span>`).join('') + '</details>';
 }
 
 function crRenderParts() {
@@ -479,17 +490,17 @@ function crRenderParts() {
     + `<div class="inline-hint">按企业成本库的物料价与费率算，<strong>不联网查行情</strong>；`
     + `库里没有的会写进待确认，请人工询价后在这里补。</div>`
     + `<div class="inline-totals"><span><strong>${counts.parts_costed || 0}</strong>/${counts.parts || 0} 已测算</span>`
-    + `<span>零件成本合计 <strong>${crMoney((crData.parts_total || {}).total)}</strong> 元/台</span></div>`;
+    + `<span>零件成本合计 <strong>${crMoney((crData.parts_total || {}).total)}</strong> ${crData?.packaging_cost ? '元/套' : '元/台'}</span></div>`;
   if ((counts.missing || []).length) {
-    html += `<div class="inline-warn">⚠ 还有 ${counts.missing.length} 个零件没算：`
+    html += `<div class="inline-warn">⚠ 还有 ${counts.missing.length} 个零件没有有效成本：`
       + `${esc(counts.missing.join('、'))}。整机成本以它们为底，缺一件整机就是偏的。</div>`;
   }
   if ((counts.zero || []).length) {
     html += `<div class="inline-warn">⚠ 这些行算出来是 0 元：${esc(counts.zero.join('、'))}。`
-      + `多半是模型没给出材料明细，请重算或人工补 —— 0 元送到报价那头就是没有成本的产品。</div>`;
+      + `${crData?.packaging_cost ? '请检查公式输入与库内价格；不能把缺失金额当作零元报价。' : '请重算或补材料明细。'}</div>`;
   }
   html += `<div class="inline-cost-table-wrap"><table class="inline-cost-table"><thead><tr>`
-    + `<th>零件</th><th>单台用量</th><th>四项拆解</th><th>单件</th><th>小计</th><th>操作</th>`
+    + `<th>零件</th><th>${crData?.packaging_cost ? '每套用量' : '单台用量'}</th><th>${crData?.packaging_cost ? '成本明细' : '四项拆解'}</th><th>单件</th><th>小计</th><th>操作</th>`
     + `</tr></thead><tbody>`;
   rows.forEach(row => {
     const flag = !row.has_cost ? ' ai-missing' : row.unit_cost <= 0 ? ' ai-missing' : '';
@@ -510,11 +521,12 @@ function crRenderParts() {
 function crRenderAssembly() {
   const row = crData?.assembly;
   if (!row) return `<div class="inline-empty">还没有整机方案。</div>`;
-  let html = `<section class="inline-card"><div class="inline-card-title">组装成本 · ${esc(row.name)}</div>`
-    + `<div class="inline-hint">整机成本的材料项就是<strong>逐个零件引过来的</strong>，再加组装工序的人工与费用。`
-    + `所以它<strong>已经包含</strong>零件成本，对外报价用的是这个数。</div>`;
+  let html = `<section class="inline-card"><div class="inline-card-title">${crData?.packaging_cost ? '整单成本' : '组装成本'} · ${esc(row.name)}</div>`
+    + `<div class="inline-hint">${crData?.packaging_cost
+      ? '单件与整单来自同一份公式成本明细；整单包含零件费用及项目级费用，不再叠加单件合计。'
+      : '整机成本已包含零件成本，再加组装人工与费用，不与零件合计重复相加。'}</div>`;
   if (!row.has_cost) {
-    html += `<div class="inline-warn">⚠ 还没算过整机成本。零件先算齐再算它，材料项才引得到。</div>`;
+    html += `<div class="inline-warn">⚠ ${crData?.packaging_cost ? '整单成本待测算或已过期，请刷新同一份公式成本账。' : '还没算过整机成本，请先算零件再算整机。'}</div>`;
   } else if (row.unit_cost <= 0) {
     html += `<div class="inline-warn">⚠ 整机成本算出来是 0 元，多半是模型没给出材料明细，请重算。</div>`;
   }
@@ -532,24 +544,31 @@ function crRenderTotal() {
   const partsTotal = crData?.parts_total || {};
   const counts = crData?.counts || {};
   const packaging = crData?.packaging_cost;
-  const scopeText = packaging ? '逐件材料开料费与包装整单公式成本是两种核算视图，不重复相加。整单有缺口时仅用于内部草稿。'
+  const scopeText = packaging ? '单件与整单来自同一份公式成本明细：零件归集 + 项目级费用 = 整单成本，整单不再叠加零件合计。'
     : '零件合计是“料工费加起来多少”；整机成本已含零件成本，是对外的口径。';
   const finalLabel = packaging ? (packaging.has_gaps || packaging.stale || !packaging.built
     ? '包装整单部分成本（内部草稿）' : '包装整单成本') : '整机成本（对外口径）';
   let html = `<section class="inline-card"><div class="inline-card-title">汇总</div>`
-    + `<div class="inline-hint">两个数回答的不是同一个问题，<strong>不要相加</strong>：`
+    + `<div class="inline-hint">`
     + `${esc(scopeText)}</div>`
     + `<div class="inline-cost-table-wrap"><table class="inline-cost-table"><thead><tr>`
-    + `<th>口径</th><th>材料</th><th>人工</th><th>制造费用</th><th>加工费用</th><th>合计</th>`
+    + (packaging ? `<th>口径</th><th>材料</th><th>人工</th><th>其他费用</th><th>合计</th>`
+      : `<th>口径</th><th>材料</th><th>人工</th><th>制造费用</th><th>加工费用</th><th>合计</th>`)
     + `</tr></thead><tbody>`
     + `<tr><td>零件成本合计（${counts.parts_costed || 0}/${counts.parts || 0} 件）</td>`
-    + ['material', 'labor', 'overhead', 'machining', 'total']
+    + (packaging ? ['material', 'labor', 'others', 'total'] : ['material', 'labor', 'overhead', 'machining', 'total'])
         .map(key => `<td><span class="number">${crMoney(partsTotal[key])}</span></td>`).join('')
     + `</tr><tr class="cr-final"><td><b>${esc(finalLabel)}</b></td>`
-    + ['material', 'labor', 'overhead', 'machining', 'total']
+    + (packaging ? ['material', 'labor', 'others', 'total'] : ['material', 'labor', 'overhead', 'machining', 'total'])
         .map(key => `<td><span class="number">${crMoney(final[key])}</span></td>`).join('')
     + `</tr></tbody></table></div>`;
-  const coefficients = final.coefficients || {};
+  if (packaging) {
+    html += `<div class="inline-hint">成本版本：${esc(crData.estimate_id || '未测算')} · 报价批量 ${esc(packaging.quote_quantity || '—')}</div>`
+      + `<div class="inline-row"><b>项目级费用（未归集至零件）</b>${crPackagingBreakdown(crData.project_expenses || {})}</div>`
+      + `<div class="inline-row"><b>整单其他费用明细</b>${crPackagingBreakdown(final)}</div>`;
+    if (crData.reconciled === false) html += `<div class="inline-warn">成本明细与总额未对齐，暂不能确认：${esc((crData.reconciliation_errors || []).join('、'))}</div>`;
+  }
+  const coefficients = packaging ? {} : final.coefficients || {};
   if (coefficients.labor) {
     html += `<div class="inline-hint">口径：材料逐项累加；人工/制费/加工由材料成本按固定系数推导`
       + `（材料 ÷ 1.13 ÷ 0.791 × ((1-0.791) × 0.3556 / 0.1778 / 0.0944)`
@@ -612,6 +631,8 @@ function crAskProceed(why, options = {}) {
    只判前置条件，不含 busy；页内提示与左侧动作快照的 run() 共用这一份，两处不漂移。 */
 function crConfirmBlocker() {
   if (crReadOnly()) return crReadOnlyWhy();
+  if (crData?.packaging_cost && crData.reconciled === false) return '成本明细与总额未对齐，请重新测算并核对';
+  if (crData?.packaging_cost?.stale) return '整单公式成本已过期，请重算';
   const counts = crData?.counts || {};
   if (!counts.parts) return '还没有零件可以确认，请先完成成本测算';
   if ((counts.missing || []).length) return `还有 ${counts.missing.length} 个零件没算成本`;
@@ -672,6 +693,13 @@ function crRenderActions() {
   // 确认按钮的悬浮原因与左侧动作快照共用同一份判定（crConfirmBlocker）。
   const confirmBtn = $cr('crConfirm');
   if (confirmBtn) confirmBtn.title = crConfirmBlocker() || '确认成本后，三个去向都以确认过的数为准';
+  if (crData?.packaging_cost && ['parts','assembly'].includes(crTab)) {
+    host.innerHTML = `<button type="button" class="inline-action primary start-parse-btn" id="crRunLedger" ${crBusy ? 'disabled' : ''}>`
+      + (crBusy ? `<span class="parse-spinner" aria-hidden="true"></span><span>测算中…</span>` : '刷新公式成本账')
+      + `</button><span class="ai-hint">一次公式测算同时更新单件与整单；按库内价格与费率，不调用模型计算金额。</span>`;
+    $cr('crRunLedger').onclick = () => crRunPackagingLedger();
+    return;
+  }
   if (crTab === 'parts') {
     const missing = (crData?.counts?.missing || []).length;
     host.innerHTML =
@@ -708,6 +736,7 @@ function crRender() {
                       total: crRenderTotal };
   document.querySelectorAll('#crTabs [data-cr-tab]').forEach(button => {
     button.classList.toggle('active', button.dataset.crTab === crTab);
+    if (button.dataset.crTab === 'assembly') button.textContent = crData?.packaging_cost ? '4.2 整单成本' : '4.2 组装成本';
   });
   $cr('crBody').innerHTML = renderers[crTab]();
   const packagingCost = crData?.packaging_cost;
@@ -974,11 +1003,7 @@ async function crSendToFinance() {
 /* --------------------------------------------------------------- 测算 */
 async function crRunPart(partId, quantity) {
   if (crData?.packaging_cost) {
-    quantity = Number($cr('crQuantity')?.value || crData.quote_quantity);
-    if (!Number.isFinite(quantity) || quantity <= 0) {
-      crToast('请先填写真实报价批量，不能把单盒用量1当作报价数量。', true);
-      return false;
-    }
+    return crRunPackagingLedger();
   }
   if (crBusy) return false;
   crBusy = true;
@@ -1030,6 +1055,7 @@ async function crRunPart(partId, quantity) {
  *  遇到「P-002 失败 → P-003~P-005 连试都不试，只能一个个点」。
  *  `onlyIds` 给定时只跑这些零件（「仅重试失败项」复用同一份逻辑，不重算已成功件）。 */
 async function crRunParts(onlyMissing = false, onlyIds = null) {
+  if (crData?.packaging_cost) return crRunPackagingLedger();
   const wanted = (Array.isArray(onlyIds) && onlyIds.length)
     ? new Set(onlyIds.map(id => String(id))) : null;
   const rows = (crData?.parts || []).filter(row =>
@@ -1060,11 +1086,11 @@ async function crRunAssembly() {
   if (crBusy) return false;
   crBusy = true;
   crRender();
-  const label = '组装成本';
+  const label = crData?.packaging_cost ? '包装公式整单成本' : '组装成本';
   // 用户点按钮触发：先出用户气泡，再出执行卡。
-  if (typeof crUserSay === "function") crUserSay('测算整机组装成本。');
-  const card = crCard('组装成本');
-  crStatus('组装成本测算中…');
+  if (typeof crUserSay === "function") crUserSay(crData?.packaging_cost ? '刷新同一份包装公式成本账，更新单件与整单成本。' : '测算整机组装成本。');
+  const card = crCard(label);
+  crStatus(`${label}测算中…`);
   let taskKey = 'cost-assembly';
   try {
     const submitted = await api(crUrl('/assembly'), { method: 'POST' });
@@ -1072,9 +1098,10 @@ async function crRunAssembly() {
     crPublishTask('task-progress', { taskId: taskKey, label: label, status: 'running',
                                      progress: '整机成本已提交，正在测算…' });
     crData = await crPollTask(taskKey, card, label);
-    card.done(true);
-    crStatus('组装成本已测算');
-    crPublishTask('task-completed', { taskId: taskKey, label: label, status: 'succeeded' });
+    const partial = Boolean(crData?.packaging_cost && !crData.ready);
+    card.done(partial ? 'partial' : true);
+    crStatus(partial ? '公式成本已生成，但存在过期、缺失或对账问题，请查看明细。' : `${label}已测算`);
+    crPublishTask(partial ? 'task-partial' : 'task-completed', { taskId: taskKey, label: label, status: partial ? 'partial' : 'succeeded' });
     return true;
   } catch (error) {
     const interrupted = crTaskInterrupted(error);
@@ -1093,7 +1120,24 @@ async function crRunAssembly() {
   }
 }
 
+async function crRunPackagingLedger() {
+  if (crBusy) return false;
+  if (await crSaveNote() === false) {
+    const message = '无法保存核算输入，未提交成本测算';
+    crPublishTask('task-failed', {message, status:'failed', error:message});
+    return {attempted:0, succeeded:0, failed:1, failures:[{message}], skipped:0};
+  }
+  const done = await crRunAssembly();
+  const failures = (crData?.counts?.missing || []).map(id => ({id, part_id:id, message:'当前成本账没有有效明细'}));
+  globalThis.__techCostFailures = failures;
+  // 不切换用户当前页签；同一账重算一次，当前明细刷新即可。
+  crRender();
+  return {attempted:crData?.counts?.parts || 0, succeeded:done ? crData?.counts?.parts_costed || 0 : 0,
+    failed:failures.length || (done ? 0 : 1), failures, skipped:0};
+}
+
 async function crRunAll() {
+  if (crData?.packaging_cost) return crRunPackagingLedger();
   await crSaveNote();
   crSay('一键测算全部成本：先把每个零件算出来，再算整机（它要引用零件的单件成本）。本步不联网。');
   const summary = await crRunParts(false);
@@ -1125,6 +1169,7 @@ async function crRunAll() {
 
 /** 仅重试失败项：只把上一轮失败的零件交给同一份逐件链路，已成功件不重跑（不重复计费）。 */
 async function crRetryFailed() {
+  if (crData?.packaging_cost) return crRunPackagingLedger();
   const remembered = globalThis.__techCostFailures || [];
   const ids = remembered.map(item => String(item.id || item.part_id || '')).filter(Boolean);
   if (!ids.length) {
@@ -1188,6 +1233,13 @@ async function crConfirmCost(waiver = null) {
 }
 
 async function crSaveNote() {
+  if (crData?.packaging_cost) {
+    const quantity = Number($cr('crQuantity').value);
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      crToast('请填写真实的正整数报价数量，不能把缺失批量默认成1。', true);
+      return false;
+    }
+  }
   try {
     crData = await api(crUrl(''), {
       method: 'PUT',
@@ -1197,7 +1249,8 @@ async function crSaveNote() {
       }),
     });
     crStatus('说明已保存');
-  } catch (error) { crToast(error.message || '保存失败', true); }
+    return true;
+  } catch (error) { crToast(error.message || '保存失败', true); return false; }
 }
 
 /* --------------------------------------------------------------- 模型设置 */

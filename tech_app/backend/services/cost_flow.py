@@ -301,9 +301,22 @@ def cost_review_ctx(project_id: str):
 def _ready(project_id: str):
     """三个去向动作的共同前置：成本得先算齐并确认。"""
     ir, plan, review = cost_review_ctx(project_id)
+    _assert_packaging_ledger(project_id)
     if not review.confirmed:
         raise CostFlowError("请先点「确认成本」：三个去向都以确认过的成本为准")
     return ir, plan, review
+
+
+def _assert_packaging_ledger(project_id):
+    requirement = store.load_requirement(project_id) or {}
+    if (requirement.get('data') or {}).get('industry') != 'packaging':
+        return
+    from . import packaging_cost_ledger
+    view = packaging_cost_ledger.load(project_id)
+    if not view['reconciled']:
+        raise CostFlowError('包装成本明细与总额未对齐，不能确认或发送，请重新测算并核对')
+    if view['packaging_cost'].get('stale'):
+        raise CostFlowError('包装公式成本已过期，请重新测算')
 
 
 def _record_action(project_id: str, review, kind: str, label: str, detail: str,
@@ -320,6 +333,11 @@ def save_note(project_id: str, user: dict, *, note: str = "", quantity: int = 1)
     review.note = note
     cost_review.save_review(project_id, review, user.get("username", "system"))
     qty = max(1, int(quantity or 1))
+    requirement = store.load_requirement(project_id) or {}
+    if (requirement.get('data') or {}).get('industry') == 'packaging':
+        if (requirement['data'].get('quote_quantity') != qty):
+            requirement = dict(requirement, data=dict(requirement['data'], quote_quantity=qty))
+            store.save_requirement(project_id, requirement, author=user.get('username', 'system'))
     if plan.quantity != qty:
         plan.quantity = qty
         integration.save_plan(project_id, plan, user.get("username", "system"))
@@ -339,6 +357,7 @@ def confirm_review(project_id: str, user: Optional[dict] = None,
       （`review.gaps` / `review.cost_waiver`），事后查得出是谁在什么时候放的行。
     """
     ir, plan, review = cost_review_ctx(project_id)
+    _assert_packaging_ledger(project_id)
     data = cost_review.summarize(project_id, ir, plan)
     gaps = cost_review.confirm_gaps(project_id, ir, plan, data)
     if not gaps["parts"]:
