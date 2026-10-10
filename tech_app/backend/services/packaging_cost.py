@@ -2802,6 +2802,8 @@ def build_cost(project_id: str, requirement_no: str = "", actor: Any = None, *,
                                            scenario=scenario, actor=actor))
     da_repo.save_packaging_cost(cost["project_id"], cost["requirement_no"],
                                 cost["scenario_code"], cost, cost["items"])
+    from . import wine_poc
+    wine_poc.sync_material_costs(project_id, cost)
     store.audit(project_id, "workflow:packaging_cost_rebuilt",
                 {"requirement_no": cost["requirement_no"], "scenario_code": cost["scenario_code"],
                  "total_cost": cost["total_cost"], "has_gaps": cost["has_gaps"],

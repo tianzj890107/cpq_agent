@@ -121,9 +121,9 @@ def _part_rows(project_id: str, ir: Optional[DesignIR]) -> List[dict]:
     for part in (ir.parts if ir else []):
         if packaging:
             conclusion = packaging_parts.load_part_cost(project_id, part.part_id) or {}
-            current_hash = business_doc.get("business_parts_hash")
-            saved = (conclusion.get("analysis") if current_hash and
-                     conclusion.get("business_parts_hash") == current_hash else None)
+            from . import packaging_conclusions
+            valid = packaging_conclusions.usable(project_id, conclusion, business_doc)
+            saved = conclusion.get("analysis") if valid else None
         else:
             saved = store.load_cost(project_id, part.part_id)
         if packaging:
@@ -152,6 +152,7 @@ def _part_rows(project_id: str, ir: Optional[DesignIR]) -> List[dict]:
             "cost_scope": "material_only" if packaging else "part",
             "quantity": quantity,
             "has_cost": bool(saved and (saved.get("items") or [])),
+            "cost_stale": bool(packaging and conclusion and not valid),
             "item_count": len((saved or {}).get("items") or []),
             "breakdown": breakdown,
             "unit_cost": round(unit, 2),

@@ -498,8 +498,8 @@ function crRenderParts() {
       + (row.open_questions ? `<small class="ai-hint">${row.open_questions} 项待确认</small>` : '')
       + `</td><td>×${row.quantity}</td>`
       + `<td class="cr-breakdown">${crBreakdownRow(row.breakdown)}</td>`
-      + `<td><span class="number">${crMoney(row.unit_cost)}</span></td>`
-      + `<td><span class="number">${crMoney(row.subtotal)}</span></td>`
+      + `<td><span class="number">${row.has_cost ? crMoney(row.unit_cost) : (row.cost_stale ? '待重算' : '待测算')}</span></td>`
+      + `<td><span class="number">${row.has_cost ? crMoney(row.subtotal) : '—'}</span></td>`
       + `<td><button type="button" class="inline-action" data-cr-part="${crAttr(row.id)}"`
       + ` data-cr-qty="${row.quantity}" ${crBusy ? 'disabled' : ''}>`
       + `${row.has_cost ? '重算' : '测算'}</button></td></tr>`;

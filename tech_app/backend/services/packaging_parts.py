@@ -4524,7 +4524,24 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
         ids = [_text(item) for item in (selected.get("component_ids") or []) if _text(item)]
     selected_entities = set(selected.get('entity_ids') or []) if selected_id else {
         str(eid) for cid in ids for eid in (components.get(cid) or {}).get('entity_ids') or []}
-    resolve_ordered_geometry_claim(record,wanted,ids,selected_entities)
+    overlap_codes = []
+    if source == 'manual':
+        for other in record.get('business_parts') or []:
+            binding = other.get('geometry_binding') or {}
+            if other.get('business_part_code') == wanted or binding.get('status') not in ('bound', 'partial'):
+                continue
+            if (selected_entities.intersection(binding.get('entity_ids') or [])
+                    or set(ids).intersection(binding.get('component_ids') or [])):
+                overlap_codes.append(other['business_part_code'])
+    else:
+        for other in record.get('business_parts') or []:
+            binding = other.get('geometry_binding') or {}
+            if (other.get('business_part_code') != wanted and binding.get('bound_by') == 'manual'
+                    and binding.get('status') in ('bound', 'partial')
+                    and (selected_entities.intersection(binding.get('entity_ids') or [])
+                         or set(ids).intersection(binding.get('component_ids') or []))):
+                raise ValueError('candidate_entities_already_assigned_to_another_part')
+        resolve_ordered_geometry_claim(record,wanted,ids,selected_entities)
     for row in (record.get("business_parts") or []):
         if not isinstance(row, dict) or _text(row.get("business_part_code")) != wanted:
             continue
@@ -4575,6 +4592,7 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
                            candidate_confidence_percent(selected) / 100.0
                            if status == "bound" and source == "auto" else 0.0),
             "reasons": reasons, "bound_by": source,
+            "overlap_part_codes": overlap_codes,
             "bound_at": "" if source == "auto" else _stamp(),
             "rule_id": BUSINESS_BINDING_RULE_ID, "geometry_component_ref": known,
             "candidate_id": selected_id, "size_confirmed": False,
@@ -4629,6 +4647,9 @@ def candidate_confidence_percent(candidate: Any) -> int:
     score += 0.20 if item.get("dimension_spatial") is True else 0
     score += 0.10 if item.get("geometry_status") == "supported" else 0
     reasons = item.get('evidence_reasons') or []
+    if (len(components) > 1 and item.get('geometry_status') == 'supported'
+            and {'cut_lines_complementary', 'same_view', 'same_boundary_role'}.issubset(reasons)):
+        score += 0.15  # 多部分需互补刀线及同方案证据，不能只因范围大而加分。
     score += 0.20 if 'closed_outline_enclosure' in reasons else 0
     score += 0.15 if 'complete_closed_outline' in reasons else 0
     score -= 0.30 if 'internal_fragment_only' in reasons else 0
@@ -4667,16 +4688,22 @@ def auto_bind_business_candidates(doc: Any) -> Dict[str, Any]:
         ranked = sorted(enumerate(candidates), key=lambda pair: (
             -candidate_confidence_percent(pair[1]),
             _text(pair[1].get("id") or pair[1].get("candidate_id")), pair[0]))
-        best = ranked[0][1]
-        proposals.append((len(proposals), code, best))
+        proposals.append((len(proposals), code, [pair[1] for pair in ranked]))
     # 按图纸阅读顺序处理归属；证据分只决定同一件内部的候选排序。
     order = {row.get('business_part_code'): (_num(row.get('sequence_no')) or index+1, index)
              for index,row in enumerate(record.get('business_parts') or []) if isinstance(row,dict)}
-    for _, code, best in sorted(proposals, key=lambda item: order[item[1]]):
+    for _, code, choices in sorted(proposals, key=lambda item: order[item[1]]):
+        best = choices[0]
         candidate_id = _text(best.get("id") or best.get("candidate_id"))
         score = candidate_confidence_percent(best)
         reason = "highest_candidate_has_no_cad_evidence" if score <= 0 else ""
+        accepted = False
         if not reason:
+          for best in choices:
+            candidate_id = _text(best.get("id") or best.get("candidate_id"))
+            score = candidate_confidence_percent(best)
+            if score <= 0:
+                continue
             try:
                 proposed = set_geometry_binding(
                     record, code, best.get("component_ids") or [], bound_by="auto",
@@ -4685,10 +4712,13 @@ def auto_bind_business_candidates(doc: Any) -> Dict[str, Any]:
                                      if isinstance(row, dict) and _text(row.get("business_part_code")) == code), {})
                 if (proposed_row.get("geometry_binding") or {}).get("status") == "bound":
                     record = proposed
-                    continue
+                    accepted = True
+                    break
                 reason = "highest_candidate_geometry_incomplete"
             except ValueError as exc:
                 reason = str(exc)
+        if accepted:
+            continue
         current = next((row for row in (record.get("business_parts") or [])
                         if isinstance(row, dict) and _text(row.get("business_part_code")) == code), None)
         if current is not None:

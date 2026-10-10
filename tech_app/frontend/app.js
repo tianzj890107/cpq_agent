@@ -3983,6 +3983,8 @@ function packagingCandidateConfidence(candidate) {
   if (item.dimension_spatial === true) score += 0.20;
   if (item.geometry_status === "supported") score += 0.10;
   const evidenceReasons = item.evidence_reasons || [];
+  if ((item.component_ids || []).length > 1 && item.geometry_status === 'supported'
+      && ['cut_lines_complementary', 'same_view', 'same_boundary_role'].every(reason => evidenceReasons.includes(reason))) score += 0.15;
   if (evidenceReasons.includes('closed_outline_enclosure')) score += 0.20;
   if (evidenceReasons.includes('complete_closed_outline')) score += 0.15;
   if (evidenceReasons.includes('internal_fragment_only')) score -= 0.30;
@@ -4197,6 +4199,34 @@ function packagingCandidateGalleryMarkup(candidates, selectedIndex, plan) {
     }).join('') + '</div></details>';
 }
 
+async function loadPackagingBusinessProcessSummary(wanted) {
+  const project = currentProject;
+  const host = $('packagingSavedProcess');
+  if (!host) return;
+  host.textContent = '正在读取已保存工艺…';
+  try {
+    const response = await fetch(`${API}/api/projects/${encodeURIComponent(project)}/requirement/packaging-business-parts/${encodeURIComponent(wanted)}/process`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    if (project !== currentProject || $('packagingSavedProcess') !== host) return;
+    const steps = (data.plan || {}).steps || [];
+    if (data.business_stale || data.stale) {
+      host.textContent = '已保存工艺与当前零件输入不一致，待重算；旧结果保留。';
+    } else if (!steps.length) {
+      host.textContent = '暂无已保存制造工艺；外购件无需制造工序。';
+    } else {
+      host.innerHTML = '<details open><summary>已保存工艺 · ' + steps.length + ' 道</summary>'
+        + steps.map((step, index) => '<div class="packaging-part-note">' + esc(String(step.step_no || index + 1))
+          + ' · ' + esc(String(step.name || step.operation_name || '未命名工序'))
+          + (step.note ? '：' + esc(String(step.note)) : '') + '</div>').join('')
+        + '</details><button type="button" class="part-row-action" id="packagingSavedProcessOpen">查看工艺详情</button>';
+      $('packagingSavedProcessOpen').addEventListener('click', () => packagingBusinessPartProcessByAuthority(wanted));
+    }
+  } catch (error) {
+    if (project === currentProject && $('packagingSavedProcess') === host) host.textContent = '读取工艺失败，请重试：' + String(error.message || error);
+  }
+}
+
 function openPackagingBusinessPart(code, requestedCandidateIndex) {
   const wanted = String(code || "");
   const rows = packagingBusinessPartRows(currentPackagingBusinessParts);
@@ -4304,9 +4334,9 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
           + ` aria-label="切换候选图形">`
           + rankedCandidates.map(entry => {
             const ownership = packagingCandidateOwnership(row,entry.candidate,currentPackagingBusinessParts);
-            const hint = ownership.blocked ? ` · 前件已选：${ownership.owners.join('、')}`
-              : ownership.displaces.length ? ` · 将接管后件：${ownership.displaces.join('、')}` : '';
-            return `<option value="${entry.index}"${entry.index === candidateIndex ? " selected" : ""}${ownership.blocked ? ' disabled' : ''}>`
+            const overlaps = [...ownership.owners, ...ownership.displaces];
+            const hint = overlaps.length ? ` · 图元重叠（可手动选用）：${overlaps.join('、')}` : '';
+            return `<option value="${entry.index}"${entry.index === candidateIndex ? " selected" : ""}>`
               + `候选 ${entry.index + 1} · ${entry.confidence}%${esc(hint)} · ${esc(packagingCandidateSourceText(entry.candidate))}</option>`;
           }).join("")
           + `</select>` : "")
@@ -4357,7 +4387,9 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
             .find(item => String(item.business_part_code || "") === wanted) || {};
           const selectedBinding = selectedRow.geometry_binding || {};
           status(selectedBinding.status === "bound"
-            ? "候选归属已保存；尺寸仍须核对图纸标注。"
+            ? (selectedBinding.overlap_part_codes?.length
+              ? `候选归属已保存；与 ${selectedBinding.overlap_part_codes.join('、')} 图元重叠，其他选择保持不变。`
+              : "候选归属已保存；尺寸仍须核对图纸标注。")
             : "候选已记录，但图元不完整，尚不能确认为完整零件。", true);
         } catch (error) {
           openPackagingBusinessPart(wanted);
@@ -4485,7 +4517,9 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
         + ` value="${esc(String(confirmedSize.note || ""))}" aria-label="尺寸核对依据"> `
         + `<button id="packagingConfirmSize" class="part-row-action" type="button">确认尺寸</button></div>`
       : "";
-    actions.innerHTML = downstream + note + sizeAction + packagingSectionsMarkup(row,currentPackagingBusinessParts,canEditCandidates);
+    actions.innerHTML = downstream + note + sizeAction + packagingSectionsMarkup(row,currentPackagingBusinessParts,canEditCandidates)
+      + '<section id="packagingSavedProcess" class="packaging-part-note" aria-live="polite"></section>';
+    loadPackagingBusinessProcessSummary(wanted);
     bindPackagingSectionsEditor(row,canEditCandidates);
     const confirmSize = $("packagingConfirmSize");
     if (confirmSize) confirmSize.addEventListener("click", async () => {
@@ -4515,7 +4549,9 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
     const run = mode => {
       const button = $(mode === "cost" ? "packagingBusinessPartCost" : "packagingBusinessPartProcess");
       if (button) button.addEventListener("click", () => {
-        packagingBusinessPartAnalyze(mode, target.part_code);
+        // 当前选中的是业务零件，读取/生成必须使用同一个业务编码，不能跳到碎片。
+        if (mode === 'process') packagingBusinessPartProcessByAuthority(wanted);
+        else packagingBusinessPartAnalyze(mode, target.part_code);
       });
     };
     if (target.ok && drawingSizeReady) {

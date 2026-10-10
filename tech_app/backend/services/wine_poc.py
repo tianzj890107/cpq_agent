@@ -65,3 +65,38 @@ def part_bom_row(row, doc):
             'size_source_json':__import__('json').dumps({'kind':value.get('source'),'poc_demo':True},ensure_ascii=False),
             'status':'computed','missing_variables':[],'is_optional':int(is_external_part(row)),
             'source':'poc_demo_reference'}
+
+
+def sync_material_costs(project_id, result):
+    """Persist per-part projections only after rebuilding the same POC catalog."""
+    from ..storage import store
+    from ..models.cost import CostAnalysis
+    from . import packaging_parts, cost
+    req = store.load_requirement(project_id) or {}
+    doc = packaging_parts.load_business_parts(project_id) or {}
+    if (req.get('data') or {}).get('poc_demo') is not True or doc.get('poc_demo') is not True:
+        return 0
+    provenance = result.get('source_versions') or result.get('provenance') or {}
+    pinned = result.get('business_parts_hash') or provenance.get('business_parts_hash')
+    if pinned != doc.get('business_parts_hash') or result.get('has_gaps') or result.get('stale'):
+        return 0
+    prepared = []
+    for row in doc.get('business_parts') or []:
+        code = row['business_part_code']
+        lines = [item for item in result.get('items') or []
+                 if item.get('part_code') == code and item.get('cost_category') == 'material']
+        if not lines or any(item.get('amount') is None for item in lines):
+            return 0
+        analysis = CostAnalysis(part_id=code, part_name=row['name'],
+            quantity=int(result.get('quote_quantity') or 1),
+            summary='仅材料费，来自同版整单公式；POC非生产报价',
+            items=[{'category': 'material', 'name': row['name'], 'quantity': 1,
+                    'unit': '件', 'unit_price': item['amount'], 'amount': item['amount'],
+                    'source': 'POC整单公式材料投影'} for item in lines]).model_dump()
+        prepared.append({'part_code': code, 'parts_id': '', 'analysis': analysis,
+            'summary': cost.compute(analysis), 'business_parts_id': doc['business_parts_id'],
+            'business_parts_hash': doc['business_parts_hash'], 'poc_demo': True,
+            'source': {'cost_estimate_id': result.get('estimate_id')}})
+    for payload in prepared:
+        packaging_parts.save_part_cost(project_id, payload)
+    return len(prepared)

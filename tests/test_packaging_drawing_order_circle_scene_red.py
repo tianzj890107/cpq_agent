@@ -59,7 +59,8 @@ class DrawingOrderCircleSceneTest(unittest.TestCase):
 
     def test_earlier_can_take_later_candidate_and_invalidates_later_size(self):
         before = ownership_doc()
-        changed = parts.set_geometry_binding(before, 'first', [], candidate_id='whole')
+        before['business_parts'][1]['geometry_binding']['bound_by'] = 'auto'
+        changed = parts.set_geometry_binding(before, 'first', [], candidate_id='whole', bound_by='auto')
         first, last = changed['business_parts']
         self.assertEqual(['circle'], first['geometry_binding']['entity_ids'])
         self.assertEqual('unbound', last['geometry_binding']['status'])
@@ -75,7 +76,7 @@ class DrawingOrderCircleSceneTest(unittest.TestCase):
         document['business_parts'][0]['sequence_no'] = 1
         document['business_parts'][1]['sequence_no'] = 2
         with self.assertRaisesRegex(ValueError, 'candidate_entities_already_assigned'):
-            parts.set_geometry_binding(document, 'first', ['c'])
+            parts.set_geometry_binding(document, 'first', ['c'], bound_by='auto')
 
     def test_section_editor_uses_same_earlier_owner_priority(self):
         from tech_app.backend.services import packaging_sections

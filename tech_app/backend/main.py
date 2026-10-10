@@ -9153,6 +9153,10 @@ def _packaging_part_conclusion_version(pid: str, record: Any) -> Dict[str, Any]:
     business = packaging_parts.load_business_parts(pid)
     business_reason = packaging_parts.business_binding_stale_reason(
         payload.get("business_parts_id"), (business or {}).get("business_parts_id"))
+    if business_reason == PACKAGING_PART_BUSINESS_STALE_REASON:
+        from .services import packaging_conclusions
+        if packaging_conclusions.usable(pid, payload, business or {}):
+            business_reason = ""
     return {"parts_id": stored, "stale": reason == PACKAGING_PART_STALE_REASON,
             "stale_reason": reason,
             "business_part_code": str(payload.get("business_part_code") or ""),
