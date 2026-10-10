@@ -2,6 +2,14 @@ import unittest
 from tech_app.backend.services import wine_poc
 
 class WinePocTests(unittest.TestCase):
+    def test_demo_inputs_are_accepted_without_changing_geometry(self):
+        from tech_app.backend.services import packaging_parts
+        row={'business_part_code':'A','name':'纸','reference':{},'geometry_binding':{'status':'ambiguous'},
+             'poc_inputs':{'mock':True,'length_mm':200,'width_mm':80,'material_text':'225g铜版纸'}}
+        adapted=packaging_parts.verified_business_part_input_row(row,{'derived_from_drawing':True,'poc_demo':True})
+        self.assertTrue(packaging_parts.business_process_inputs(adapted)['ok'])
+        self.assertEqual('ambiguous',row['geometry_binding']['status'])
+
     def test_no_demo_opt_in_is_rejected(self):
         with self.assertRaises(ValueError):
             wine_poc.prepare_rows({'business_parts':[]},[],enabled=False)

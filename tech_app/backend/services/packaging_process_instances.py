@@ -52,7 +52,7 @@ def expand(records):
                       'usage_qty':group.get('quantity',record.get('usage_qty',1)),
                       'usage_assumed':bool(record.get('usage_assumed')),
                       'cost_parameters':parameters,'standard_seconds':source.get('standard_seconds'),
-                      'time_source':'provided_standard' if source.get('standard_seconds') is not None else 'unknown',
+                      'time_source':source.get('time_source') or ('provided_standard' if source.get('standard_seconds') is not None else 'unknown'),
                       'needs_standard_time':False,'workstation':source.get('workstation') or '',
                       'work_content':source.get('description') or name,'parallel_ok':0,
                       'source':record.get('process_origin') or 'model_recommendation',

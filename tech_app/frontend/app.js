@@ -3309,6 +3309,7 @@ function packagingBusinessPartDownstreamTarget(row, partsDoc) {
 function packagingBusinessPartSizeCostTarget(row, partsDoc) {
   const part = (row && typeof row === "object") ? row : {};
   const code = String(part.business_part_code || "").trim();
+  if (code && part.poc_inputs?.mock && Number(part.poc_inputs.length_mm) > 0 && Number(part.poc_inputs.width_mm) > 0) return {ok:true,code:'',part_code:code,message:'POC参照输入，非CAD确认尺寸'};
   // 行上的对照资料块（Spec `packaging-customer-workbook-is-a-reference-not-an-input.md` §2.4）：
   // 新写入用 `reference`，老文档是那个旧键；node 单函数直跑看不到兄弟函数，这里自带同值兜底。
   const block = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
@@ -3350,6 +3351,7 @@ function packagingBusinessPartSizeCostTarget(row, partsDoc) {
 function packagingBusinessPartProcessTarget(row, partsDoc) {
   const part = (row && typeof row === "object") ? row : {};
   const code = String(part.business_part_code || "").trim();
+  if (code && part.poc_inputs?.mock && Number(part.poc_inputs.length_mm) > 0 && Number(part.poc_inputs.width_mm) > 0) return {ok:true,code:'',part_code:code,message:'POC参照输入，非CAD确认尺寸'};
   // 行上的对照资料块（Spec `packaging-customer-workbook-is-a-reference-not-an-input.md` §2.4）：
   // 新写入用 `reference`，老文档是那个旧键；node 单函数直跑看不到兄弟函数，这里自带同值兜底。
   const block = value => (value && typeof value === "object" && !Array.isArray(value)) ? value : null;
@@ -3522,6 +3524,7 @@ function packagingMmText(value) {
 }
 
 function packagingBusinessPartSizeText(row) {
+  if (row?.poc_inputs?.mock && Number(row.poc_inputs.length_mm) > 0 && Number(row.poc_inputs.width_mm) > 0) return `${Number(row.poc_inputs.length_mm).toFixed(2)} × ${Number(row.poc_inputs.width_mm).toFixed(2)} mm`;
   // node 单函数直跑看不到兄弟函数（同 `## 492` 的"注入 + 同值兜底"口径）：这里带一份同值兜底。
   const mm = value => {
     if (value === null || value === undefined || value === "") return "—";
@@ -3553,6 +3556,7 @@ function packagingBusinessPartSizeText(row) {
 }
 
 function packagingBusinessPartSizeBasis(row) {
+  if (row?.poc_inputs?.mock) return 'POC演示参照尺寸，非本图确认；价格和工时含mock';
   const sections = Array.isArray(row && row.sections) ? row.sections : [];
   if (sections.length && sections.every(s => ['verified_cad_dimension', 'manual_confirmed_drawing'].includes((s.confirmed_size || {}).source))) return '尺寸有独立图纸证据';
   const reference = (row && (row.reference || row["author" + "ity"])) || {};

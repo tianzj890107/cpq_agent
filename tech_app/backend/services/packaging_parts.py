@@ -4759,6 +4759,11 @@ def verified_business_part_input_row(row: Any, doc: Any) -> Dict[str, Any]:
         return result
     binding = result.get("geometry_binding") if isinstance(result.get("geometry_binding"), dict) else {}
     if len(result.get('sections') or []) == 1 and binding.get('status') == 'bound':
+    if isinstance(doc, dict) and doc.get('poc_demo') is True and (result.get('poc_inputs') or {}).get('mock') is True:
+        result[REFERENCE_BLOCK_KEY] = {**business_part_reference_block(result), **result['poc_inputs'], 'size_quality':'poc_reference'}
+        result['sections'] = []  # POC按整件参照估算；原文档各组成保持不变。
+        result['sections_source'] = 'poc_aggregate_reference'
+        return result
         section = result['sections'][0]
         section_size = section.get('confirmed_size') or {}
         if (section_size.get('source') == 'verified_cad_dimension'
@@ -4935,6 +4940,8 @@ def _mm_text(value: Any) -> str:
     if number is None:
         return ""
     text = ("%.2f" % float(number)).rstrip("0").rstrip(".")
+    if quality == 'poc_reference' and (record.get('poc_inputs') or {}).get('mock') is True:
+        return ''
     return text or "0"
 
 
