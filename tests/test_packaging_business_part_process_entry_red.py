@@ -250,8 +250,13 @@ class CGuardrails(unittest.TestCase):
         # size-confirm PUT。两条都是明确的写入口，计数重指为 7。
         src = _source(APP_JS)
         # 多组成闭环 Spec 新增一个共用 sections 写入入口（组成与逐部分尺寸），其余冻结不变。
-        self.assertEqual(9, src.count("packaging-business-parts/"),
-                         "额外入口仅限本轮声明的 sections 写入")
+        # 2026-10-10：批量工艺入口复用两条既有业务件路由（已保存工艺展示 + 批量真实生成），
+        # 冻结按 Spec `packaging-batch-process-real-execution.md` 由 9 **重指**为 11 —— 与
+        # `test_packaging_business_part_{basis_in_panel,cost_by_authority_size,
+        # process_by_authority_route}_red` 的同一冻结逐字一致（重指≠放宽，多出来的两条
+        # 逐个点名，见下面对 /sections /geometry-binding /size-confirm /auto-bind-candidates 的精确断言）。
+        self.assertEqual(11, src.count("packaging-business-parts/"),
+                         "额外入口仅限本轮声明的 sections 写入与批量工艺复用")
         self.assertIn('/sections${suffix}',src)
         self.assertEqual(1, src.count("/geometry-binding"))
         self.assertEqual(2, src.count("/size-confirm"))  # 整件兼容 + 逐部分确认

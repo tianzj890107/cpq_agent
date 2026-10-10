@@ -267,7 +267,10 @@ class StageCardDedupRedTest(unittest.TestCase):
                       "库内依据 · 工艺库", "假设与待澄清", "报价必填参数完成度",
                       "零件间连接", "整机 BOM（单台用量）"):
             self.assertIn(title, self.ai_js, "2.2 的内容卡片被误删：%s" % title)
-        for title in ("零件成本（2.1 拆出来的每个零件）", "组装成本 · ", "汇总", "本步状态"):
+        # 2026-10-10：包装统一成本账（Spec `packaging-single-cost-ledger.md`）把组装卡片标题
+        # 改成条件文案 —— 包装项目显示「整单成本 · <方案>」，其余仍是「组装成本 · <方案>」。
+        # 卡片本身没被删，两个候选标题都必须还在（原断言写死 `组装成本 · ` 会假红）。
+        for title in ("零件成本（2.1 拆出来的每个零件）", "组装成本", "整单成本", "汇总", "本步状态"):
             self.assertIn(title, self.cr_js, "2.3 的内容卡片被误删：%s" % title)
         for js in (self.ai_js, self.cr_js):
             self.assertIn('class="inline-card"', js)

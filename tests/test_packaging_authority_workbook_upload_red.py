@@ -415,7 +415,10 @@ class DWiring(unittest.TestCase):
         # 2026-10-08：多组成闭环 Spec `packaging-multipart-business-part-complete.md` 新增共用
         # sections 写入与逐部分尺寸确认两个入口，计数精确重指为 9 / size-confirm 2（逐条点名，
         # 不是放宽）。
-        self.assertEqual(9, self.SOURCE.count("packaging-business-parts/"),
+        # 2026-10-10：批量工艺入口复用两条既有业务件路由（已保存工艺展示 + 批量真实生成），
+        # 按 Spec `packaging-batch-process-real-execution.md` 与上面点名的三个同一冻结一起
+        # 精确重指为 11（重指≠放宽）。
+        self.assertEqual(11, self.SOURCE.count("packaging-business-parts/"),
                          "新增入口只能是 sections、geometry-binding、size-confirm 与 auto-bind-candidates")
         self.assertIn('/sections${suffix}', self.SOURCE)
         self.assertEqual(1, self.SOURCE.count("/geometry-binding"))
