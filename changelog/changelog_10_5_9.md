@@ -1,5 +1,26 @@
 # 变更日志（10-5 ~ 10-9）
 
+## 555. `## 550~554` 的提交、双远端推送与 34 部署记录（10-10，本地）
+
+- 提交 `3a6c4b2`（`## 550~554 包装相似/借鉴工艺、参照件成本输入、图纸顺序与前端控件统一`），
+  入库 49 个文件：30 个既有文件改动 + 19 个新增（5 份 Spec、5 份红测、`packaging_manufacturing.py`、
+  `inspect_packaging_drawing.py`、2 份报告、证据截图 4 张、架构复盘第 11 篇）。
+  不入库未跟踪项不变：`拆分程序/`、`.~亿纬锂能DA梳理.xlsx`。
+- 提交前全量分片：`./open-claude/.venv/bin/python -W ignore scripts/run_tests_sharded.py --shards 8 --jobs 4`
+  → **`Ran=7174 failures=13 errors=0 skipped=28`**；13 条红集中在圆盘几何角色覆盖、图框零件环、
+  图元矩形、零件环计数与前端缓存版本校验，均为几何/前端在途项，已在提交信息里登记、不隐藏。
+- 双远端：GitHub `efe13fe..3a6c4b2`；GitLab 按 `## 545` 办法改问内网 DNS `172.16.99.114` 得到
+  `172.16.5.150`，以 `HostKeyAlias=gitlab.boulderaitech.com` 直连推送（未改 remote 配置、未写 hosts、未改凭据）。
+  三方一致 `3a6c4b2bdc2469e61d2aeb5b10fe399c024918f5`。
+- 34 部署：`bash scripts/deploy_34_bare.sh ytbz`，`efe13fe → 3a6c4b2`；`build.commit=3a6c4b2bdc24`、
+  8010 pid=`516690`、`/api/health` 200、`/` 200。自检：ODA 27.1 主转换器（酒盒 6711 实体/8 层、
+  圆盘 3457/32）；隔离端到端 `verdict=ok`（酒盒八步 8/8、零件 242、closed_ratio=0.603、可算 10/可挤出 10；
+  圆盘 441、closed_ratio=0.834、可算 133/可挤出 368；两条权威实样路线 confirmed），未写运行目录（81→81、0→0）。
+- 部署后核对：本批 67 项相关红测在 34 上 `Ran 67 ... OK`；`packaging_manufacturing.py` 与
+  `packaging_part_route_match.py` 已就位。
+- 注意：隔离自检数字随几何改动变化（酒盒 263→242、圆盘 312→441）；圆盘 441 与冻结期望 312 的差异
+  正是上述 13 条红里的一条，尚未收口，线上看到的是这一版。
+
 ## 554. 包装近期前端控件统一（10-10，本地）
 
 - 新增 `packaging-recent-frontend-consistency.md`；排模关联从无样式原生多选改为可展开复选网格、已选计数与默认回显，分组保存、不推导用量，保存中禁用、失败保留选择重试。沿用 inline-action 与系统蓝色。
