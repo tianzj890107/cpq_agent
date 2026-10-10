@@ -30,6 +30,7 @@ def run(pid):
             continue
         code=inputs.get('reference_code')
         lookup=cpq_process_routing.lookup(code,'') if code else {'status':'not_found','routes':[]}
+        lookup=json.loads(json.dumps(lookup,default=str))
         lookup['match_method']='exact_name'
         adapted=dict(row,reference={**row.get('reference',{}),'material_text':inputs['material_text'],
                                   'length_mm':inputs['length_mm'],'width_mm':inputs['width_mm']})
