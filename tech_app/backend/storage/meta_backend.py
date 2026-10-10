@@ -15,6 +15,8 @@ import json
 import os
 import threading
 import tempfile
+import copy
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -52,19 +54,64 @@ class JsonMetaBackend(MetaBackend):
         # 文件后端常用于单机部署；请求线程与异步任务会同时读写项目文档。
         # RLock 既避免审计追加丢失，也允许同一高层操作内部复用 _read/_write。
         self._lock = threading.RLock()
+        self._cache_lock = threading.Lock()
+        self._read_cache = OrderedDict()
+        self._cache_bytes = 0
+        self._cache_max_entries = 32
+        self._cache_max_bytes = 128 * 1024 * 1024
 
     def _dir(self, pid: str) -> Path:
         d = self.data_dir / pid
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def _read(self, path: Path) -> Optional[dict]:
-        if not path.exists():
+    def _read(self, path: Path, *, head: Optional[int] = None) -> Optional[dict]:
+        def independent(value):
+            if head is not None and isinstance(value, dict) and isinstance(value.get('items'), list):
+                value = {**value, 'items': value['items'][:head]}
+            return copy.deepcopy(value)
+        def signature():
+            try:
+                stat = path.stat()
+                return (stat.st_ino, stat.st_mtime_ns, stat.st_size)
+            except FileNotFoundError:
+                return None
+        key = str(path)
+        stamp = signature()
+        if stamp is None:
             return None
+        with self._cache_lock:
+            cached = self._read_cache.get(key)
+            if cached and cached[0] == stamp:
+                self._read_cache.move_to_end(key)
+                value = cached[1]
+            else:
+                value = None
+        if cached and cached[0] == stamp:
+            return independent(value)
+        # No global write lock around disk I/O, JSON parsing or copying. Writes
+        # use atomic replacement, so an open descriptor always sees a full file.
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            with path.open('r', encoding='utf-8') as stream:
+                stat = os.fstat(stream.fileno())
+                loaded_stamp = (stat.st_ino, stat.st_mtime_ns, stat.st_size)
+                value = json.load(stream)
+        except FileNotFoundError:
+            return None
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"本地数据文件损坏，无法读取：{path.name}") from exc
+        if signature() == loaded_stamp and loaded_stamp[2] <= self._cache_max_bytes:
+            with self._cache_lock:
+                previous = self._read_cache.pop(key, None)
+                if previous:
+                    self._cache_bytes -= previous[0][2]
+                self._read_cache[key] = (loaded_stamp, value)
+                self._cache_bytes += loaded_stamp[2]
+                while self._read_cache and (len(self._read_cache) > self._cache_max_entries
+                                           or self._cache_bytes > self._cache_max_bytes):
+                    _, removed = self._read_cache.popitem(last=False)
+                    self._cache_bytes -= removed[0][2]
+        return independent(value)
 
     def _write(self, path: Path, data) -> None:
         """原子替换 JSON，防止进程中断留下半个文件。"""
@@ -83,32 +130,32 @@ class JsonMetaBackend(MetaBackend):
                 os.unlink(temporary_name)
 
     def get_meta(self, pid: str) -> Optional[dict]:
-        with self._lock:
-            return self._read(self.data_dir / pid / "meta.json")
+        return self._read(self.data_dir / pid / "meta.json")
 
     def put_meta(self, pid: str, meta: dict) -> None:
         with self._lock:
             self._write(self._dir(pid) / "meta.json", meta)
 
     def get_doc(self, pid: str, kind: str) -> Optional[dict]:
-        with self._lock:
-            return self._read(self.data_dir / pid / f"{kind}.json")
+        return self._read(self.data_dir / pid / f"{kind}.json")
+
+    def get_doc_head(self, pid: str, kind: str, count: int = 1) -> Optional[dict]:
+        return self._read(self.data_dir / pid / f"{kind}.json", head=max(0, count))
 
     def put_doc(self, pid: str, kind: str, data: dict) -> None:
         with self._lock:
             self._write(self._dir(pid) / f"{kind}.json", data)
 
     def list_metas(self) -> List[dict]:
-        with self._lock:
-            out: List[dict] = []
-            if not self.data_dir.exists():
-                return out
-            for d in sorted(self.data_dir.iterdir(), reverse=True):
-                if d.is_dir():
-                    meta = self._read(d / "meta.json")
-                    if meta:
-                        out.append(meta)
+        out: List[dict] = []
+        if not self.data_dir.exists():
             return out
+        for d in sorted(self.data_dir.iterdir(), reverse=True):
+            if d.is_dir():
+                meta = self._read(d / "meta.json")
+                if meta:
+                    out.append(meta)
+        return out
 
     def append_audit(self, pid: str, entry: dict) -> None:
         with self._lock:
@@ -118,8 +165,7 @@ class JsonMetaBackend(MetaBackend):
             self._write(path, log)
 
     def list_audit(self, pid: str) -> List[dict]:
-        with self._lock:
-            return self._read(self.data_dir / pid / "audit.json") or []
+        return self._read(self.data_dir / pid / "audit.json") or []
 
     # 用户：本地用户表已退役。用户数据只有一份 —— 配置报价 CPQ 的 PG（cpq_wf），
     # 技术工艺只经 /auth/* 的 HTTP 通道取身份与名单。这里不再读写任何本地用户文件，

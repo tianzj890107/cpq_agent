@@ -1821,10 +1821,17 @@ async function runPackagingBusinessProcessBatch(project, ready, skipped) {
     forwardTaskDetail({...detail, log: detail.log.slice()});
   };
   const read = async (url, options) => {
-    const response = await fetch(url, options);
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data.message || `HTTP ${response.status}`));
-    return data;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30000);
+    try {
+      const response = await fetch(url, {...options, signal: controller.signal});
+      const data = await response.json();
+      if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data.message || `HTTP ${response.status}`));
+      return data;
+    } catch (error) {
+      if (error.name === 'AbortError') throw new Error('读取/提交超时，保留旧工艺；已提交任务状态待核对');
+      throw error;
+    } finally { clearTimeout(timer); }
   };
   let failures = 0;
   publish();
@@ -1834,6 +1841,9 @@ async function runPackagingBusinessProcessBatch(project, ready, skipped) {
       if (project !== currentProject) throw new Error('项目已切换，停止提交后续工艺任务');
       const base = `${API}/api/projects/${encodeURIComponent(project)}/requirement/packaging-business-parts/${encodeURIComponent(item.code)}/process`;
       try {
+        detail.status = 'running';
+        detail.progress = `${item.code}：正在读取已有工艺`;
+        detail.log.push(detail.progress); publish();
         const existing = await read(base);
         if (existing.plan?.steps?.length && !existing.business_stale && !existing.stale) {
           detail.log.push(`${item.code}：已有有效工艺，保留并跳过`);

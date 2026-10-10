@@ -9130,7 +9130,7 @@ PACKAGING_PART_STALE_REASON = "parts_reparsed"
 PACKAGING_PART_BUSINESS_STALE_REASON = "business_parts_reimported"
 
 
-def _packaging_part_conclusion_version(pid: str, record: Any) -> Dict[str, Any]:
+def _packaging_part_conclusion_version(pid: str, record: Any, business=None) -> Dict[str, Any]:
     """单件结论的版本七键：零件文档三键 + 业务部件清单四键。
 
     零件那三键见 Spec `packaging-parts-conclusion-version-readback.md` §2.2；业务那四键见
@@ -9148,9 +9148,9 @@ def _packaging_part_conclusion_version(pid: str, record: Any) -> Dict[str, Any]:
                 "business_part_code": "", "business_parts_id": "",
                 "business_stale": False, "business_stale_reason": ""}
     stored = str(payload.get("parts_id") or "")
-    current = packaging_parts.load_parts(pid) or {}
+    current = (packaging_parts.load_parts(pid) or {}) if stored else {}
     reason = packaging_parts.parts_stale_reason(stored, (current or {}).get("parts_id"))
-    business = packaging_parts.load_business_parts(pid)
+    business = packaging_parts.load_business_parts(pid) if business is None else business
     business_reason = packaging_parts.business_binding_stale_reason(
         payload.get("business_parts_id"), (business or {}).get("business_parts_id"))
     if business_reason == PACKAGING_PART_BUSINESS_STALE_REASON:
@@ -9556,7 +9556,7 @@ def get_packaging_business_part_process(pid: str, code: str,
     `assumptions` / `source` + 版本七键），另加这四键说清"这份工序是按什么尺寸、哪条路编的"。
     """
     _workflow_project(pid)
-    _packaging_business_part_row(pid, code)
+    loaded = _packaging_business_part_row(pid, code)
     record = packaging_parts.load_part_process(pid, code) or {}
     body = {"part_code": str(record.get("part_code") or code),
             "sections": record.get('sections') or [],
@@ -9571,7 +9571,7 @@ def get_packaging_business_part_process(pid: str, code: str,
             "size_source_ref": str(record.get("size_source_ref") or ""),
             "size_text": str(record.get("size_text") or ""),
             "geometry": str(record.get("geometry") or "")}
-    body.update(_packaging_part_conclusion_version(pid, record))
+    body.update(_packaging_part_conclusion_version(pid, record, loaded['doc']))
     return body
 
 
