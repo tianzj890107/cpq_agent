@@ -2251,6 +2251,11 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     # 业务部件层（Spec `packaging-business-parts-and-cad-plan-view.md` §7）：成本消费的部件
     # 集合是业务部件，几何分量只作证据；这份 scope 只披露版本与缺口，不改任何公式。
     business_scope = _business_parts_scope(project_id)
+    from . import packaging_parts
+    demo_doc = packaging_parts.load_business_parts(project_id) or {}
+    demo_rows = {str(row.get('business_part_code')):row.get('poc_inputs') or {}
+                 for row in demo_doc.get('business_parts') or []}
+    demo_enabled = data.get('poc_demo') is True and demo_doc.get('poc_demo') is True
     gaps: list = []
     assumptions: list = []
 
@@ -2304,7 +2309,19 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                      "machine_width": machine_width if machine_width is not None
                      else ((width) if width is not None else None)}
         result = None
-        if length is None or width is None:
+        demo_input = demo_rows.get(part_code) if demo_enabled else None
+        if demo_input and demo_input.get('mock'):
+            variables.update({key:demo_input[key] for key in ('gsm','ton_price','tax_factor','imposition_count','proof_base') if key in demo_input})
+            variables['gsm_source'] = 'poc_mock'
+            variables['price_unit_status'] = 'poc_mock'
+            variables['price_unit'] = '元/吨'
+            unit_status = 'poc_mock'
+            if _text(row.get('bom_category')) == 'optional_part':
+                result={'amount':2.5,'expression':'POC外购件演示单价2.5元/件'}
+            else:
+                result=compute_line('material',variables,rows=formula_rows)
+            assumptions.append('POC mock：'+part_name+'；'+str(demo_input.get('note') or ''))
+        elif length is None or width is None:
             gaps.append({"code": "part_size_missing", "where": part_code,
                          "detail": "部件「%s」没有展开尺寸，材料行不出金额" % part_name})
         elif material is None or price is None:
@@ -2474,14 +2491,15 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         decision = packaging_process_instances.billing(step)
         if decision['includes_labor'] or decision['formula_code'] != 'PKG-C-LABOR':
             continue
-        rate_code = STEP_RATE_MAP.get(name) or ('RATE-PKG-LABOR-ASSEMBLY' if name == '包盒' else None)
+        demo_step = demo_enabled and (step.get('cost_parameters') or {}).get('mock') is True
+        rate_code = STEP_RATE_MAP.get(name) or ('RATE-PKG-LABOR-ASSEMBLY' if name == '包盒' or demo_step else None)
         if not rate_code:
             gaps.append({'code':'rate_missing','where':str(step.get('step_no')),
                          'detail':'人工工序「%s」没有工时费率编码' % name})
             continue
         seconds = _num(step.get("standard_seconds"))
         step_no = _text(step.get("step_no"))
-        rate_row = _rate_row(rate_code)
+        rate_row = {'value':36,'minimum_charge':0} if demo_step else _rate_row(rate_code)
         variables = {"labor_seconds": seconds, "labor_rate": None,
                      "overhead_seconds": 0.0, "overhead_rate": overhead_rate or 0.0,
                      "quote_quantity": quantity, "step_no": step_no}

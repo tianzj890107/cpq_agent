@@ -584,6 +584,11 @@ def business_part_rows(business_doc: Any) -> list:
         if not code or code in seen:
             continue
         seen.add(code)
+        from . import wine_poc
+        demo_row = wine_poc.part_bom_row(row,business_doc)
+        if demo_row is not None:
+            out.append(demo_row)
+            continue
         if len(row.get('sections') or []) > 1 or row.get('sections_source') == 'manual':
             from . import packaging_sections
             reference = _reference_block(row)
