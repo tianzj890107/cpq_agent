@@ -34,7 +34,9 @@ def prepare_rows(document, candidates, *, enabled=False):
                     inputs={'length_mm':box[2]-box[0],'width_mm':box[3]-box[1],
                             'material_text':reference.get('material_text') or ('2mm灰板' if '板' in str(row.get('name')) else '225g面纸'),
                             'source':'poc_candidate_estimate'}
-        external=is_external_part(row)
+        external=is_external_part(row) or any(word in str(row.get('name') or '') for word in ('磁铁','EVA'))
+        if external and not is_external_part(row):
+            row['reference']={**reference,'process_text':str(reference.get('process_text') or '')+'；POC外购件'}
         if not external and not (inputs.get('length_mm') and inputs.get('width_mm')):
             raise ValueError('poc_size_missing:'+str(row.get('name')))
         material=inputs.get('material_text') or ('POC外购件' if external else '')
