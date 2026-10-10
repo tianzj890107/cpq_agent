@@ -4261,10 +4261,13 @@ def _business_identity(doc: Dict[str, Any]) -> Tuple[str, str]:
     return "business-parts:" + digest[:16], digest
 
 
-def _business_items(project_id: str, *, latest_only: bool = False) -> List[Dict[str, Any]]:
+def _business_items(project_id: str, *, latest_only: bool = False, version_id=None) -> List[Dict[str, Any]]:
     backend = get_backend()
     head = getattr(backend, 'get_doc_head', None)
-    doc = (head(project_id, BUSINESS_DOC_KEY, 1) if latest_only and callable(head)
+    version = getattr(backend, 'get_doc_version', None)
+    doc = (version(project_id, BUSINESS_DOC_KEY, 'business_parts_id', version_id)
+           if version_id is not None and callable(version) else
+           head(project_id, BUSINESS_DOC_KEY, 1) if latest_only and callable(head)
            else backend.get_doc(project_id, BUSINESS_DOC_KEY)) or {}
     items = doc.get("items") if isinstance(doc, dict) else None
     return [item for item in (items or []) if isinstance(item, dict)]
@@ -4292,7 +4295,7 @@ def save_business_parts(project_id: str, doc: Dict[str, Any]) -> Dict[str, Any]:
 def load_business_parts(project_id: str,
                         business_parts_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """读一版业务部件文档；缺省读最近一版（读不到回 None，不回退成几何零件）。"""
-    for item in _business_items(project_id, latest_only=business_parts_id is None):
+    for item in _business_items(project_id, latest_only=business_parts_id is None, version_id=business_parts_id):
         if business_parts_id is None or _text(item.get("business_parts_id")) == str(business_parts_id):
             return item
     return None

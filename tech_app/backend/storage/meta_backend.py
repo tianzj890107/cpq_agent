@@ -65,8 +65,12 @@ class JsonMetaBackend(MetaBackend):
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def _read(self, path: Path, *, head: Optional[int] = None) -> Optional[dict]:
+    def _read(self, path: Path, *, head: Optional[int] = None, item_match=None) -> Optional[dict]:
         def independent(value):
+            if item_match is not None and isinstance(value, dict) and isinstance(value.get('items'), list):
+                field, expected = item_match
+                value = {**value, 'items': [item for item in value['items']
+                         if isinstance(item, dict) and item.get(field) == expected]}
             if head is not None and isinstance(value, dict) and isinstance(value.get('items'), list):
                 value = {**value, 'items': value['items'][:head]}
             return copy.deepcopy(value)
@@ -141,6 +145,9 @@ class JsonMetaBackend(MetaBackend):
 
     def get_doc_head(self, pid: str, kind: str, count: int = 1) -> Optional[dict]:
         return self._read(self.data_dir / pid / f"{kind}.json", head=max(0, count))
+
+    def get_doc_version(self, pid: str, kind: str, field: str, version: str) -> Optional[dict]:
+        return self._read(self.data_dir / pid / f"{kind}.json", item_match=(field, version))
 
     def put_doc(self, pid: str, kind: str, data: dict) -> None:
         with self._lock:

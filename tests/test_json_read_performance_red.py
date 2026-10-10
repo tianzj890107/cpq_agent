@@ -51,3 +51,10 @@ class ReadPerformanceTest(unittest.TestCase):
         self.assertEqual([{'v': 2}], first['items'])
         first['items'][0]['v'] = 99
         self.assertEqual([{'v': 2}, {'v': 1}], self.backend.get_doc('p', 'history')['items'])
+
+    def test_specific_history_projection_is_isolated_and_preserves_all_versions(self):
+        self.backend.put_doc('p', 'history', {'items': [{'id': 'new'}, {'id': 'old'}]})
+        old = self.backend.get_doc_version('p', 'history', 'id', 'old')
+        self.assertEqual([{'id': 'old'}], old['items'])
+        old['items'].clear()
+        self.assertEqual(2, len(self.backend.get_doc('p', 'history')['items']))
