@@ -165,9 +165,10 @@
       state.versionNote = conclusionVersionNote(data);
       // 业务部件清单漂移（Spec `packaging-part-conclusion-business-identity.md` §C3 的读回四键）：
       // 状态行留给零件版本那句，这句进正文（两句话不互相顶掉）。
-      state.businessNote = packagingPartBusinessIdentityNote(data);
+      if (!window.PackagingConclusionNotes) throw new Error("页面说明组件未就绪，请刷新后重试");
+      state.businessNote = window.PackagingConclusionNotes.businessIdentity(data);
       // 结论口径（Spec `packaging-business-part-conclusion-basis-in-panel.md` §C2）：按哪套尺寸算的。
-      state.basisNote = packagingBusinessPartBasisNote(data);
+      state.basisNote = window.PackagingConclusionNotes.basis(data);
       if (state.mode === "process") {
         state.plan = data.plan;
         state.validation = data.validation;
@@ -264,7 +265,8 @@
         if (state.summary?.quantity) state.root.querySelector("[data-inline-quantity]").value = state.summary.quantity;
       }
       // 生成完**立刻**就有这一行：结果就是任务返回值，不重新读一次（Spec §C2）。
-      state.basisNote = packagingBusinessPartBasisNote(result);
+      if (!window.PackagingConclusionNotes) throw new Error("页面说明组件未就绪，请刷新后重试");
+      state.basisNote = window.PackagingConclusionNotes.basis(result);
       state.editing = false;
       render(state);
       setStatus(state, `${title}已完成`, false);

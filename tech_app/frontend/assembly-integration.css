@@ -5,6 +5,10 @@
 .ai-layout-row { padding: 12px 0; border-bottom: 1px solid var(--oc-border-3, #e2e5ea); min-width: 0; }
 .ai-layout-row .inline-cov-row { flex-wrap: wrap; gap: 8px; }
 .ai-layout-picker { margin-top: 10px; min-width: 0; }
+.ai-layout-association-bar { display: flex; align-items: flex-start; gap: 10px; margin-top: 10px; }
+.ai-layout-association-bar .ai-layout-picker { flex: 1; margin-top: 0; }
+.ai-layout-association-bar > .inline-action { margin-top: 3px; }
+@media (max-width: 360px) { .ai-layout-association-bar { flex-wrap: wrap; } }
 .ai-layout-picker summary { cursor: pointer; padding: 8px; border-radius: 6px; color: var(--oc-accent, #0060E6); }
 .ai-layout-picker summary:hover { background: var(--color-primary-light, #E6F0FD); }
 .ai-layout-picker summary:focus-visible { outline: 2px solid var(--oc-accent, #0060E6); }

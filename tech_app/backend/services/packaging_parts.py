@@ -4128,8 +4128,8 @@ def business_parts_document(reference: Any, geometry: Any, *,
     authority_source = authority_doc.get("source") if isinstance(authority_doc.get("source"), dict) else {}
     doc: Dict[str, Any] = {
         "engine_version": BUSINESS_ENGINE_VERSION,
-        "layout_rows": [dict(row) for row in (authority_doc.get("layout_rows") or [])
-                        if isinstance(row, dict)],
+        "layout_rows": packaging_layout.auto_assign_layout_rows(
+            [dict(row) for row in (authority_doc.get("layout_rows") or []) if isinstance(row, dict)],business_parts),
         "scheme_labels": list(authority_doc.get("scheme_labels") or []),
         "business_parts": business_parts,
         "geometry_evidence": evidence,

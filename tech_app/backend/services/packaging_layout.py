@@ -70,6 +70,35 @@ def scheme_labels(cad_ir: Any) -> list[str]:
     return sorted(labels)
 
 
+def auto_assign_layout_rows(rows, parts):
+    """Full CAD names only. Association never supplies yield or approval."""
+    result = copy.deepcopy(rows or [])
+    names = sorted([(str(part.get('name') or '').strip(),part.get('business_part_code'))
+                    for part in parts or [] if part.get('business_part_code')],
+                   key=lambda item: -len(item[0]))
+    for row in result:
+        if row.get('assignment_source') == 'user_selection' or row.get('part_codes'):
+            continue
+        text = clean_cad_text(row.get('text') or row.get('raw_text'))
+        occupied, codes, evidence = set(), [], []
+        for name, code in names:
+            if not name:
+                continue
+            for match in re.finditer(re.escape(name),text):
+                positions = set(range(match.start(),match.end()))
+                if positions & occupied:
+                    continue
+                occupied.update(positions)
+                if code not in codes:
+                    codes.append(code)
+                    evidence.append({'part_code':code,'name':name,'entity_id':row.get('entity_id'),
+                                     'text':text,'source':'cad_layout_full_name'})
+        if codes:
+            row.update(part_codes=codes,assignment_source='cad_layout_full_name',
+                       assignment_evidence=evidence)
+    return result
+
+
 def declared_sections(name: Any) -> list[dict]:
     """A text label can name two portions of one business item.
 

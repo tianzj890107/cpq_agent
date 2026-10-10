@@ -291,14 +291,14 @@ class BWiredIntoInlineAnalysis(unittest.TestCase):
 
     def test_b1_load_computes_the_basis_once(self):
         self.assertEqual(
-            1, self.src.count("state.basisNote = packagingBusinessPartBasisNote(data)"),
+            1, self.src.count("state.basisNote = window.PackagingConclusionNotes.basis(data)"),
             "`load()` 里必须有一处把读回体算成 basisNote（Spec §C2）")
         self.assertIn("businessNote: null", self.src, "初始状态那一组要带上 basisNote（Spec §C2）")
         self.assertIn("basisNote: null", self.src, "初始状态要有 basisNote（Spec §C2）")
 
     def test_b2_generate_refreshes_it_without_a_second_read(self):
         self.assertEqual(
-            1, self.src.count("state.basisNote = packagingBusinessPartBasisNote(result)"),
+            1, self.src.count("state.basisNote = window.PackagingConclusionNotes.basis(result)"),
             "`generate()` 里必须有一处用任务结果刷新口径（Spec §C2）")
         self.assertNotIn("await load(state)", self.src.split("async function generate")[1][:2500],
                          "不许用「再读一次」冒充「生成完立刻可见」（Spec §C2）")
@@ -382,7 +382,8 @@ class CTaskResultsCarryTheBasis(unittest.TestCase):
         # 图纸尺寸人工确认单列 size-confirm PUT，冻结总数从 6 重指为 7。
         # 2026-10-08：多组成闭环 Spec `packaging-multipart-business-part-complete.md` 新增共用
         # sections 写入与逐部分尺寸确认两个入口，计数精确重指为 9 / size-confirm 2，逐条点名。
-        self.assertEqual(9, _source(APP_JS).count("packaging-business-parts/"))
+        # 批量工艺入口已增加两个既有路由调用；说明组件修复不新增接口。
+        self.assertEqual(11, _source(APP_JS).count("packaging-business-parts/"))
         self.assertIn('/sections${suffix}', _source(APP_JS))
         self.assertEqual(1, _source(APP_JS).count("/geometry-binding"))
         self.assertEqual(2, _source(APP_JS).count("/size-confirm"))

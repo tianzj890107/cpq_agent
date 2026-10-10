@@ -196,7 +196,7 @@ class BWiredIntoInlineAnalysis(unittest.TestCase):
         self.src = _source(INLINE_JS)
 
     def test_b1_load_computes_the_note_once(self):
-        self.assertEqual(1, self.src.count("state.businessNote = packagingPartBusinessIdentityNote(data)"),
+        self.assertEqual(1, self.src.count("state.businessNote = window.PackagingConclusionNotes.businessIdentity(data)"),
                          "`load()` 里必须有一处把读回体算成 businessNote（Spec §C2）")
         self.assertIn("businessNote:", self.src, "state 初始要给 businessNote 键（Spec §C2）")
 

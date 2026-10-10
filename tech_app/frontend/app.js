@@ -596,6 +596,9 @@ document.addEventListener("click", (event) => {
 // 看板弹卡片（导入已有 3D 模型 / 版本与校核 / 任务文件）：
 // 关闭三条路径统一走 closeBoardCard()，不在各处各写一份收起逻辑。
 if ($("boardCardClose")) $("boardCardClose").onclick = () => { closeBoardCard(); };
+if ($("boardCardFullscreen")) $("boardCardFullscreen").onclick = () => {
+  setBoardCardFullscreen(!$("boardCard").classList.contains("is-fullscreen"));
+};
 if ($("boardCardMask")) {
   $("boardCardMask").addEventListener("click", (event) => {
     if (event.target === event.currentTarget) closeBoardCard();
@@ -3467,6 +3470,12 @@ function packagingBusinessPartProcessTarget(row, partsDoc) {
 // 业务部件结论的「口径四键」（Spec `packaging-business-part-conclusion-basis-in-panel.md` §C1）：
 // 后端读回体与任务结果都带 `size_source` / `size_source_ref` / `size_text` / `geometry`，
 // 这一处把它们翻成一句人话 —— 几何零件那条路（`size_source` 为空）**一个字都不多说**。
+// ES module 的顶层函数不属于 window；普通脚本通过显式接口共享格式化逻辑。
+window.PackagingConclusionNotes = Object.freeze({
+  businessIdentity: packagingPartBusinessIdentityNote,
+  basis: packagingBusinessPartBasisNote,
+});
+
 function packagingBusinessPartBasisNote(data) {
   const payload = (data && typeof data === "object") ? data : {};
   const source = String(payload.size_source === undefined || payload.size_source === null
@@ -3845,8 +3854,8 @@ function renderPackagingBusinessTree(tree, rows) {
       + (material ? `<div class="part-material">${esc(material)}</div>` : "")
       + (bindingText ? `<div class="part-note">${esc(bindingText)}</div>` : "")
       + `</div>`;
-    // 点开一件就能看到它的构成（Spec §2.1c）：那两百多个几何分量按件归属。
-    // 展开里的分量**不**进结果区那句"业务部件 N 件"的计数 —— 两笔账不许混。
+    // 构成证据保留在数据层；行上快捷按钮只打开本件工艺推荐，不触发生成。
+    // 几何分量不进入业务部件计数。
     const components = document.createElement("div");
     components.className = "packaging-part-components";
     components.setAttribute("data-qq-part-components", code);
@@ -3856,11 +3865,10 @@ function renderPackagingBusinessTree(tree, rows) {
     toggle.type = "button";
     toggle.className = "part-row-action packaging-part-toggle";
     toggle.setAttribute("data-qq-part-toggle", code);
-    toggle.textContent = "构成";
+    toggle.textContent = "工艺";
     toggle.addEventListener("click", event => {
-      event.stopPropagation();                 // 开关只管展开，选中仍走这一行自己的点击
-      components.hidden = !components.hidden;
-      toggle.textContent = components.hidden ? "构成" : "收起";
+      event.stopPropagation();
+      packagingBusinessPartProcessByAuthority(code);
     });
     line.appendChild(toggle);
     tree.appendChild(line);
@@ -7946,6 +7954,7 @@ function openBoardCard(view, spec) {
   boardCardTrigger = document.activeElement && typeof document.activeElement.focus === "function"
     ? document.activeElement : null;
   resetBoardViewBody(body);
+  setBoardCardFullscreen(false);
   if (title) title.textContent = spec.title;
   // 任务文件仍走既有的 renderBoardFiles()（同一份实现，不复制第二份）。
   const outcome = spec.files ? renderBoardFiles(body) : fillBoardViewBody(body, view, spec);
@@ -7955,9 +7964,21 @@ function openBoardCard(view, spec) {
   return outcome;
 }
 
+function setBoardCardFullscreen(enabled) {
+  const card = $("boardCard");
+  const button = $("boardCardFullscreen");
+  if (!card || !button) return;
+  card.classList.toggle("is-fullscreen", !!enabled);
+  button.textContent = enabled ? "⤢" : "⛶";
+  button.title = enabled ? "退出全屏" : "全屏";
+  button.setAttribute("aria-label", button.title);
+  button.setAttribute("aria-pressed", String(!!enabled));
+}
+
 function closeBoardCard() {
   const mask = document.getElementById("boardCardMask");
   if (!mask || mask.hidden) return false;
+  setBoardCardFullscreen(false);
   resetBoardViewBody(document.getElementById("boardCardBody"));
   mask.hidden = true;
   // 焦点归还（Spec D2）：触发按钮若已被收起，就退回到常驻的菜单按钮 ——

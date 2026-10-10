@@ -278,7 +278,9 @@ body{padding-bottom:0}
 .board-card-mask[hidden]{display:none}
 .board-card{width:min(760px,92vw);max-height:82vh;display:flex;flex-direction:column;background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius-lg);box-shadow:0 24px 60px rgba(15,23,42,.25)}
 .board-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-bottom:1px solid var(--border-light)}
-.board-card-title{font-size:13px;font-weight:600;color:var(--text-primary)}
+.board-card-title{flex:1;min-width:0;font-size:13px;font-weight:600;color:var(--text-primary)}
+.board-card.is-fullscreen{width:calc(100vw - 16px);height:calc(100vh - 16px);max-height:calc(100vh - 16px)}
+.board-card.is-fullscreen .board-card-body{flex:1;min-height:0}
 .board-card-body{padding:16px 18px;overflow:auto}
 .board-card-close{padding:5px 8px;border:1px solid var(--color-primary);border-radius:var(--radius-sm);background:#fff;color:var(--color-primary);font-size:11px;cursor:pointer}
 

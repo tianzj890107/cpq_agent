@@ -207,7 +207,6 @@
     state.stage = previous;
     if (target === previous) {
       renderTop();
-      mountStageFrame();
       syncChatProject();
       syncAgentStageContext();
       return;
@@ -873,6 +872,11 @@
 
   /* ---------------------------------------------------------- 步骤切换 */
   function applyStage(stageId, opts) {
+    if (stageId === state.stage
+        && (!opts || !opts.project || opts.project === state.project)
+        && (!opts || !opts.taskId || opts.taskId === state.taskId)) {
+      return; // 重复加载通知不是导航，不重建看板，也不打断任务。
+    }
     if (!stages.has(stageId)) {
       setStateView('error', '未知步骤', `stage=${stageId} 不在白名单内，已拒绝加载。`);
       return;
@@ -1231,6 +1235,8 @@
   }
   async function techHistoryRestore(projectId) {
     if (!projectId) return;
+    const startedStage = state.stage;
+    const startedProject = state.project;
     closeTechHistory();
     const id = encodeURIComponent(projectId);
     try {
@@ -1245,6 +1251,7 @@
           .then((r) => r.ok ? r.json() : {})
           .catch(() => ({})),
       ]);
+      if (state.stage !== startedStage || state.project !== startedProject) return;
       const aggregate = results[2] || {};
       const steps = aggregate.steps || {};
       const stage = techStageFromProject(results[0] || {}, results[1] || {}, {
@@ -1301,5 +1308,6 @@
   bindTechSettingsModal();
   refreshTechModelLabel();
   if (state.project) refreshProgress();
-  if (state.project && new URLSearchParams(location.search).get('restore') === '1') techHistoryRestore(state.project);
+  if (state.project && new URLSearchParams(location.search).get('restore') === '1'
+      && !new URLSearchParams(location.search).get('stage')) techHistoryRestore(state.project);
 })();

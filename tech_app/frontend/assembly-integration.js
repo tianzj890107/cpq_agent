@@ -724,10 +724,11 @@ function aiRenderPackagingLayout() {
     html += `<div class="ai-layout-row"><div class="inline-cov-row"><span class="inline-cov-name">${esc(row.text || row.raw_text)}</span>`
       + `<span class="inline-cov-code">${esc(sheet)} · ${row.n_up ? `排 ${Number(row.n_up)} 模` : '模数待确认'} · ${row.confirmed ? '已核对文字' : '待核对'}</span>`
       + `<button type="button" class="inline-action" data-ai-layout-confirm="${aiAttr(row.entity_id)}" data-confirmed="${row.confirmed ? 'true' : 'false'}">${row.confirmed ? '撤销确认' : '确认图上排模'}</button></div>`;
-    html += `<details class="ai-layout-picker"><summary>关联零件 · 已选 ${(row.part_codes || []).length} 项</summary>`
+    html += `<div class="ai-layout-association-bar"><details class="ai-layout-picker"><summary>关联零件 · 已选 ${(row.part_codes || []).length} 项</summary>`
       + `<div class="ai-hint">可多选；关联不推导用量，请单独核实排模与用量。</div>`
+      + (row.assignment_source === 'cad_layout_full_name' ? `<div class="ai-hint">已按 DWG 排模文字中的零件名称自动关联，可修改。</div>` : '')
       + `<div class="ai-layout-options" data-ai-layout-parts="${aiAttr(row.entity_id)}">${options || '<div class="inline-empty">尚无可关联零件</div>'}</div></details>`
-      + `<div class="ai-layout-actions"><button type="button" class="inline-action save" data-ai-layout-save="${aiAttr(row.entity_id)}">保存关联</button></div></div>`;
+      + `<button type="button" class="inline-action save" data-ai-layout-save="${aiAttr(row.entity_id)}">保存关联</button></div></div>`;
   });
   return html + '</section>';
 }
