@@ -218,7 +218,8 @@ def summarize(project_id: str, ir: Optional[DesignIR], plan) -> dict:
                                    "labor": float(packaging_result.get("labor_total") or 0),
                                    "machining": float(packaging_result.get("process_total") or 0),
                                    "overhead": sum(float(packaging_result.get(key) or 0) for key in
-                                       ("tooling_total", "packaging_total", "freight_total", "other_total", "loss_amount")),
+                                       # 分类及 process_total 已含损耗，不能再次累加 loss_amount。
+                                       ("tooling_total", "packaging_total", "freight_total", "other_total")),
                                    "total": total} if built else {},
                         summary="包装确定性公式整单测算；不叠加零件材料费，不套通用成本系数")
         zero = [row["id"] for row in parts + [assembly]

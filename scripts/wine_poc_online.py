@@ -6,6 +6,8 @@ import json
 import time
 import uuid
 import argparse
+import os
+import getpass
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -25,7 +27,8 @@ def request(path, data=None, *, token='', method=None, timeout=60):
 
 
 def login(username):
-    return request('/auth/login',{'username':username,'password':'123456'})['token']
+    password=os.environ.get('CPQ_POC_PASSWORD') or getpass.getpass('POC account password: ')
+    return request('/auth/login',{'username':username,'password':password})['token']
 
 
 def create(resume=None):

@@ -59,5 +59,37 @@ def run(pid):
     print('POC inputs and process records ready',flush=True)
 
 
+def sync_costs(pid):
+    from tech_app.backend.services import packaging_cost,cost
+    from tech_app.backend.models.cost import CostAnalysis
+    req=store.load_requirement(pid) or {}
+    doc=packaging_parts.load_business_parts(pid) or {}
+    if (req.get('data') or {}).get('poc_demo') is not True or doc.get('poc_demo') is not True:
+        raise ValueError('explicit_demo_required')
+    result=packaging_cost.load_cost(pid)
+    if result.get('has_gaps') or result.get('stale'):
+        raise ValueError('project_cost_not_ready')
+    saved_total=0
+    for row in doc.get('business_parts') or []:
+        code=row['business_part_code']
+        lines=[item for item in result.get('items') or [] if item.get('part_code')==code and item.get('cost_category')=='material']
+        if not lines or any(item.get('amount') is None for item in lines):
+            raise ValueError('part_material_cost_missing:'+code)
+        analysis=CostAnalysis(part_id=code,part_name=row['name'],quantity=1000,
+            summary='本件材料费来自同一版整单公式成本；POC mock，非生产报价',
+            items=[{'category':'material','name':item.get('part_name') or row['name'],'quantity':1,'unit':'件',
+                    'unit_price':item['amount'],'amount':item['amount'],'basis':item.get('expression'),
+                    'source':'POC整单材料公式成本投影'} for item in lines]).model_dump()
+        packaging_parts.save_part_cost(pid,{'part_code':code,'parts_id':'','analysis':analysis,
+            'summary':cost.compute(analysis),'business_parts_id':doc['business_parts_id'],
+            'business_parts_hash':doc['business_parts_hash'],'poc_demo':True,
+            'size_source':(row.get('poc_inputs') or {}).get('source') or 'poc_purchase',
+            'size_text':'POC参照尺寸/外购价格','source':{'computed_by':'FI1','cost_estimate_id':result.get('estimate_id')},
+            'assumptions':['仅材料费投影，不将项目加工费重复累计为零件成本']})
+        saved_total+=1
+    print('Material cost projections saved: '+str(saved_total),flush=True)
+
+
 if __name__=='__main__':
-    parser=argparse.ArgumentParser();parser.add_argument('project_id');run(parser.parse_args().project_id)
+    parser=argparse.ArgumentParser();parser.add_argument('project_id');parser.add_argument('--sync-costs',action='store_true');args=parser.parse_args()
+    sync_costs(args.project_id) if args.sync_costs else run(args.project_id)
