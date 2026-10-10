@@ -235,6 +235,15 @@
     renderControls(state);
     const title = state.mode === "process" ? "工艺推荐" : "成本测算";
     setStatus(state, `${title}生成中…`, true);
+    const runId = `inline:${state.context.projectId}:${state.context.part.part_id}:${Date.now()}`;
+    state.taskRunId = runId;
+    const notify = detail => {
+      const payload = {taskId: runId, runId, label: title,
+        prompt: `请为${state.context.part.name || state.context.part.part_id}生成${title}。`, ...detail};
+      window.dispatchEvent(new CustomEvent('agent:task-progress', {detail: payload}));
+      window.TechBoardRuntime?.publish?.(payload.status === 'failed' ? 'task-failed' : 'task-progress', 'board-task', payload);
+    };
+    notify({status: 'queued', progress: '正在提交任务'});
     try {
       let url = `${endpointBase(state)}/${state.mode}`;
       if (state.mode === "cost") {
@@ -261,6 +270,7 @@
       setStatus(state, `${title}已完成`, false);
     } catch (error) {
       if (active === state) setStatus(state, `${title}失败：${error.message}`, false, true);
+      notify({status: 'failed', error: error.message, progress: `${title}失败`});
     } finally {
       state.busy = false;
       if (active === state) renderControls(state);
@@ -273,7 +283,7 @@
       await sleep(1200);
       const task = await jsonFetch(`/api/projects/${encodeURIComponent(state.context.projectId)}/tasks/${encodeURIComponent(taskId)}`);
       // 把知识库检索的每一步同时播给 Agent 对话框，处理过程要在对话里看得见。
-      const taskDetail = { label: title, taskId, status: task.status,
+      const taskDetail = { label: title, taskId: state.taskRunId || taskId, status: task.status,
                 progress: task.progress || "",
                 log: Array.isArray(task.progress_log) ? task.progress_log : [],
                 // 过程事件序列（model/tool/progress）：有就以它为准，无则退回 log。

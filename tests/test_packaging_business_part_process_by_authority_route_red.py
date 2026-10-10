@@ -559,8 +559,8 @@ class FGuardrails(unittest.TestCase):
         src = _source(APP_JS)
         # 图纸尺寸人工确认单列 size-confirm PUT，总数精确重指为 7。
         # 本轮多组成 Spec 明确新增共用 sections 写入，精确枚举而非取消护栏。
-        self.assertEqual(10, src.count("packaging-business-parts/"),
-                         "额外入口包含 sections 写入及已保存工艺只读展示")
+        self.assertEqual(11, src.count("packaging-business-parts/"),
+                         "额外入口包含 sections 写入、已保存工艺展示及批量真实生成")
         self.assertIn('/sections${suffix}',src)
         self.assertEqual(1, src.count("/geometry-binding"))
         self.assertEqual(2, src.count("/size-confirm"))  # 整件兼容入口 + 逐部分入口

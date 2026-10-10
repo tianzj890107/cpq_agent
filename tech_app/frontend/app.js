@@ -1776,6 +1776,7 @@ async function packagingPartAnalyze(mode) {
 // （默认取业务部件文档），不遍历几何分量；每一件先看有没有绑到闭合几何件，绑不到的再看权威
 // 清单够不够排工艺，两条都走不通的计入 skipped 并逐条说明「为什么不能算」。
 function startAllPackagingPartProcesses(rows) {
+  if (allPartsProcessBusy) return {ok: false, error: {code: 'busy', message: '正在生成工艺推荐，请稍候'}};
   const list = Array.isArray(rows) ? rows
     : ((currentPackagingParts && currentPackagingParts.parts) || []);
   const ready = [];
@@ -1805,18 +1806,73 @@ function startAllPackagingPartProcesses(rows) {
       message: list.length ? `没有可算的业务部件：${detail}`
         : "还没有业务部件清单：先跑「一键解析图纸」把零件从图纸里推出来，或人工建立。" } };
   }
-  // 逐件串行：一次只跑一件，右栏分析的标题与结论始终对得上。
-  const queue = ready.slice();
-  const step = () => {
-    const item = queue.shift();
-    if (!item) return;
-    const run = item.mode === ("author" + "ity")
-      ? Promise.resolve(packagingBusinessPartProcessByAuthority(item.code))
-      : packagingBusinessPartAnalyze("process", item.target);
-    run.then(step, step);
-  };
-  step();
+  allPartsProcessBusy = true;
+  runPackagingBusinessProcessBatch(currentProject, ready, skipped);
   return { ok: true, result: { total: list.length, started: ready.length, skipped: skipped } };
+}
+
+async function runPackagingBusinessProcessBatch(project, ready, skipped) {
+  const runId = `packaging-process:${project}:${Date.now()}`;
+  const detail = { taskId: runId, runId, label: '一键生成全部工艺推荐',
+    prompt: '请根据当前已选零件逐件生成工艺推荐。', status: 'queued', log: [] };
+  const publish = () => {
+    if (project !== currentProject) return;
+    window.dispatchEvent(new CustomEvent('agent:task-progress', {detail: {...detail, log: detail.log.slice()}}));
+    forwardTaskDetail({...detail, log: detail.log.slice()});
+  };
+  const read = async (url, options) => {
+    const response = await fetch(url, options);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data.message || `HTTP ${response.status}`));
+    return data;
+  };
+  let failures = 0;
+  publish();
+  try {
+    for (const row of skipped) detail.log.push(`${row.part_code}：跳过，${row.reason}`);
+    for (const item of ready) {
+      if (project !== currentProject) throw new Error('项目已切换，停止提交后续工艺任务');
+      const base = `${API}/api/projects/${encodeURIComponent(project)}/requirement/packaging-business-parts/${encodeURIComponent(item.code)}/process`;
+      try {
+        const existing = await read(base);
+        if (existing.plan?.steps?.length && !existing.business_stale && !existing.stale) {
+          detail.log.push(`${item.code}：已有有效工艺，保留并跳过`);
+          publish(); continue;
+        }
+        if (project !== currentProject) throw new Error('项目已切换');
+        detail.status = 'running'; detail.progress = `${item.code}：生成工艺推荐`;
+        detail.log.push(detail.progress); publish();
+        const submitted = await read(base, {method: 'POST', body: new FormData()});
+        if (!submitted.task_id) throw new Error('工艺任务没有返回task_id');
+        let cursor = 0;
+        for (let attempt = 0; attempt < 1500; attempt++) {
+          await sleep(1200);
+          if (project !== currentProject) throw new Error('项目已切换；已提交任务继续后台运行');
+          const task = await read(`${API}/api/projects/${encodeURIComponent(project)}/tasks/${encodeURIComponent(submitted.task_id)}`);
+          const logs = task.progress_log || [];
+          detail.log.push(...logs.slice(cursor).map(line => `${item.code}：${line}`)); cursor = logs.length;
+          detail.progress = `${item.code}：${task.progress || task.status}`; publish();
+          if (task.status === 'failed') throw new Error(task.error || '工艺生成失败');
+          if (['succeeded', 'partial'].includes(task.status)) {
+            if (!task.result?.plan?.steps?.length) throw new Error('任务完成但未返回工序');
+            if (task.status === 'partial') failures++;
+            detail.log.push(`${item.code}：${task.status === 'partial' ? '部分完成' : '已完成'}，${task.result.plan.steps.length}道工序`);
+            break;
+          }
+          if (attempt === 1499) throw new Error('工艺任务等待超时，后台状态待核对');
+        }
+      } catch (error) {
+        failures++; detail.log.push(`${item.code}：失败，${error.message}`); publish();
+      }
+    }
+    detail.status = failures || skipped.length ? 'partial' : 'succeeded';
+    detail.progress = `工艺推荐结束：失败${failures}件，跳过${skipped.length}件`; publish();
+  } catch (error) {
+    detail.status = 'interrupted'; detail.error = error.message; publish();
+  } finally {
+    allPartsProcessBusy = false;
+    if (project === currentProject) refreshBoardActionState();
+  }
 }
 
 /* ---------------- 2.1 3D 覆盖率的三态（Spec packaging-parts-solid-coverage.md §2.3） ----------------
@@ -4211,7 +4267,11 @@ async function loadPackagingBusinessProcessSummary(wanted) {
     if (project !== currentProject || $('packagingSavedProcess') !== host) return;
     const steps = (data.plan || {}).steps || [];
     if (data.business_stale || data.stale) {
-      host.textContent = '已保存工艺与当前零件输入不一致，待重算；旧结果保留。';
+      host.innerHTML = '<div>已保存工艺与当前零件输入不一致，待重算；旧结果保留。</div>'
+        + '<details><summary>查看旧版工艺（仅供参考）</summary>'
+        + steps.map(step => '<div>' + esc(String(step.name || '未命名工序')) + '</div>').join('')
+        + '</details><button type="button" class="part-row-action" id="packagingSavedProcessOpen">打开工艺面板并重算</button>';
+      $('packagingSavedProcessOpen').addEventListener('click', () => packagingBusinessPartProcessByAuthority(wanted));
     } else if (!steps.length) {
       host.textContent = '暂无已保存制造工艺；外购件无需制造工序。';
     } else {
