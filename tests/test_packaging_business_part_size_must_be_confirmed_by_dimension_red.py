@@ -66,8 +66,12 @@ MIN_UNCONFIRMED = {"酒盒": 10, "圆盘盒": 25}
 # 已定位业务件的装箱/尺寸说明；授权见 packaging-full-flow-20260928.md §1.4。
 #: 2026-10-08：圆盘盒 36 → 46。Spec `packaging-multipart-business-part-complete.md` §1 允许
 #: 单实体闭合圆成为候选、一个名称对应多个真实闭合图形；酒盒侧不变。冻结仍是精确值。
-DERIVED_TOTAL = {"酒盒": 26, "圆盘盒": 46}
-SIZED_TOTAL = {"酒盒": 26, "圆盘盒": 46}
+#: 2026-10-10：圆盘盒 46 → 47。Spec `packaging-drawing-order-circles-and-dimension-scene.md` §2 把
+#: 「同名件取哪一条文字」从句柄序改成 CAD 坐标阅读顺序（自上而下、同行自左而右）——多出来的这一条是
+#: 真名真区域的一件：`10PC圆盒 盖内外圈衬纸1/2+地盒外底贴`（原图/镜像两条文字，阅读顺序下选中的
+#: 那条落在自己的轮廓上）。判据仍是精确相等，只是把冻结值按新 Spec 同步；酒盒侧不变。
+DERIVED_TOTAL = {"酒盒": 26, "圆盘盒": 47}
+SIZED_TOTAL = {"酒盒": 26, "圆盘盒": 47}
 
 
 def _parts_module():

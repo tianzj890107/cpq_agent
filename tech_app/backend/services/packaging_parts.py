@@ -4630,12 +4630,27 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
                         and (part.get("geometry_binding") or {}).get("status") == "bound"
                         for eid in ((part.get("geometry_binding") or {}).get("entity_ids") or [])}
     if isinstance(record.get("unassigned_candidates"), list):
-        # Keep the review catalogue: a later owner must not make a candidate
-        # disappear from an earlier part's selection interface.
-        for candidate in record['unassigned_candidates']:
-            if isinstance(candidate, dict):
-                candidate['assigned'] = bool(set(candidate.get('entity_ids') or []).intersection(claimed_entities)
-                                             or set(candidate.get('component_ids') or []).intersection(claimed))
+        # 待核对队列只留**还没被认下**的候选（Spec
+        # `packaging-layout-spatial-and-model-combination.md` §6：人工确认后这组图形不能仍
+        # 显示为未归属）；已被另一件认下的候选仍留一份 `assigned` 标记，供顺序占用审计
+        # （Spec `packaging-drawing-order-circles-and-dimension-scene.md` §4：冲突候选保留供审计）。
+        kept_candidates = []
+        for candidate in record["unassigned_candidates"]:
+            if not isinstance(candidate, dict):
+                continue
+            if _text(candidate.get("candidate_id")) == selected_id:
+                continue
+            if "raw_cad_entities" in (candidate.get("evidence_reasons") or []):
+                fully_claimed = set(candidate.get("entity_ids") or []) <= claimed_entities
+            else:
+                fully_claimed = set(candidate.get("component_ids") or []) <= claimed
+            if fully_claimed:
+                continue
+            candidate["assigned"] = bool(
+                set(candidate.get("entity_ids") or []).intersection(claimed_entities)
+                or set(candidate.get("component_ids") or []).intersection(claimed))
+            kept_candidates.append(candidate)
+        record["unassigned_candidates"] = kept_candidates
     record["stats"] = business_parts_stats(record.get("business_parts") or [])
     record["business_parts_id"], record["business_parts_hash"] = _business_identity(record)
     return record

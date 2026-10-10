@@ -4333,10 +4333,13 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
     bbox: candidate.bbox || null,
     exact_entities: candidateEntityIds.length > 0,
   } : null;
+  // 候选件只画这一件**已确认的精确图元**：清掉包围盒与分量口径，别件的线不跟着进来
+  // （`exact_entities` 是渲染器里的同一条判据，两个一起给，少一个都可能把邻件带进来）。
+  const candidateExactBinding = binding.candidate_id ? Object.assign({}, binding, {bbox: null, component_ids: []}) : binding;
   let figureBinding = (String(binding.status || "") === "bound"
     || (String(binding.status || "") === "partial" && binding.candidate_id
         && Array.isArray(binding.entity_ids) && binding.entity_ids.length))
-    ? (binding.candidate_id ? Object.assign({}, binding, {exact_entities: true}) : binding)
+    ? (binding.candidate_id ? {...candidateExactBinding, exact_entities: true} : binding)
     : (candidateBinding || binding);
   const sections = Array.isArray(row.sections) ? row.sections : [];
   const sectionKey = `${currentProject}:${wanted}`;

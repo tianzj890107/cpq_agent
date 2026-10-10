@@ -943,9 +943,116 @@ def _stats(entities: Sequence[Dict[str, Any]], layers: Sequence[Dict[str, Any]],
     }
 
 
+#: 内孔整圆的包含判定采样点数（Spec §3：包含要用实际曲线验证，不是只看包围盒）。
+CIRCLE_HOLE_PROBE_STEPS = 16
+
+
+def _point_in_polygon(point: Sequence[float], polygon: Sequence[Sequence[float]]) -> bool:
+    """射线法：点是否在折线多边形内部（只服务"整圆是不是别件里的孔"这一件事）。"""
+    x, y = float(point[0]), float(point[1])
+    inside = False
+    total = len(polygon)
+    for index in range(total):
+        x1, y1 = float(polygon[index][0]), float(polygon[index][1])
+        x2, y2 = float(polygon[(index + 1) % total][0]), float(polygon[(index + 1) % total][1])
+        if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / (y2 - y1) + x1:
+            inside = not inside
+    return inside
+
+
+def _enclosing_outline_shape(by_id: Dict[str, Dict[str, Any]],
+                             component: Dict[str, Any]) -> Tuple[Optional[List[List[float]]], Any]:
+    """外轮廓候选：单条闭合折线的顶点多边形，或单个整圆的（圆心, 半径）。
+
+    Spec §3 明确"须用实际曲线/多边形验证包含，不仅用矩形重叠" —— 这里只认这两种能
+    逐点验形的形状；多实体拼出来的外轮廓宁可不判，也不拿包围盒当轮廓。
+    """
+    ids = [str(item) for item in (component.get("entity_ids") or []) if str(item)]
+    if len(ids) != 1:
+        return None, None
+    row = by_id.get(ids[0]) or {}
+    kind = str(row.get("kind") or "")
+    attributes = row.get("attributes") if isinstance(row.get("attributes"), dict) else {}
+    if kind == "polyline" and row.get("closed"):
+        points = [list(point) for point in (attributes.get("points") or [])
+                  if isinstance(point, (list, tuple)) and len(point) >= 2]
+        if len(points) >= 3:
+            return points, None
+    if kind == "circle":
+        center, radius = attributes.get("center"), geometry.finite(attributes.get("radius"))
+        if center and radius and float(radius) > 0:
+            return None, ([float(center[0]), float(center[1])], float(radius))
+    return None, None
+
+
+def _enclosed_hole_circles(by_id: Dict[str, Dict[str, Any]],
+                           components: Sequence[Dict[str, Any]]) -> List[str]:
+    """整圆成件（Spec §3）之后的一步：**圆内碎线不是整件**（Spec §1）。
+
+    单实体整圆若整体落在另一个分量的真实轮廓里，它是那一件的内孔 / 内部刀线 ——
+    仍留在 `holes` 里当独立证据，但不单独成件。外轮廓只认"单条闭合折线的顶点多边形"
+    与"同心且更大的整圆"；其余形状不参与判定（宁可留着，也不拿包围盒乱并）。
+    """
+    dropped: List[str] = []
+    for candidate in components:
+        ids = [str(item) for item in (candidate.get("entity_ids") or []) if str(item)]
+        if len(ids) != 1:
+            continue
+        row = by_id.get(ids[0]) or {}
+        if str(row.get("kind") or "") != "circle":
+            continue
+        attributes = row.get("attributes") if isinstance(row.get("attributes"), dict) else {}
+        center, radius = attributes.get("center"), geometry.finite(attributes.get("radius"))
+        if not center or not radius or float(radius) <= 0:
+            continue
+        cx, cy, r = float(center[0]), float(center[1]), float(radius)
+        box = [cx - r, cy - r, cx + r, cy + r]
+        probe = [[cx + r * 0.999 * math.cos(2 * math.pi * step / CIRCLE_HOLE_PROBE_STEPS),
+                  cy + r * 0.999 * math.sin(2 * math.pi * step / CIRCLE_HOLE_PROBE_STEPS)]
+                 for step in range(CIRCLE_HOLE_PROBE_STEPS)]
+        for other in components:
+            if other is candidate:
+                continue
+            outer_box = other.get("bbox")
+            # 包围盒先当**必要**判据筛一遍（省掉几万次逐点验形）；合并/归属仍一律看实际曲线。
+            if not (isinstance(outer_box, (list, tuple)) and len(outer_box) >= 4
+                    and float(outer_box[0]) <= box[0] and float(outer_box[1]) <= box[1]
+                    and float(outer_box[2]) >= box[2] and float(outer_box[3]) >= box[3]):
+                continue
+            polygon, circle = _enclosing_outline_shape(by_id, other)
+            if polygon is not None and all(_point_in_polygon(point, polygon) for point in probe):
+                dropped.append(str(candidate.get("component_id") or ""))
+                break
+            if circle is not None:
+                outer_center, outer_radius = circle
+                if (outer_radius > r and math.hypot(outer_center[0] - cx, outer_center[1] - cy)
+                        <= outer_radius - r):
+                    dropped.append(str(candidate.get("component_id") or ""))
+                    break
+    return dropped
+
+
 def _geometry_block(entities: Sequence[Dict[str, Any]], tolerance: float) -> Dict[str, Any]:
+    # 零件来源的"可制造曲线"只有折线、直线与整圆（Spec
+    # `packaging-drawing-order-circles-and-dimension-scene.md` §3：整圆要与折线一样成件）。
+    # 圆弧 / 椭圆 / 样条仍是**碎片证据**（`open_outlines` 与 `holes` 照旧收录），不单独成件：
+    # 它们一端接在别件轮廓上，会把两个分量桥接成一个、并把角色判成 unknown
+    # （实测圆盘盒：全量并入后 312→441 件、role_known 9→1）。
     manufacturing = [row for row in entities if row.get('kind') in
-                     ('polyline','line','circle','arc','ellipse','spline')]
+                     ('polyline','line','circle')]
+    by_id = {str(row.get("entity_id")): row for row in entities}
+    components = geometry.components_of(manufacturing, tolerance)
+    # 内孔整圆：整圆先成件（Spec §3），被真包含的那些再退回"那一件的内部证据"（Spec §1）。
+    hole_ids = {str(row.get("entity_id")) for row in manufacturing
+                if str(row.get("kind") or "") == "circle"}
+    enclosed = set(_enclosed_hole_circles(by_id, components)) if hole_ids else set()
+    if enclosed:
+        components = [row for row in components
+                      if str(row.get("component_id") or "") not in enclosed]
+        internal = {str(item) for row in components for item in (row.get("entity_ids") or [])}
+        manufacturing = [row for row in manufacturing
+                         if str(row.get("entity_id")) not in hole_ids
+                         or str(row.get("entity_id")) in internal]
     closed = [row for row in manufacturing if row.get('closed')]
     open_rows = [row for row in entities
                  if row.get("kind") == "line"
@@ -1005,7 +1112,7 @@ def _geometry_block(entities: Sequence[Dict[str, Any]], tolerance: float) -> Dic
     return {
         "closed_outlines": [outline(row) for row in closed],
         "open_outlines": [outline(row) for row in open_rows],
-        "components": geometry.components_of(manufacturing, tolerance),
+        "components": components,
         "holes": hole_rows,
         "repeated_groups": repeated_groups,
         "overlaps": overlaps,
