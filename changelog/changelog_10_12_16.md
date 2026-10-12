@@ -78,4 +78,14 @@
   `test_packaging_single_cost_ledger_red` 18 OK、`test_packaging_cost_engine_red` 81 OK、
   `test_e2e_packaging_downstream_handoff_red` 12 OK、`test_packaging_manual_field_confirmation_red` 13 OK、
   `test_packaging_semantics_red` 59 OK（skip 1）、`test_packaging_product_outline_red` 21 OK（skip 1）。
-- 线上只跑流程与只读排查，未改代码、未删数据；本轮未提交、未推送、未部署。
+- 线上只跑流程与只读排查，未改代码、未删数据；本轮没有改动任何业务实现。
+- 提交 `f5d9f87`（5 个文件：2 个 Spec + 2 个红测 + 本周 changelog，747 insertions）。
+- 双远端（`ytbz`）：GitLab `865f2b3..f5d9f87`、GitHub `865f2b3..f5d9f87`；`ls-remote` 回读一致
+  `f5d9f87524bb08e117aab07a4062d6d0d8611dcb`。
+- 34 部署：`bash scripts/deploy_34_bare.sh ytbz` → `b35e02ef2 → f5d9f8752`（ref=ytbz）；
+  `build.commit=f5d9f87524bb`（branch=ytbz）、8010 pid=4162624、health `status=ok`、
+  PATH 含 xvfb 目录；两份真实样本 `converter_role=primary`（酒盒 6711 实体/8 层、圆盘盒 3457/32）；
+  隔离端到端自检 `verdict=ok`（两条链路八步 8/8；权威实样路线 `confirm=confirmed`），
+  隔离目录已删、运行目录项目数 86 → 86 未污染。代码与部署前一致（本批只含 Spec/红测），
+  因此本次部署不改变线上行为。
+- 能力声明不变：DWG 编排能力完成，真实转换能力未验收。
