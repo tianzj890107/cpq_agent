@@ -7692,6 +7692,32 @@ def read_packaging_business_parts(pid: str, user: dict = Depends(current_user)):
     return _business_parts_body(pid)
 
 
+#: 采纳 2.1 解析出的「待确认」字段候选（Spec
+#: `packaging-2-1-candidate-fields-into-downstream.md` §2.4）。路径写成具名常量。
+PACKAGING_FIELD_CANDIDATE_ADOPT_PATH = (
+    "/api/projects/{pid}/requirement/packaging-semantics/candidates/adopt")
+
+
+class PackagingFieldCandidateAdoptAction(BaseModel):
+    """采纳入参：要采纳的字段键 + 说明（说明只留痕，不参与判定）。"""
+    fields: List[str] = Field(default_factory=list)
+    note: str = ""
+
+
+@app.post(PACKAGING_FIELD_CANDIDATE_ADOPT_PATH)
+def adopt_packaging_field_candidates(pid: str, body: PackagingFieldCandidateAdoptAction,
+                                     user: dict = Depends(current_user)):
+    """把 2.1 解析出的「待确认」字段候选采纳进需求单。
+
+    采纳 = 人确认了这批候选值，写的是**需求草稿**（不是需求审批、不跑下游、不动成本）：
+    "解析出成品尺寸"与"盒型匹配读得到成品尺寸"之间的那道缝由这一步补上。
+    """
+    _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
+    _workflow_project(pid)
+    return packaging_semantics.adopt_requirement_candidates(
+        pid, body.fields, actor=str(user.get("username") or "system"), note=body.note)
+
+
 @app.put(PACKAGING_LAYOUT_CONFIRM_PATH)
 def confirm_packaging_layout(pid: str, entity_id: str, body: dict = Body(...),
                              user: dict = Depends(current_user)):

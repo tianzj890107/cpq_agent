@@ -1,7 +1,7 @@
 # Spec：成本账按「组成（section）」发号时，明细必须仍然归得回父件
 
-状态：Spec + 红测（**未实现**）
-红测：`tests/test_packaging_cost_ledger_section_recon_red.py`（本批新增，10 条；当前 8 红）
+状态：Spec + 红测（已实现）
+红测：`tests/test_packaging_cost_ledger_section_recon_red.py`（10 条，已全绿）
 血缘：`docs/specs/packaging-single-cost-ledger.md`（§分类与数量：单件行按整单明细 `part_code` 归集、
 明细与各类别及整单总额对账，失配须披露并禁止确认）、
 `docs/specs/packaging-multipart-business-part-complete.md`（一个业务零件可由多个独立物理部分组成）、
@@ -102,3 +102,16 @@
 「工艺可行性结论为空；各工艺阶段汇总结论为空」——3.1 汇总页把"经济可行性"写死成占位句、
 阶段汇总没有 2.3 行。**这一条已由 `tests/test_tech_summary_report_includes_cost_review_red.py`
 （Spec 见其文件头）覆盖**，本批不重复出 Spec、不改它。
+
+## 6. 实现及测试记录（2026-10-12）
+
+- 实现只改对账读侧一处：`tech_app/backend/services/packaging_cost_ledger.py` 新增
+  `_owner_part_code()`（先认在册的 `part_code` 本身，再认行上 `parent_part_code`，
+  最后按 `::` 取父件号），`project()` 用它把明细行归回父件 —— 公式、费率、损耗、
+  `packaging_sections` 的发号规则一个字未动。
+- `tests/test_packaging_cost_ledger_section_recon_red.py` 10 条由 8 红转全绿；
+  回归 `test_packaging_single_cost_ledger_red` 18 OK、`test_packaging_cost_engine_red` 81 OK、
+  `test_e2e_packaging_downstream_handoff_red` 12 OK、`test_packaging_cost_gaps_red` 10 OK、
+  `test_packaging_bom_business_parts_rows_red` 23 OK。
+- 第一版把「在册 part_code 直接归位」漏掉，`test_packaging_single_cost_ledger_red` 立刻报了
+  4 条（`unknown_part:RB01001-P01` 一类），已补齐该分支后复跑全绿。

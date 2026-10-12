@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import datetime
 from typing import Any, Dict, Iterable, List, Tuple
 
 from ...models.workflow import RequirementDoc
@@ -174,7 +175,9 @@ def apply_to_requirement(project_id: str, semantics: Dict[str, Any], *,
                 provenance[key] = record
                 sources[key] = "manual"
             else:
-                sources[key] = ("manual" if key in accepted and status != "confirmed"
+                # 采纳本身就是人工确认动作：无论候选此前是 needs_confirmation 还是
+                # confirmed，来源都记成人确认（Spec §2.2"采纳写入必须留痕"）。
+                sources[key] = ("manual" if key in accepted
                                 else SOURCE_MAP.get(str(candidate.get("origin") or ""), "attachment"))
             applied[key] = {"origin": record.get("origin"), "value": candidate.get("value")}
         else:
@@ -248,3 +251,123 @@ def group_of(field_key: str) -> Tuple[str, ...]:
     from . import model
 
     return tuple(model.DIMENSION_GROUP) if field_key in model.DIMENSION_GROUP else (str(field_key),)
+
+
+# --------------------------------------------------------------------------- #
+# 2.1 候选采纳（Spec `packaging-2-1-candidate-fields-into-downstream.md`）
+# --------------------------------------------------------------------------- #
+#: 采纳被拒 / 冲突的稳定码（闭集，Spec §2.2）。
+CODE_CANDIDATE_UNKNOWN = "candidate_unknown"
+CODE_CANDIDATE_MISSING = "candidate_missing"
+CODE_MANUAL_CONFLICT = "manual_conflict"
+CODE_UNIT_UNCONFIRMED = "unit_unconfirmed"
+CODE_CANDIDATE_STATUS = "candidate_status_not_adoptable"
+
+#: 只有"待确认 / 已确认"的候选可以被人工采纳；`conflict` 等状态必须先由人裁定，
+#: 不许借"采纳"这个动作把冲突候选翻成 confirmed（Spec §2.2）。
+ADOPTABLE_CANDIDATE_STATUSES = ("needs_confirmation", "confirmed")
+
+#: 绝对尺寸字段：单位未确认时不许采纳（沿用既有"单位未确认时图纸绝对尺寸不许 confirmed"口径）。
+SIZE_KEYS = ("inner_length", "inner_width", "inner_height", "carton_size")
+
+#: 采纳审计动作名（同时含 candidate 与 adopt，便于契约测试与事后检索）。
+ACTION_CANDIDATES_ADOPTED = "packaging_semantics.candidates_adopted"
+
+
+def _now_str() -> str:
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _unit_status(project_id: str) -> str:
+    """读图纸链路的单位确认状态；**读不到一律按未确认**（保守方向，Spec §2.2）。"""
+    try:
+        from ..packaging_drawing_flow import anchor as flow_anchor
+        current = flow_anchor.current_anchor(project_id) or {}
+    except Exception:                                            # noqa: BLE001 - 读不到就是没确认
+        return ""
+    return str(current.get("unit_status") or "")
+
+
+def _values_equal(left: Any, right: Any) -> bool:
+    try:
+        return bool(requirement_service.values_equivalent(left, right))
+    except Exception:                                            # noqa: BLE001 - 兜底不阻塞采纳
+        try:
+            return float(left) == float(right)
+        except (TypeError, ValueError):
+            return str(left).strip() == str(right).strip()
+
+
+def adopt_candidates(project_id: str, keys: Iterable[str], *, actor: str = "system",
+                     note: str = "", semantics: Dict[str, Any] = None) -> Dict[str, Any]:
+    """把语义文档里**待确认但已有值**的候选采纳进需求单（人工确认动作）。
+
+    只落地人点名的那几个键；三条守卫一个都不许放宽（Spec §2.2）：候选没值不许造值、
+    人工值与候选冲突不许静默覆盖、单位未确认时绝对尺寸不许 confirmed。
+    """
+    if not isinstance(semantics, dict):
+        raise ValueError("adopt_candidates() 需要一份语义文档")
+    fields = semantics.get("fields") if isinstance(semantics.get("fields"), dict) else {}
+    wanted = sorted({str(item) for item in (keys or ()) if str(item)})
+
+    current = requirement_service.store.load_requirement(project_id)
+    if not current:
+        raise RequirementDraftMissing()
+    data: Dict[str, Any] = dict(current.get("data") or {})
+    sources: Dict[str, Any] = dict(data.get("field_sources") or {})
+    provenance: Dict[str, Any] = dict(data.get("field_provenance") or {})
+    unit_ok = _unit_status(project_id) == "confirmed"
+
+    adopted: List[str] = []
+    rejected: List[Dict[str, str]] = []
+    conflicts: List[Dict[str, str]] = []
+    for key in wanted:
+        candidate = fields.get(key)
+        if not isinstance(candidate, dict):
+            rejected.append({"field": key, "code": CODE_CANDIDATE_UNKNOWN})
+            continue
+        if str(candidate.get("status") or "missing") == "missing" or not _has_value(candidate.get("value")):
+            rejected.append({"field": key, "code": CODE_CANDIDATE_MISSING})
+            continue
+        if str(candidate.get("status") or "missing") not in ADOPTABLE_CANDIDATE_STATUSES:
+            rejected.append({"field": key, "code": CODE_CANDIDATE_STATUS})
+            continue
+        if key in SIZE_KEYS and not unit_ok:
+            rejected.append({"field": key, "code": CODE_UNIT_UNCONFIRMED})
+            continue
+        entry = provenance.get(key)
+        if (_is_manual_source(entry, sources.get(key)) and _has_value(data.get(key))
+                and not _values_equal(data.get(key), candidate.get("value"))):
+            kept = dict(entry) if isinstance(entry, dict) else {}
+            kept["alternatives"] = [*(kept.get("alternatives") or []), _alternative(candidate)]
+            provenance[key] = kept
+            conflicts.append({"field": key, "code": CODE_MANUAL_CONFLICT})
+            continue
+        adopted.append(key)
+
+    if adopted or conflicts:
+        if adopted:
+            # 写入本身仍走唯一那份实现（值 / field_sources / 看板口径都在它里面）。
+            apply_to_requirement(project_id, semantics, accept=tuple(adopted), author=actor)
+            current = requirement_service.store.load_requirement(project_id) or current
+            data = dict(current.get("data") or {})
+            provenance = dict(data.get("field_provenance") or {})
+        for key in adopted:
+            entry = dict(provenance.get(key)) if isinstance(provenance.get(key), dict) else {}
+            entry.update({"origin": "user_confirmed", "status": "confirmed",
+                          "adopted_by": str(actor or "system"), "adopted_at": _now_str(),
+                          "adopted_note": str(note or "")})
+            provenance[key] = entry
+        data["field_provenance"] = provenance
+        doc = RequirementDoc.model_validate({**current, "data": data})
+        requirement_service.save_requirement_draft(
+            project_id, doc, user={"username": actor or "system"}, current=current)
+
+    requirement_service.store.audit(project_id, ACTION_CANDIDATES_ADOPTED, {
+        "adopted": adopted, "rejected": rejected, "conflicts": conflicts,
+        "note": str(note or ""), "by": str(actor or "system"),
+    })
+    return {"adopted": sorted(adopted),
+            "rejected": sorted(rejected, key=lambda row: row["field"]),
+            "conflicts": sorted(conflicts, key=lambda row: row["field"]),
+            "warnings": []}

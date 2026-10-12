@@ -90,6 +90,47 @@
   因此本次部署不改变线上行为。
 - 能力声明不变：DWG 编排能力完成，真实转换能力未验收。
 
+## 2026-10-12 成本账组成归集与 2.1 候选字段采纳通道
+
+- 用户明确授权自行实现后，把 2026-10-12 新写的两批 Spec 红测就地转绿，业务代码只在允许范围内改动。
+- 成本账组成归集：多部分组成编号（如 `DWG-BP10::section:<hash>`）不再被当成未知零件，按在册零件号、
+  部件父号、`::` 前段三级归位后再计入对账；只有归不回去的组成才报 `unknown_part:`。
+  红测 `tests/test_packaging_cost_ledger_section_recon_red.py` 10 条全绿。
+  这正是线上酒盒 `6beeeebb19a1` 卡在 `POST /cost-review/confirm` 400「包装成本明细与总额未对齐」的根因，
+  线上旧版本实测仍为 `reconciled=false`，8 条 `unknown_part:DWG-BP10/BP12::section:*`。
+- 2.1 候选字段采纳通道：新增"把 2.1 图纸算出的候选尺寸人工采纳进需求单"的能力，
+  记录采纳人/时间/说明与审计动作，单位未确认或字段冲突时不静默写入；
+  红测 `tests/test_packaging_candidate_fields_adoption_red.py` 11 条全绿。
+  圆盘盒 `9ab4fe6ce416` 的下游阻断（`needs_confirmation` 候选进不了需求单，导致
+  `box_type_not_confirmable` → `box_type_not_confirmed` → 送财务 400）由此具备可走通的服务端入口；
+  前端采纳按钮仍未做，线上未部署，因此线上行为不变。
+- 全量回归：4 分片并行，`7268 ran / 0 failures / 0 errors / 29 skipped`，各分片全部通过。
+  相关定向回归 `test_packaging_single_cost_ledger_red` 18、`test_packaging_cost_engine_red` 81、
+  `test_e2e_packaging_downstream_handoff_red` 12、`test_packaging_cost_gaps_red` 10、
+  `test_packaging_bom_business_parts_rows_red` 23、`test_packaging_manual_field_confirmation_red` 13、
+  `test_packaging_semantics_red` 59（skip 1）、`test_packaging_product_outline_red` 21（skip 1）、
+  `test_packaging_drawing_flow_red` 54（skip 1）、`test_drawing_flow_parse_terminal_signal_red` 30、
+  `test_packaging_parametric_bom_red` 57、`test_packaging_quote_close_loop_red` 96 均通过。
+- 两个 Spec 状态由"未实现"更新为"已实现"，并追加本轮实现与测试记录。
+- 本批代码与文档随当次提交入库（提交、双远端推送与部署记录见当日后续条目）。
+
+## 2026-10-12 材料相似度推荐与演示输入装配
+
+- 新增 Spec `docs/specs/packaging-material-similarity-recommendation-and-demo-inputs.md`；
+  红测 `tests/test_packaging_material_similarity_and_demo_inputs_red.py` 15 条、
+  `tests/test_packaging_demo_flow_end_to_end_red.py` 4 条，全部通过。
+- 材料推荐按克重、厚度、材质族与字面相似度打分，结论分
+  `exact_name / similarity / ambiguous / below_threshold / no_candidate` 五档；前两名接近时
+  如实报"歧义"而不是静默取最高分，`approved` 恒为 False，推荐结果只供人确认。
+- 缺克重时按 原文克重 → 材料属性 → 牌号 → 厚度×密度 逐级推导；密度或吨价缺失时只走按材质族的
+  演示口径，并在载荷里逐条披露 `source=demo_family_price`，不与权威价目混为一谈。
+- 演示输入装配：零件开料长宽取几何分量的逐轴包络，材料原文优先取对照资料、缺失时按件名关键词族
+  推定；只写 `poc_inputs` / `cost_parameters` 与文档级 `poc_demo` 标记，**不写** `confirmed_size`，
+  不覆盖历史版本；源码不含任何真实样本名或零件编号，换一张 DWG 同样走相似度推荐而非硬编码。
+- 端到端口径：没有尺寸时材料费为 0 并如实报缺口；补上演示输入后材料费 > 0，并在结果里标明哪几项
+  来自演示输入。脚本 `scripts/packaging_demo_prepare.py`（干跑 / `--apply`）写入演示输入并按现有
+  顺序重排 BOM → 路线 → 成本，逐件打印尺寸、材料与推荐来源。
+
 ## 2026-10-12 报价卡片回到销售视角（技术整包/零件表撤出、定价块按步骤、第 4 步不再复制第 3 步）
 
 - 新增 Spec `docs/specs/packaging-quote-card-sales-view-parity.md`（C1–C6）与红测

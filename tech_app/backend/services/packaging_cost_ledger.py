@@ -24,6 +24,26 @@ def _breakdown(values):
     return result
 
 
+#: 多组成件的明细行按 `<父件号>::<section_id>` 发号（`packaging_sections.section_input_rows()`）。
+#: 对账读侧只认父件号：子件号是同一件的一个物理组成部分，不是"另一件"。
+SECTION_SEPARATOR = '::'
+
+
+def _owner_part_code(code, codes, item):
+    """把明细行的 part_code 归回业务部件清单里的那一件；归不回去返回空串。
+
+    优先认行上显式的 `parent_part_code`，其次按分隔符取 `::` 前段；两者都要落在清单里
+    才算归属成功 —— 父件都不在清单里时仍然按"未知零件"报出，守卫不放宽。
+    """
+    if code in codes:
+        return code
+    parent = str((item or {}).get('parent_part_code') or '')
+    if parent and parent in codes:
+        return parent
+    head = code.split(SECTION_SEPARATOR, 1)[0] if SECTION_SEPARATOR in code else ''
+    return head if head and head in codes else ''
+
+
 def project(doc, ledger):
     from . import packaging_cost
     parts = (doc or {}).get('business_parts') or []
@@ -45,10 +65,11 @@ def project(doc, ledger):
         code = str(item.get('part_code') or '')
         if _number(item.get('amount')) is None:
             errors.append('invalid_amount:' + (code or 'project'))
-        if code and code not in codes:
+        owner = _owner_part_code(code, codes, item) if code else ''
+        if code and not owner:
             errors.append('unknown_part:' + code)
-        if code in codes:
-            grouped.setdefault(code, []).append(item)
+        if owner:
+            grouped.setdefault(owner, []).append(item)
     rows = []
     allocated = dict.fromkeys(KEYS, 0.0)
     for part in parts:

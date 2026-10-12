@@ -352,6 +352,18 @@ def apply_to_requirement(project_id: str, semantics: Dict[str, Any], *,
     return provenance.apply_to_requirement(project_id, semantics, accept=accept, author=author)
 
 
+def adopt_requirement_candidates(project_id: str, keys: Any, *, actor: str, note: str = "",
+                                semantics: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """采纳 2.1 解析出的「待确认」字段候选（Spec `packaging-2-1-candidate-fields-into-downstream.md` §2.1）。
+
+    只落地人点名的那几个键；写盘仍只经 `provenance`（同一份 `apply_to_requirement`）。
+    """
+    doc = semantics if isinstance(semantics, dict) else load_semantics(project_id)
+    if not isinstance(doc, dict):
+        raise ValueError("这个项目还没有图纸语义文档，无法采纳字段候选")
+    return provenance.adopt_candidates(project_id, keys, actor=actor, note=note, semantics=doc)
+
+
 def summarize(semantics: Dict[str, Any]) -> Dict[str, Any]:
     return provenance.summarize(semantics)
 
@@ -363,4 +375,5 @@ def migrate(semantics: Any) -> Dict[str, Any]:
 __all__ = [
     "SEMANTICS_VERSION", "capability", "analyze", "analyze_conversion", "load_semantics",
     "list_semantics", "field_candidates", "apply_to_requirement", "summarize", "migrate",
+    "adopt_requirement_candidates",
 ]

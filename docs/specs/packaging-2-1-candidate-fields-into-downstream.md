@@ -1,7 +1,7 @@
 # Spec：2.1 解析出的「待确认」字段必须有采纳通道，采纳后盒型匹配才看得到
 
-状态：Spec + 红测（**未实现**）
-红测：`tests/test_packaging_candidate_fields_adoption_red.py`（本批新增，11 条；当前 10 红、1 绿为反例守卫）
+状态：Spec + 红测（已实现）
+红测：`tests/test_packaging_candidate_fields_adoption_red.py`（13 条，已全绿）
 血缘：`docs/specs/packaging-manual-field-confirmation.md`（人工录入/确认的字段能让门禁转绿 —— 本批补的是它的**另一半**：图纸候选怎么变成"人工确认"）、
 `docs/specs/packaging-product-outline-and-die-layer-roles.md`（产品级圆 → `inner_length = inner_width =` 圆直径）、
 `docs/specs/packaging-box-type-matching.md`（盒型匹配的 7 个输入键）、
@@ -64,13 +64,15 @@ def adopt_requirement_candidates(project_id, keys, *, actor, note="", semantics=
 | --- | --- |
 | 语义文档里没有这个键 | `rejected`，`code="candidate_unknown"` |
 | 候选 `value` 为空 / `status=missing` | `rejected`，`code="candidate_missing"`，**不许凭空造值** |
+| 候选 `status` 不在 `("needs_confirmation", "confirmed")`（例如 `conflict`） | `rejected`，`code="candidate_status_not_adoptable"`；冲突候选必须先由人裁定，不许借采纳翻成 confirmed |
 | 需求单上已有人工值（`field_sources[key]=="manual"`）且与候选**不等** | `conflicts`，`code="manual_conflict"`；保留人工值，候选只作备选（`alternatives`） |
 | 需求单人工值与候选**相等** | 正常 `adopted`（把来源与看板补齐为已确认），不算冲突 |
 | 字段属绝对尺寸（`inner_length / inner_width / inner_height / carton_size`）而锚点单位未确认（`anchor.unit_status != "confirmed"`） | `rejected`，`code="unit_unconfirmed"`；既有口径"单位未确认时图纸绝对尺寸不许 confirmed"一个字都不许放宽 |
 | 非尺寸字段（如 `box_type`、`insert_type`） | 不受单位门禁影响 |
 
 采纳写入必须留痕：`field_provenance[key]` 记 `origin="user_confirmed"`、`status="confirmed"`、
-`value=<采纳值>`、`adopted_by=<actor>`、`adopted_at=<时间>`；`field_sources[key]="manual"`；
+`value=<采纳值>`、`adopted_by=<actor>`、`adopted_at=<时间>`；`field_sources[key]="manual"`
+（候选此前是 `needs_confirmation` 还是 `confirmed` 都一样，采纳即人确认）；
 并有审计动作（动作名里同时含 `candidate` 与 `adopt`）。
 
 ### 2.3 C3：解析本身永远不自动采纳
@@ -124,3 +126,20 @@ PACKAGING_FIELD_CANDIDATE_ADOPT_PATH = "/api/projects/{pid}/requirement/packagin
 - 不许在 `field_write` 或盒型匹配里"自动采纳"候选（C3）。
 - 不许把"采纳"实现成需求单提交/审批（那是 1.2 / 1.3 的职责）。
 - 不许给 `box_type_not_confirmable` 加"签字放行"绕过 —— 决策仍要 `matched && can_confirm`。
+
+## 5. 实现及测试记录（2026-10-12）
+
+- 实现三处：`packaging_semantics/provenance.py` 新增 `adopt_candidates()`（校验三条守卫后，
+  值仍由既有 `apply_to_requirement(accept=...)` 写，再补记 `adopted_by/adopted_at` 与审计）、
+  `packaging_semantics/__init__.py` 导出 `adopt_requirement_candidates()`、
+  `main.py` 新增具名常量 `PACKAGING_FIELD_CANDIDATE_ADOPT_PATH` 与 POST 路由
+  （`auth.MANAGER_ROLES`，只写需求草稿）。
+- 单位门禁读图纸链路的 `anchor.current_anchor(project_id)['unit_status']`；**读不到一律按未确认**
+  处理（保守方向，绝对尺寸不采纳）。
+- `tests/test_packaging_candidate_fields_adoption_red.py` 13 条由 10 红转全绿（含 1 条反例守卫：
+  解析自己仍不许自动采纳；另 2 条钉住本轮修正：冲突态候选不可采纳、已 confirmed 的候选被采纳后
+  来源仍记 `manual`）；回归 `test_packaging_manual_field_confirmation_red` 13 OK、
+  `test_packaging_semantics_red` 59 OK（skip 1）、`test_packaging_product_outline_red` 21 OK（skip 1）、
+  `test_packaging_drawing_flow_red` 54 OK（skip 1）、`test_drawing_flow_parse_terminal_signal_red` 30 OK。
+- 红测里 C2 那条原本按「常量出现处的上下文里要有 `@app.post`」判，实现后常量定义在装饰器之前，
+  判定改成更严的 `@app.post(PACKAGING_FIELD_CANDIDATE_ADOPT_PATH)` 字面量（仍只认这一种写法）。

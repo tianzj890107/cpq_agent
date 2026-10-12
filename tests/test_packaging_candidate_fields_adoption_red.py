@@ -182,6 +182,25 @@ class ACandidateAdoption(AdoptCase):
         self.assertIsNone(self.data(req).get("closure_type"),
                           "候选没值就不许凭「采纳」造一个出来")
 
+    def test_a6_only_pending_or_confirmed_candidates_are_adoptable(self):
+        """冲突候选必须先由人裁定，不许借"采纳"这个动作翻成 confirmed（Spec §2.2）。"""
+        sem = round_semantics()
+        sem["fields"]["box_type"] = candidate("round_tube", status="conflict", confidence=0.3)
+        service, req, _state, project_id = self.case()
+        result = self.adopt_fn()(project_id, ["box_type"], semantics=sem, actor="PE1")
+        self.assertEqual([], sorted(result.get("adopted") or []))
+        self.assertNotIn("box_type", self.data(req))
+
+    def test_a7_adopting_an_already_confirmed_candidate_still_records_manual_source(self):
+        """采纳本身就是人确认动作：候选此前已是 confirmed，来源同样记成 manual（Spec §2.2）。"""
+        sem = round_semantics()
+        sem["fields"]["box_type"] = candidate("round_tube", status="confirmed",
+                                             origin="confirmed_from_cad")
+        service, req, _state, project_id = self.case()
+        result = self.adopt_fn()(project_id, ["box_type"], semantics=sem, actor="PE1")
+        self.assertEqual(["box_type"], sorted(result.get("adopted") or []))
+        self.assertEqual("manual", (self.data(req).get("field_sources") or {}).get("box_type"))
+
     def test_a5_unknown_field_is_rejected(self):
         service, req, _state, project_id = self.case()
         result = self.adopt(project_id, ["not_a_real_field"])
@@ -254,9 +273,8 @@ class CDownstreamSeesIt(AdoptCase):
         source = MAIN_PY.read_text(encoding="utf-8", errors="replace")
         self.assertIn("PACKAGING_FIELD_CANDIDATE_ADOPT_PATH", source,
                       "必须有一条具名常量路由（Spec §2.4），便于契约测试钉住")
-        marker = source.find("PACKAGING_FIELD_CANDIDATE_ADOPT_PATH")
-        head = source[max(0, marker - 400):marker]
-        self.assertIn("@app.post", head, "采纳入口必须是 POST")
+        self.assertIn("@app.post(PACKAGING_FIELD_CANDIDATE_ADOPT_PATH)", source,
+                      "采纳入口必须把具名常量用在 POST 装饰器上")
         self.assertIn("adopt_requirement_candidates", source,
                       "路由必须调用同一个服务入口，不许另写一套写入逻辑")
 
