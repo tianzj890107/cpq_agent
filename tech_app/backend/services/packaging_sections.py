@@ -118,6 +118,10 @@ def hydrate_part(row, components):
     if result.get('sections_source') == 'manual' and result.get('sections'):
         return result
     binding = result.get('geometry_binding') or {}
+    if (binding.get('exact_raw_layout') and result.get('sections_source') in ('raw_cad_layout','raw_cad_portions')
+            and result.get('sections')
+            and {eid for s in result['sections'] for eid in s.get('entity_ids') or []} == set(binding.get('entity_ids') or [])):
+        return result  # 不用被面积门槛过滤后的残片覆盖原始区域成员。
     selected = set(binding.get('component_ids') or [])
     members = [r for r in components if r.get('component_id') in selected]
     declarations = [r.get('name') for r in result.get('declared_sections') or [] if r.get('name')]

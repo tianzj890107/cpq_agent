@@ -535,8 +535,11 @@ def extract_text_anchors(cad_ir: Any, *, layout_aware: bool = False) -> List[Dic
     layout_x = [_num(row["position"][0]) for row in layout_rows
                 if len(row.get("position") or []) >= 2]
     layout_x = [value for value in layout_x if value is not None]
+    # 已拆开的方案可能不再带方案标题，右侧排模仍由排N模证据确定。
+    has_parts_heading = any(split_label_parts(_text(t.get('raw_text')))[0].strip() == '外盒'
+                            for t in ir.get('texts') or [] if isinstance(t,dict))
     right_layout_edge = (min(layout_x) if layout_aware and len(layout_x) >= 2
-                         and packaging_layout.scheme_labels(ir) else None)
+                         and (packaging_layout.scheme_labels(ir) or has_parts_heading) else None)
     anchors: List[Dict[str, Any]] = []
     for row in (ir.get("texts") or []):
         if not isinstance(row, dict):

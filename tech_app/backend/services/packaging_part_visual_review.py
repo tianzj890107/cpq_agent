@@ -159,6 +159,26 @@ def _candidates(anchor: Tuple[float, float], regions: Any,
              and 'compound_name_anchor' in (row.get('evidence_reasons') or [])]
     ordered = named + enclosure[:3] + chosen_groups + current + nearby
     ordered = list({row['id']:row for row in ordered}.values())
+    # 同一实体集合只占一个选项；保留来源，避免单区域和布局候选重复挤占八个名额。
+    unique = {}
+    for record in ordered:
+        key = tuple(sorted(set(record.get('entity_ids') or []))) or (record['id'],)
+        if key not in unique:
+            unique[key] = dict(record, source_candidate_ids=[record['id']])
+        else:
+            kept = unique[key]
+            kept['source_candidate_ids'].append(record['id'])
+            kept['evidence_reasons'] = sorted(set(kept.get('evidence_reasons') or []) |
+                                              set(record.get('evidence_reasons') or []))
+            # 完整区域已独立校正标题归属，不能再合回碎片的猜测性多名字标记。
+            owner = kept.get('name_anchor_entity_id')
+            if (owner and 'caption_column_owner' in kept['evidence_reasons']
+                    and 'raw_cad_entities' in kept['evidence_reasons']
+                    and (not record.get('name_anchor_entity_id') or record.get('name_anchor_entity_id') == owner)):
+                kept['evidence_reasons'] = [r for r in kept['evidence_reasons'] if r != 'mixed_name_owners']
+            if record.get('geometry_status') == 'supported':
+                kept['geometry_status'] = 'supported'
+    ordered = list(unique.values())
     out: List[Dict[str, Any]] = []
     for record in ordered[:8]:
         box = _bbox(record.get("bbox"))
@@ -167,6 +187,7 @@ def _candidates(anchor: Tuple[float, float], regions: Any,
         out.append({
             "id": str(record.get("id") or record.get("candidate_id") or ""),
             "candidate_id": str(record.get("candidate_id") or record.get("id") or ""),
+            "source_candidate_ids": list(record.get('source_candidate_ids') or []),
             "component_ids": list(record.get("component_ids") or []),
             "raw_component_ids": list(record.get("raw_component_ids") or []),
             "entity_ids": list(record.get("entity_ids") or []),
@@ -644,7 +665,7 @@ def _group_record(members: List[Dict[str, Any]], ir: Dict[str, Any],
     frames_of_members = {_frame_for_region(region_id, frames) for region_id in region_ids}
     if len(views_of_members) == 1 and "" not in views_of_members:
         reasons.append(GROUP_REASON_SAME_VIEW)
-    if len(set(roles)) == 1:
+    if len(set(roles)) == 1 and roles[0] not in ("", "unknown"):
         reasons.append(GROUP_REASON_SAME_BOUNDARY)
     return {
         "candidate_id": "group:" + "|".join(component_ids),
@@ -919,6 +940,10 @@ def _compound_named_groups(ir: Any, regions: Any, views: Any, frames: Any) -> Li
             continue
         frame_id = _frame_for_region(str(region.get("region_id") or ""), frames)
         frame = next((item for item in frames or [] if item.get("frame_id") == frame_id), {})
+        owner = region.get('name_anchor_entity_id')
+        if owner and any(a.get('entity_id') == owner for a in anchors):
+            owners.setdefault(str(owner),[]).append(region)
+            continue
         candidates = []
         for anchor in anchors:
             point = _point(anchor.get("position"))
@@ -1006,6 +1031,9 @@ def _combined_groups(ir: Any, regions: Any, views: Any,
         row['evidence_reasons'] = sorted(set(row.get('evidence_reasons') or []) | set(previous.get('evidence_reasons') or []))
         by_members[tuple(row["component_ids"])] = row
     combined = list(by_members.values()) + _raw_layout_groups(ir, regions, frames, views)
+    raw_groups = [g for g in combined if 'raw_cad_entities' in (g.get('evidence_reasons') or [])]
+    # 完整区域独立关联标题，不继承内部碎片各自最近的文字。
+    _assign_local_name_owners(ir, raw_groups, frames)
     by_component = {cid:region for region in regions or [] for cid in region.get('component_ids') or []}
     for group in combined:
         if group.get('name_anchor_entity_id'):
@@ -1020,15 +1048,32 @@ def _combined_groups(ir: Any, regions: Any, views: Any,
 
 
 def _assign_local_name_owners(ir, regions, frames):
-    """Use label-to-outline distance, not label-to-centre."""
+    """外置标题对应同列区域；邻件边缘文字不能仅因距离小抢占。"""
     from . import packaging_business_part_resolver as resolver
     anchors = [a for a in resolver.extract_text_anchors(ir,layout_aware=True)
                if not a.get('excluded') and a.get('name') and _point(a.get('position'))]
+    # 从当前图纸推断标题通常在上还是下，不把酒盒的“标题在下方”写成行业定律。
+    sides = {'above':0,'below':0}
+    for anchor in anchors:
+        point = _point(anchor.get('position'))
+        nearby = []
+        span = max(0,resolver._num(anchor.get('height')) or 0)*(len(str(anchor.get('name') or ''))+3)*0.8
+        for region in regions or []:
+            box = _bbox(region.get('bbox'))
+            if box is None or not box[0]-span <= point[0] <= box[2]:
+                continue
+            gap = box[1]-point[1] if point[1]<box[1] else point[1]-box[3] if point[1]>box[3] else None
+            if gap is not None and gap <= math.hypot(box[2]-box[0],box[3]-box[1]):
+                nearby.append((gap,'below' if point[1]<box[1] else 'above'))
+        if nearby:
+            sides[min(nearby)[1]] += 1
+    preferred = next((side for side in sides if sides[side] >= 2 and
+                      sides[side] > 2*sides['above' if side=='below' else 'below']),None)
     for region in regions or []:
         box = _bbox(region.get('bbox'))
         if box is None:
             continue
-        frame_id = _frame_for_region(region.get('region_id'),frames)
+        frame_id = region.get('frame_id') or _frame_for_region(region.get('region_id'),frames)
         frame = next((f for f in frames or [] if f.get('frame_id') == frame_id),{})
         scores = []
         for anchor in anchors:
@@ -1038,8 +1083,24 @@ def _assign_local_name_owners(ir, regions, frames):
             distance = math.hypot(max(box[0]-point[0],0,point[0]-box[2]),
                                   max(box[1]-point[1],0,point[1]-box[3]))
             if distance <= 650:
-                scores.append((distance,str(anchor.get('entity_id'))))
-        region['name_anchor_entity_id'] = min(scores)[1] if scores else ''
+                tolerance = max(1e-6, (box[2]-box[0])*0.001)
+                # TEXT/MTEXT 插入点是标题左端，不是标题中心；利用字高和文字长度估计文字跨度。
+                height = resolver._num(anchor.get('height')) or 0
+                text_span = max(0,height) * (len(str(anchor.get('name') or ''))+3)*0.8
+                in_column = box[0]-max(tolerance,text_span) <= point[0] <= box[2]+tolerance
+                diagonal = math.hypot(box[2]-box[0],box[3]-box[1])
+                caption_distance = math.hypot(max(box[0]-(point[0]+text_span),0,point[0]-box[2]),
+                                              max(box[1]-point[1],0,point[1]-box[3]))
+                local = caption_distance <= diagonal
+                on_preferred_side = local and ((preferred == 'below' and point[1]<box[1])
+                                              or (preferred == 'above' and point[1]>box[3]))
+                scores.append((0 if on_preferred_side else 1, 0 if in_column and local else 1, caption_distance,
+                               str(anchor.get('entity_id'))))
+        region['name_anchor_entity_id'] = min(scores)[3] if scores else ''
+        if scores and (min(scores)[0] == 0 or min(scores)[1] == 0):
+            reasons = region.setdefault('evidence_reasons',[])
+            if 'caption_column_owner' not in reasons:
+                reasons.append('caption_column_owner')
 
 
 def _outline_enclosure_groups(ir, regions, views, frames):
@@ -1337,7 +1398,7 @@ def _demote(binding: Dict[str, Any], candidates: List[Dict[str, Any]],
                          "member_total", "evidence_reasons", "geometry_status",
                          "frame_id", "view_id", "raw_component_ids", "entity_total",
                          "name_anchor_entity_id", "declared_section_names", "portion_components",
-                         "section_dimension_evidence")}
+                         "section_dimension_evidence", "source_candidate_ids")}
                        for item in candidates],
         "attribution": {"status": status, "reasons": [reason],
                         "selected_candidate_id": selected,

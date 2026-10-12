@@ -2218,7 +2218,8 @@ function packagingPartAnnotationEntities(binding, doc) {
   const evidence = (doc && doc.geometry_evidence && typeof doc.geometry_evidence === "object")
     ? doc.geometry_evidence : {};
   const bound = {};
-  (Array.isArray(row.component_ids) ? row.component_ids : []).forEach(id => {
+  (Array.isArray(row.component_ids) ? row.component_ids : [])
+    .concat(Array.isArray(row.annotation_component_ids) ? row.annotation_component_ids : []).forEach(id => {
     bound[String(id || "")] = true;
   });
   // 只认**绑定分量**里被判成标注的那些：`binding.entity_ids` 是"这一件的形状成员"，
@@ -2481,7 +2482,7 @@ function fitPackagingCadPlan(range) {
 }
 
 // 选中业务部件：绑定图元高亮、缩放到部件范围；整张图仍在（Spec §6.2）。
-function highlightPackagingBusinessPart(partCode, entity_ids) {
+function highlightPackagingBusinessPart(partCode, entity_ids, preserveViewBox) {
   const host = packagingCadPlanViewer();
   currentPackagingBusinessPartCode = String(partCode || "");
   if (!host) return { part: currentPackagingBusinessPartCode, targets: 0 };
@@ -2499,7 +2500,7 @@ function highlightPackagingBusinessPart(partCode, entity_ids) {
     if (match) boxes.push(node.getAttribute("data-bbox"));
   });
   const range = packagingCadPlanRange(boxes.map(text => String(text || "").split(",").map(Number)));
-  if (range) fitPackagingCadPlan(range);
+  if (range && !preserveViewBox) fitPackagingCadPlan(range);
   return { part: currentPackagingBusinessPartCode, targets: boxes.length };
 }
 
@@ -3654,6 +3655,24 @@ function packagingMmText(value) {
 }
 
 function packagingBusinessPartSizeText(row) {
+  // 带候选身份的旧尺寸只能用于原绑定，不能覆盖新候选的组成尺寸。
+  const selectedId = ((row || {}).geometry_binding || {}).candidate_id;
+  if (selectedId) {
+    row = {...row};
+    for (const key of ['confirmed_size', 'reference']) {
+      const value = row[key];
+      if (value && value.candidate_id && value.candidate_id !== selectedId) row[key] = {};
+    }
+    const legacy = row.confirmed_size;
+    const ids = ((row.geometry_binding || {}).component_ids || []).slice().sort().join('|');
+    const legacyIds = ((legacy || {}).component_ids || []).slice().sort().join('|');
+    const currentProof = (row.sections || []).some(s => s.confirmed_size
+      && s.confirmed_size.source === 'verified_cad_dimension'
+      && (!s.confirmed_size.candidate_id || s.confirmed_size.candidate_id === selectedId));
+    if (legacy && !legacy.candidate_id && currentProof && (!legacyIds || legacyIds !== ids)) {
+      row.confirmed_size = {};
+    }
+  }
   if (row?.poc_inputs?.mock && Number(row.poc_inputs.length_mm) > 0 && Number(row.poc_inputs.width_mm) > 0) return `${Number(row.poc_inputs.length_mm).toFixed(2)} × ${Number(row.poc_inputs.width_mm).toFixed(2)} mm`;
   // node 单函数直跑看不到兄弟函数（同 `## 492` 的"注入 + 同值兜底"口径）：这里带一份同值兜底。
   const mm = value => {
@@ -3901,10 +3920,11 @@ function renderPackagingBusinessTree(tree, rows) {
     // 尺寸另起一行、状态一行 —— 三行文字装进一个 `.part-body` 文本容器（对照视觉 IR 那条
     // 路的 `.part-info`），靠容器排版，不再把四个块平铺在单行 flex 里挤成一行；容器上给完整
     // 「编号 件名 + 尺寸」的 title，行再窄也 hover 得到全文（`esc()` 不管引号，这里补一层）。
-    const rowTitle = `${code} ${partName} ${size}`.replace(/\s+/g, " ").trim();
+    const displayCode = String(row.display_code || code);
+    const rowTitle = `${displayCode} ${partName} ${size}`.replace(/\s+/g, " ").trim();
     line.innerHTML = `<div class="part-icon part-icon-box" aria-hidden="true"></div>`
       + `<div class="part-body" title="${esc(rowTitle).replace(/"/g, "&quot;")}">`
-      + `<div class="part-name">${esc(code)} ${esc(partName)}</div>`
+      + `<div class="part-name">${esc(displayCode)} ${esc(partName)}</div>`
       + `<div class="part-meta">${esc(size)}</div>`
       + (material ? `<div class="part-material">${esc(material)}</div>` : "")
       + (bindingText ? `<div class="part-note">${esc(bindingText)}</div>` : "")
@@ -4116,6 +4136,9 @@ function packagingCandidateConfidence(candidate) {
       && ['cut_lines_complementary', 'same_view', 'same_boundary_role'].every(reason => evidenceReasons.includes(reason))) score += 0.15;
   if (evidenceReasons.includes('closed_outline_enclosure')) score += 0.20;
   if (evidenceReasons.includes('complete_closed_outline')) score += 0.15;
+  if (['layout_frame','raw_cad_entities','caption_column_owner'].every(r => evidenceReasons.includes(r))) score += 0.35;
+  if (item.geometry_status === 'supported' && item.dimension_spatial === true
+      && ['layout_frame','raw_cad_entities','complete_closed_outline'].every(r => evidenceReasons.includes(r))) score += 0.15;
   if (evidenceReasons.includes('internal_fragment_only')) score -= 0.30;
   if (evidenceReasons.includes('other_name_anchor') || evidenceReasons.includes('mixed_name_owners')) return 0;
   if (item.name_anchor_entity_id && (item.evidence_reasons || []).includes('compound_name_anchor')) score += 0.35;
@@ -4371,7 +4394,7 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
   showPackagingPartPane();
   markSelection(wanted);
   const title = $("packagingPartTitle");
-  if (title) title.textContent = `${wanted} ${String(row.name || "")}`.trim();
+  if (title) title.textContent = `${row.display_code || wanted} ${String(row.name || "")}`.trim();
   const binding = row.geometry_binding || {};
   const autoBlockReason = packagingAutoSelectionReason(binding);
   const candidates = Array.isArray(binding.candidates) ? binding.candidates : [];
@@ -4716,7 +4739,9 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
       }
     }
   }
-  highlightPackagingBusinessPart(wanted, (binding.component_ids || []).concat(binding.entity_ids || []));
+  // 单件 SVG 已按当前预览及标注计算视窗，不再被旧绑定的形状 bbox 覆盖。
+  highlightPackagingBusinessPart(wanted,
+    (figureBinding.component_ids || []).concat(figureBinding.entity_ids || []), true);
   return row;
 }
 

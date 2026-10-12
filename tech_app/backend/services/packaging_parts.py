@@ -2299,6 +2299,11 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
         "engine_version": ENGINE_VERSION,
         "part_id_namespace": PART_ID_NAMESPACE,
         "parts": parts,
+        # 轻量原始实体注册表：短弧/独立线被区域过滤掉不等于 CAD 中不存在。
+        "raw_entities": {eid: {'bbox': entity.get('bbox'), 'kind':entity.get('kind'),
+                                'annotation':eid in annotations}
+                         for eid,entity in entities.items()
+                         if entity.get('kind') in ('line','arc','circle','ellipse','spline','polyline')},
         "filtered": filtered,
         "unavailable": unavailable,
         "stats": {"part_total": len(parts), "filtered_total": len(filtered),
@@ -3829,6 +3834,7 @@ def geometry_evidence_of(parts_doc: Any, *, limit: int = 0) -> Dict[str, Any]:
         "component_total": int(_num(stats.get("component_total")) or len(rows)),
         "kept_component_total": int(_num(stats.get("kept_total")) or len(rows)),
         "components": components,
+        "raw_entities": copy.deepcopy(doc.get('raw_entities') or {}),
     }
 
 
@@ -4169,6 +4175,7 @@ def business_parts_document(reference: Any, geometry: Any, *,
         from . import packaging_sections
         doc['business_parts'] = [packaging_sections.hydrate_part(row, evidence.get('components') or [])
                                  for row in doc['business_parts']]
+        doc['business_parts'] = order_business_parts_by_regions(doc['business_parts'])
     doc["business_parts_id"], doc["business_parts_hash"] = _business_identity(doc)
     return doc
 
@@ -4517,10 +4524,12 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
     selected: Dict[str, Any] = {}
     selected_id = _text(candidate_id)
     if selected_id:
-        stored = list(record.get("unassigned_candidates") or [])
+        stored = []
         for item in record.get("business_parts") or []:
             if isinstance(item, dict) and _text(item.get("business_part_code")) == wanted:
                 stored.extend((item.get("geometry_binding") or {}).get("candidates") or [])
+        # 同一几何候选在公共队列没有这件的文字关联证据，优先使用件级服务器候选。
+        stored.extend(record.get("unassigned_candidates") or [])
         selected = next((item for item in stored if isinstance(item, dict)
                          and _text(item.get("candidate_id") or item.get("id")) == selected_id), {})
         if not selected or not selected.get("entity_ids"):
@@ -4573,8 +4582,14 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
         raw_extra = sorted(set(confirmed_entities) - known_entities)
         candidate_mismatch = bool(selected_id) and (not known or
                                                     set(confirmed_entities) != known_entities)
+        registry = evidence.get('raw_entities') or {}
+        exact_raw_layout = bool(confirmed_entities) and bool(selected.get('name_anchor_entity_id')) and (
+            {'layout_frame','raw_cad_entities','caption_column_owner'} <=
+            set(selected.get('evidence_reasons') or [])) and all(eid in registry for eid in confirmed_entities)
+        if exact_raw_layout:
+            candidate_mismatch = False
         status = ("partial" if candidate_mismatch else
-                  "bound" if known else "unbound")
+                  "bound" if known or exact_raw_layout else "unbound")
         boxes = []
         for item in known:
             raw = part_outline_rect(components[item])
@@ -4610,6 +4625,7 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
             "rule_id": BUSINESS_BINDING_RULE_ID, "geometry_component_ref": known,
             "candidate_id": selected_id, "size_confirmed": False,
             "section_dimension_evidence": copy.deepcopy(selected.get('section_dimension_evidence') or []),
+            "exact_raw_layout": exact_raw_layout,
             "portion_component_groups": ([known] if set(selected.get('evidence_reasons') or []).intersection(
                 ('cut_lines_complementary','closed_outline_enclosure')) else selected.get('portion_components') or []),
             "size_source": "none" if candidate_mismatch else "geometry_binding",
@@ -4623,10 +4639,52 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
         row["cad_fragments"] = packaging_layout.part_fragments(known, evidence.get("components"))
         from . import packaging_sections
         row.pop('sections_source', None)
-        row.update(packaging_sections.hydrate_part(row, evidence.get('components') or []))
         previous_size = row.pop("confirmed_size", None)
         if isinstance(previous_size, dict) and previous_size:
             row.setdefault("confirmed_size_history", []).append(dict(previous_size))
+        # 「改选归档旧尺寸证据」是**人工改选**的语义（Spec §5）：自动归属只是把解析器
+        # 自己的候选定下来，不能反手把解析器刚给出的区域尺寸证据抹成 `none`
+        # （那会让未确认尺寸连来源都说不出，见 test_packaging_part_size_evidence_guard）。
+        if record.get('derived_from_drawing') and source == 'manual':
+            reference = row.get('reference') or {}
+            if reference.get('length_mm') is not None or reference.get('width_mm') is not None:
+                row.setdefault('reference_size_history',[]).append(copy.deepcopy(reference))
+                row['reference'] = {**reference, 'length_mm':None, 'width_mm':None,
+                                    'size_source':'none','size_quality':'bbox_only'}
+        row.update(packaging_sections.hydrate_part(row, evidence.get('components') or []))
+        if exact_raw_layout:
+            # 区域聚合已是一个实体候选；保留其真实全量实体，而非仅保留分量的残片。
+            # 这是估算范围，不把区域并集尺寸当独立标注证据。
+            section = packaging_sections._section(row.get('name') or '部分', [{
+                'component_id': 'candidate:'+selected_id, 'entity_ids':confirmed_entities,
+                'bbox':union_box}], source='raw_cad_layout')
+            section['component_ids'] = known
+            closed_count = sum(components[cid].get('outline_status') == 'closed' for cid in known)
+            if closed_count < 2 or len(row.get('sections') or []) < 2:
+                row['sections'] = [section]
+                row['sections_source'] = 'raw_cad_layout'
+                row['sections_complete'] = True
+                row['section_gaps'] = []
+            else:
+                # 多个独立闭合轮廓不压成一个区域并集尺寸（圆盘盒内/外片同样适用）。
+                row['sections_source'] = 'raw_cad_portions'
+                covered = {eid for s in row['sections'] for eid in s.get('entity_ids') or []}
+                uncovered = set(confirmed_entities)-covered
+                if uncovered:
+                    extra_box = packaging_sections.union_bounds([
+                        {'bbox':registry[eid].get('bbox')} for eid in sorted(uncovered)])
+                    extra = packaging_sections._section('待归属图元', [{
+                        'component_id':'raw:'+selected_id,'entity_ids':sorted(uncovered),'bbox':extra_box}],
+                        source='raw_cad_extra')
+                    extra['status'] = 'pending_attribution'
+                    extra['component_ids'] = []
+                    row['sections'].append(extra)
+                    row['section_gaps'].append('raw_geometry_portion_unresolved')
+                    row['sections_complete'] = False
+        for section in row.get('sections') or []:
+            for key in ('confirmed_size','estimated_size'):
+                if section.get(key):
+                    section[key]['candidate_id'] = selected_id
         break
     claimed = {str(cid) for part in (record.get("business_parts") or [])
                if isinstance(part, dict)
@@ -4680,6 +4738,13 @@ def candidate_confidence_percent(candidate: Any) -> int:
         score += 0.15  # 多部分需互补刀线及同方案证据，不能只因范围大而加分。
     score += 0.20 if 'closed_outline_enclosure' in reasons else 0
     score += 0.15 if 'complete_closed_outline' in reasons else 0
+    if {'layout_frame','raw_cad_entities','caption_column_owner'}.issubset(reasons):
+        score += 0.35  # 原始区域标题证据提高排序，不代表尺寸确认。
+    # 原始区域收集只有在几何已经验证且有标注对应时才获得整件加分。
+    # 不能仅因 layout 前缀、面积大或包含更多图元而升级。
+    if (item.get('geometry_status') == 'supported' and item.get('dimension_spatial') is True
+            and {'layout_frame', 'raw_cad_entities', 'complete_closed_outline'}.issubset(reasons)):
+        score += 0.15
     score -= 0.30 if 'internal_fragment_only' in reasons else 0
     if set(reasons).intersection(('other_name_anchor','mixed_name_owners')):
         return 0
@@ -4694,6 +4759,37 @@ def candidate_confidence_percent(candidate: Any) -> int:
             if diagonal > 0:
                 score += 0.15 * max(0, 1 - distance / min(diagonal, 200))
     return int(math.floor(min(0.85, max(0, score)) * 100 + 0.5))
+
+
+def order_business_parts_by_regions(rows: Any) -> List[Dict[str, Any]]:
+    """最终区域逐行排序；只更新展示序号，不改稳定业务身份。"""
+    result = copy.deepcopy(rows or [])
+    located, missing = [], []
+    for row in result:
+        box = (row.get('geometry_binding') or {}).get('bbox')
+        if not isinstance(box, (list, tuple)) or len(box) < 4 or any(_num(v) is None for v in box[:4]):
+            missing.append(row)
+            continue
+        x0, y0, x1, y1 = map(float, box[:4])
+        located.append((row, min(x0, x1), max(y0, y1), abs(y1-y0)))
+    located.sort(key=lambda item: (-item[2], item[1], _text(item[0].get('business_part_code'))))
+    bands = []
+    for item in located:
+        # 相邻顶边小幅错位仍属于同一行；尺度来自区域，不依赖样图坐标。
+        same_row = bool(bands) and all(
+            min(member[2],item[2])-max(member[2]-member[3],item[2]-item[3]) >=
+            min(member[3],item[3])*0.5 for member in bands[-1])
+        if not same_row:
+            bands.append([])
+        bands[-1].append(item)
+    ordered = [item[0] for band in bands for item in sorted(
+        band, key=lambda item: (item[1], _text(item[0].get('business_part_code'))))]
+    ordered.extend(sorted(missing, key=lambda row: (_num(row.get('sequence_no')) or float('inf'),
+                                                   _text(row.get('business_part_code')))))
+    for index, row in enumerate(ordered, 1):
+        row['sequence_no'] = index
+        row['display_code'] = 'DWG-BP%02d' % index
+    return ordered
 
 
 def auto_bind_business_candidates(doc: Any) -> Dict[str, Any]:
@@ -4798,6 +4894,7 @@ def confirm_business_part_size(doc: Any, code: Any, length_mm: Any, width_mm: An
                                 "confirmed_by": _text(actor), "confirmed_at": _stamp(),
                                 "note": _text(note),
                                 "component_ids": list(binding.get("component_ids") or [])}
+    target['confirmed_size']['candidate_id'] = binding.get('candidate_id') or ''
     binding["size_confirmed"] = True
     target["geometry_binding"] = binding
     record["stats"] = business_parts_stats(record.get("business_parts") or [])

@@ -276,8 +276,11 @@ class PackagingLayoutSpatialModelCombinationRed(TestCase):
                                              "insufficient_evidence": True, "reason": "待核对"})
         document = packaging_parts.business_parts_document(
             outcome["reference"], geometry, bindings=outcome["match"])
+        # 模型待核对不否定已有 CAD 自动归属：候选必须可追溯，已认下则不再谎称未归属。
+        represented = list(document.get('unassigned_candidates') or []) + [
+            row.get('geometry_binding') or {} for row in document.get('business_parts') or []]
         self.assertTrue(any(set(row.get("component_ids") or []) == {"cmp:a", "cmp:b"}
-                            for row in document.get("unassigned_candidates") or []))
+                            for row in represented))
         self.assertEqual(len(outcome["reference"]["parts"]), len(document["business_parts"]))
         self.assertTrue(all(row.get("status") == "needs_confirmation"
                             for row in document["unassigned_candidates"]))
