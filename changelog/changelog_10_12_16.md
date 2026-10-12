@@ -48,3 +48,34 @@
   圆盘盒 312 件、`closed_ratio=0.840`、可算 101/可挤出 262；两条权威实样路线 `confirm=confirmed`；
   隔离目录已删，运行目录项目数 84 → 84 未污染。
 - 能力口径不变：DWG 编排能力完成，真实转换能力未验收；线上原人工校正项目未改写。
+
+## 2026-10-12 线上全流程复跑（酒盒 / 圆盘盒）与新 Spec+红测（本地，未推送/未部署）
+
+- 在原有两个项目上把没跑完的全流程接着跑完（不新建项目、不改原人工校正项目、不删任何数据），
+  每一步落盘留证：酒盒 `6beeeebb19a1`、圆盘盒 `9ab4fe6ce416`。
+- 酒盒这条线：2.1 八步 8/8、`drawing-flow → packaging-business-parts → box-match →
+  box-match/decision → packaging-bom → packaging-route → packaging-route/confirm →
+  integration/send-to-finance → cost-review` 全部 200；本轮补齐了 1.1 需求单三步审批
+  （`submit-confirmation → confirm → review`，`status=approved`）、技术工艺总结
+  （`summary/recommend` → 模型产出并 `summary/confirm`）与 3.1 报告草稿刷新。
+- 酒盒仍停在两处：① `POST /cost-review/confirm`（以及 `/send-to-quote`、`/return-to-process`）
+  400「包装成本明细与总额未对齐」——账本按「组成」发号（`DWG-BP10/BP12::section:<hash>`）被当成
+  未知零件，`reconciled=false`，且这道硬门禁在签名放行之前，签 waiver 也过不去；
+  ② `POST /process-report/submit-review` 409「工艺可行性结论为空；各工艺阶段汇总结论为空」
+  （3.1 汇总正文没有把 2.3 带进来，已有既有红测覆盖，本批不重复出 Spec）。
+- 圆盘盒这条线：解析八步 `completed`，语义层已算出成品尺寸候选
+  `inner_length = inner_width = 396.6`（`needs_confirmation`、`board=pending`、`confidence=0.8`），
+  但 `field_write` 的 `written=[]` —— 候选没进需求单；下游因此全链
+  `field_missing` → `box-match/decision` 409 `box_type_not_confirmable：YT-DWG-ROUND-10PC（needs_input）`
+  → `packaging-bom/route/cost` 409 `box_type_not_confirmed` → `send-to-finance` 400「请先完成参数推荐」。
+  对照酒盒能走下去的真正原因：需求文本里**人又把尺寸/材料写了一遍**（`field_sources=user_text`）。
+- 新增 Spec + 红测（只写 Spec 与测试，不含业务实现）：
+  · `docs/specs/packaging-cost-ledger-section-reconciliation.md` +
+    `tests/test_packaging_cost_ledger_section_recon_red.py`（10 条，当前 8 红）；
+  · `docs/specs/packaging-2-1-candidate-fields-into-downstream.md` +
+    `tests/test_packaging_candidate_fields_adoption_red.py`（11 条，当前 10 红、1 绿为反例守卫）。
+- 两个红测文件都实际跑过并按预期失败；三组回归基线实际通过：
+  `test_packaging_single_cost_ledger_red` 18 OK、`test_packaging_cost_engine_red` 81 OK、
+  `test_e2e_packaging_downstream_handoff_red` 12 OK、`test_packaging_manual_field_confirmation_red` 13 OK、
+  `test_packaging_semantics_red` 59 OK（skip 1）、`test_packaging_product_outline_red` 21 OK（skip 1）。
+- 线上只跑流程与只读排查，未改代码、未删数据；本轮未提交、未推送、未部署。
