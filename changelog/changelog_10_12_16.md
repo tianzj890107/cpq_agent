@@ -190,13 +190,15 @@
   `tests/test_packaging_requirement_text_params_red.py` 11 条、
   `requirement_service.py` 报文字段抽取补两个键、`cost_flow.py` 回传投影按同一份原文补齐。
 - 双远端：`gitlab/ytbz` 与 `origin/ytbz` 均回读为 `7ac21dc`。
-- 34 部署：`bash scripts/deploy_34_bare.sh ytbz`，`5e739f3ff → 7ac21dcc9`；
-  8010 pid=901523；两份真实样本主转换器（ODA 27.1）直出、`converter_role=primary`；
+- 追加提交 `aec3137`：参数投影只在真的补了东西时落盘（重复回传不再每次写一版计划）。
+- 34 部署：`bash scripts/deploy_34_bare.sh ytbz`，`5e739f3ff → 7ac21dcc9 → aec31372a`；
+  8010 pid=914584；两份真实样本主转换器（ODA 27.1）直出、`converter_role=primary`；
   隔离端到端自检 verdict=ok；运行目录项目数 92 → 92（未写生产数据）。
 - 部署后线上复验（项目 `6beeeebb19a1`）：产品族 `pkg_box`；回传必填缺口 **无**
   （此前逐字为「报价必填的成品参数还缺：包装产品名称、包装品类」）；投影得到
   包装产品名称 `700ML双开门酒盒`、包装品类 `酒盒`；整机成本来源 `packaging_ledger`、
   合计 15.60 元。
+- 部署后复验幂等：对项目 `6beeeebb19a1` 连调两次参数投影，落盘增量为 0；回传必填缺口仍为「无」。
 - 仍差一步：脚本直调 `send_to_quote` 在报价侧桥接处报「请先登录」——回传需要
   **CPQ 操作人本人会话**（34 已接统一登录，本地登录被拒），浏览器里以 FI1 登录后即可完成；
   这是会话要求，不是数据缺口。
