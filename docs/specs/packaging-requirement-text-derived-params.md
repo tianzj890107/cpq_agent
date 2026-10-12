@@ -48,7 +48,8 @@
   溯源进 `field_provenance`。
 - **C5 历史项目按同一份抽取补投影**：4.x 回传时，需求单 `data` 里有值的字段照旧投影；
   `data` 里没有、但**同一份原文抽取**认得出的字段，投影时补上并注明来源是
-  「需求原文抽取」。历史项目不需要重建需求单。
+  「需求原文抽取」。历史项目不需要重建需求单。**只在真的补了东西（补了行，或这份参数结果
+  还没有产品族）时落盘** —— 回传可能被重复触发，每次写一版计划只会往历史里灌噪声。
 - **C6 认不出仍然如实点名**：抽取补完还缺的必填，回传照旧逐个点名拒绝，**不编值**、
   不豁免、不静默放过。
 
@@ -65,7 +66,8 @@
    不被覆盖；空位才填。
 3. `cost_flow` 的包装参数投影：需求单 `data` 里没有这两个键、但原文认得出时，
    回传前投影补齐；`data` 里已有值时原样保留。
-4. 回归：`test_packaging_cost_to_quote_integration_projection_red`（含 b1–b3）、
+4. `ensure_packaging_params`：连续两次调用（第二次没有任何新增）只落盘一次。
+5. 回归：`test_packaging_cost_to_quote_integration_projection_red`（含 b1–b3）、
    `test_packaging_round_geometry_and_requirement_facts_red`、
    `test_packaging_full_flow_20260929_red` 不回退。
 

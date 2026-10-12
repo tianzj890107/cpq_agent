@@ -156,6 +156,8 @@
 - 现在：包装项目的回传必填锁定 `pkg_box` 族（复用 `integration.project_family()`）；
   需求单里已有值的包装族字段直接投影进参数推荐结果并注明来源；需求单没有的字段
   （包装产品名称 / 包装品类）不编值，仍如实留在缺口里，交给「参数推荐」环节或文本抽取补。
+- 参数投影只在真的补了东西（补了行，或这份结果还没有产品族）时落盘：回传可能被重复触发，
+  每次写一版计划只会往历史里灌噪声。红测 `D不重复落盘`（先红 1 != 2，后绿），本文件共 12 条。
 - 相关回归：`test_packaging_cost_to_quote_integration_projection_red` 7、
   `test_packaging_tech_param_bom_route_cost_closure_red` 20、`test_quote_agent_industry_alignment_red` 33、
   `test_tech_handoff_atomic_idempotent_red` 35、`test_tech_integration_dependency_waiver_red` 20、
@@ -183,7 +185,7 @@
 
 ## 2026-10-12 包装需求原文直接生成成品参数：提交、双远端推送与 34 部署记录
 
-- 提交 `7ac21dc`（作者 张真 <zhangzhen@boulderaitech.com>）：Spec
+- 提交 `7ac21dc` 与 `f1bc7e4`（作者 张真 <zhangzhen@boulderaitech.com>）：Spec
   `docs/specs/packaging-requirement-text-derived-params.md`、红测
   `tests/test_packaging_requirement_text_params_red.py` 11 条、
   `requirement_service.py` 报文字段抽取补两个键、`cost_flow.py` 回传投影按同一份原文补齐。

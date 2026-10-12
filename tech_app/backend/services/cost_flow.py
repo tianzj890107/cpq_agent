@@ -508,12 +508,14 @@ def ensure_packaging_params(project_id: str, plan=None) -> Optional[object]:
     plan = plan if plan is not None else integration.load_plan(project_id)
     if plan.params is None:
         plan.params = IntegrationParamPlan(product_family=family, assembly_name="")
-    if not plan.params.product_family:
+    family_missing = not plan.params.product_family
+    if family_missing:
         plan.params.product_family = family
     known = {str(getattr(row, "param_code", "") or "") for row in (plan.params.params or [])}
     added = [row for row in rows if row.param_code not in known]
-    needs_family = plan.params.product_family == family
-    if added or needs_family:
+    # 只在**真的补了东西**（补了行，或这份参数结果还没有产品族）时落盘：回传可能被
+    # 重复触发，每次写一版计划只会往历史里灌噪声。Spec §C5。
+    if added or family_missing:
         if added:
             plan.params.params = list(plan.params.params or []) + added
             plan.params.assumptions = list(plan.params.assumptions or []) + [

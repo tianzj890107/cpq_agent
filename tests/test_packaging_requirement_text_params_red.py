@@ -117,5 +117,29 @@ class C回传投影(CostCase):
         self.assertIn("包装品类", missing)
 
 
+class D不重复落盘(CostCase):
+    """参数投影只在**真的补了东西**时落盘：重复回传不许每次都写一版计划（历史噪声）。"""
+
+    def test_d1_second_call_writes_nothing(self):
+        self.save_requirement(description="700ML双开门酒盒；包装品类酒盒；面纸225g",
+                              packaging_product_name=None, packaging_category=None)
+        calls = []
+        original = integration.save_plan
+
+        def spy(project_id, plan, author="system"):
+            calls.append(author)
+            return original(project_id, plan, author)
+
+        integration.save_plan = spy
+        try:
+            cost_flow.ensure_packaging_params(PID)      # 第一次：补投影，应当落盘
+            first = len(calls)
+            cost_flow.ensure_packaging_params(PID)      # 第二次：什么都没变，不该再落盘
+        finally:
+            integration.save_plan = original
+        self.assertEqual(1, first, "第一次补齐投影必须落盘一次")
+        self.assertEqual(first, len(calls), "重复回传不该每次都写一版计划")
+
+
 if __name__ == "__main__":
     unittest.main()
