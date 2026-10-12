@@ -110,26 +110,57 @@ def parts_source(project_id: str, ir: Optional[DesignIR]) -> Optional[DesignIR]:
 
 
 def _part_rows(project_id: str, ir: Optional[DesignIR]) -> List[dict]:
-    """逐个零件：算没算过、单件多少、单台用量多少、小计多少。"""
+    """逐个零件：算没算过、单件多少、单台用量多少、小计多少。
+
+    包装项目走的是 `## 412` 的单件「按清单尺寸」口径 —— 它只回放历史单件记录、
+    不参与统一公式账（统一账在 `summarize()` 的包装分支里读 `packaging_cost_ledger`，
+    Spec `packaging-single-cost-ledger.md`）。历史单件记录与当前业务件清单版本不一致
+    （`packaging_conclusions.usable`）时如实标 stale / 不给金额，不拿旧价冒充当前成本。
+    """
     rows: List[dict] = []
     requirement = store.load_requirement(project_id) or {}
     packaging = (requirement.get("data") or {}).get("industry") == "packaging"
+    business_doc = {}
     if packaging:
-        from . import packaging_cost_ledger
-        return packaging_cost_ledger.load(project_id)['parts']
+        from . import packaging_parts
+        business_doc = packaging_parts.load_business_parts(project_id) or {}
     for part in (ir.parts if ir else []):
-        saved = store.load_cost(project_id, part.part_id)
-        breakdown = cost_model.breakdown(saved) if saved else {}
+        conclusion = {}
+        if packaging:
+            from . import packaging_parts
+            from . import packaging_conclusions
+            conclusion = packaging_parts.load_part_cost(project_id, part.part_id) or {}
+            valid = packaging_conclusions.usable(project_id, conclusion, business_doc)
+            saved = conclusion.get("analysis") if valid else None
+        else:
+            saved = store.load_cost(project_id, part.part_id)
+        if packaging:
+            amounts = []
+            for item in (saved or {}).get("items") or []:
+                try:
+                    amount = float(item["amount"])
+                    if not math.isfinite(amount) or amount < 0:
+                        raise ValueError("invalid material cost")
+                    amounts.append(amount)
+                except (KeyError, TypeError, ValueError):
+                    amounts = []
+                    saved = None
+                    break
+            total = sum(amounts)
+            breakdown = ({"material": total, "labor": 0, "overhead": 0,
+                          "machining": 0, "total": total} if amounts else {})
+        else:
+            breakdown = cost_model.breakdown(saved) if saved else {}
         quantity = max(1, int(part.quantity or 1))
         unit = float(breakdown.get("total") or 0)
         rows.append({
             "id": part.part_id,
             "name": part.name or "",
             "kind": "part",
-            "cost_scope": "part",
+            "cost_scope": "material_only" if packaging else "part",
             "quantity": quantity,
             "has_cost": bool(saved and (saved.get("items") or [])),
-            "cost_stale": False,
+            "cost_stale": bool(packaging and conclusion and not valid),
             "item_count": len((saved or {}).get("items") or []),
             "breakdown": breakdown,
             "unit_cost": round(unit, 2),
@@ -172,11 +203,17 @@ def summarize(project_id: str, ir: Optional[DesignIR], plan) -> dict:
     """
     requirement = store.load_requirement(project_id) or {}
     if (requirement.get('data') or {}).get('industry') == 'packaging':
+        from . import packaging_cost
         from . import packaging_cost_ledger
         result = packaging_cost_ledger.load(project_id)
-        from . import packaging_cost
-        result['ready'] = result['ready'] and bool(
-            packaging_cost.readiness_verdict(result['packaging_cost'])['formal_ready'])
+        counts = result.get('counts') or {}
+        # 「能不能用」只有**一个**裁决源（Spec `chain-consistency-batch1.md` §2.2 / §8）：
+        # 提示缺口不阻断、依据漂移（stale）阻断；账本侧的「缺件 / 零元 / 失配」照旧要求齐整。
+        # 零件一件都没有（账本还没建立）不算「缺件」—— 那是 4.1 的待测算态，不在这里回答。
+        result['ready'] = bool(
+            result.get('reconciled') and counts.get('assembly_costed')
+            and not counts.get('missing') and not counts.get('zero')
+            and packaging_cost.readiness_verdict(result.get('packaging_cost'))['formal_ready'])
         return result
     parts = _part_rows(project_id, parts_source(project_id, ir))
     assembly = _assembly_row(plan)

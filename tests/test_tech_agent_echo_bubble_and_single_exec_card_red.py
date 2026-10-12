@@ -48,7 +48,12 @@ ECHO_ACTIONS = {
     "costStep": COST,
 }
 # 每个文件里 prompt 声明的总数：多一处就是在给别的动作开口子。
-PROMPT_COUNT_PER_FILE = {APP_JS: 1, REQ_CREATE: 1, ASSEMBLY: 2, COST: 1}
+# 2026-10-12（`## 557`）：app.js 由 1 重指为 2 —— 10-10 的 Spec
+# `docs/specs/packaging-batch-process-real-execution.md` 明确要求「按钮动作必须提供
+# prompt 与唯一 runId，先用户气泡再 Agent 执行卡」，2.1 的「一键生成全部工艺推荐」
+# 批量入口据此在 app.js 里声明了第二处 prompt；第 6 / 7 类动作（写字段 / 刷新看板 /
+# 确认审核送审回传）仍一处都不声明。
+PROMPT_COUNT_PER_FILE = {APP_JS: 2, REQ_CREATE: 1, ASSEMBLY: 2, COST: 1}
 
 # 明确不加气泡的动作（第 6 / 7 类）。
 NO_ECHO_FUNCTIONS = (

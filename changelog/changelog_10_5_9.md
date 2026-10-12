@@ -1,5 +1,67 @@
 # 变更日志（10-5 ~ 10-9）
 
+## 557. 收口 `d16265d` 上遗留的 14 条红（9 failures + 5 errors）→ 0（10-12，本地）
+
+- 目标：把全量分片里长期挂着的 14 条红逐条定位到根因改成绿；不删断言、不放宽判据、三个受保护红测一个字节不动。
+  改前 `Ran=7229 failures=9 errors=5 skipped=29`；改后 `Ran=7229 failures=0 errors=0 skipped=29 — 全部通过`
+  （`test_dwg_conversion_quality_repair_red::test_e5_real_oda_converts_both_samples_cleanly` 在 4 路并行分片下
+  偶发 `success_with_warnings`，单独跑与该模块复跑均 OK，属真实 ODA 转换在并发下的抖动，不是本批引入。）
+- **根因一（5 条 ERROR + 1 条 FAIL，成本）**：`a620075` 把 `cost_review._part_rows()` 的包装分支改成直接返回
+  统一账本视图、并删掉 `main.packaging_business_part_cost()` 的「按清单尺寸」单件口径。后果：①
+  `test_packaging_online_business_closure_red` 的两条（历史单件记录按业务件清单版本判 stale）`rows` 为空 →
+  IndexError；② `test_packaging_multipart_sections_complete_red` 与受保护的
+  `test_packaging_business_part_basis_in_panel_red` 的两条（任务返回值带口径四键 + sections）走统一账 →
+  `CostError: not_packaging`（400）；③ `test_chain_consistency_batch1_red::test_a5` 要求 2.3 的 `ready`
+  与 `packaging_cost_readiness_gate()` 同一结论。
+  修法（按 Spec `packaging-single-cost-ledger.md` + `chain-consistency-batch1.md` §2.2/§8）：
+  · `_part_rows()` 恢复包装的**历史单件只读回退**（`packaging_parts.load_part_cost()` +
+    `packaging_conclusions.usable()` 判版本、`cost_scope="material_only"`、`cost_stale`）；真实 4.1 / 汇总读侧
+    仍是 `summarize()` 包装分支 → `packaging_cost_ledger.load()` 统一账，没有第二份金额（该分支在生产路径上不可达）；
+  · `summarize()` 包装分支的 `ready` 改为**单一裁决源**：`reconciled and assembly_costed and not missing and
+    not zero and readiness_verdict(packaging_cost)['formal_ready']` —— advisory 不阻断、stale 阻断；去掉
+    `bool(rows)` 前置（「整单还没算」是 4.1 的待测算态，不在这里回答）；
+  · `main.packaging_business_part_cost()` 恢复「先统一账、`not_packaging` 才退回按清单尺寸」：包装需求单
+    （`industry='packaging'`）走 `packaging_cost_ledger.rebuild_part()`，其余错误照旧上抛；非包装需求单
+    （POC / 早期数据）退回被删掉的 `verified_business_part_input_row` + `business_cost_inputs` +
+    `packaging_sections.compute_material` 单件口径，返回值照旧带 `size_source/size_source_ref/size_text/geometry`
+    四键；不自动建需求单、不改用量语义。
+- **根因二（2 条 FAIL，几何归属）**：`## 550` 的顺序占用改造把「最高候选自身不完整」与「候选被前件占用」混为一谈。
+  · `packaging_parts.auto_bind_business_candidates()`：只有**被别的件按图纸顺序认下**（ValueError）才按证据分
+    往下试；最高证据分候选**自身几何不完整**（候选图元 ≠ 保留分量 → `partial`）时不再退到更低分候选，改为如实留
+    `ambiguous` + `auto_selection.status='blocked'`；
+  · `packaging_parts.set_geometry_binding()`：手工改选**可以**覆盖一件已经 `bound` 的图形（有意重分配，照旧留
+    `overlap_part_codes` 供审计）；但对方只是 `partial`（候选里含没进保留分量的原始图元）时按共享图元门禁拒绝
+    （`candidate_entities_already_assigned_to_another_part`，Spec `packaging-drawing-order-circles-and-dimension-scene.md`
+    §4「手动组成选择不得绕过」）。
+- **根因三（3 条 FAIL，前端）**：
+  · `app.js` 单件候选图恢复逐字 `binding.candidate_id ? Object.assign({}, binding, {bbox: null, component_ids: []})`
+    （`## 556` 冻结断言），标注三键（`annotation_bbox` / `annotation_component_ids` / `dimension_refs`）改为随后单独
+    叠加 —— 精确图元只限制形状成员，标注归属证据独立保留（Spec `part-dimension-display-fit.md`）；
+  · `app.js` 的 `packagingPartSceneSvg()` 取框不再硬依赖顶层 `packagingCadDisplayBox()`：纯函数红测只抽这一个顶层
+    函数来 `eval`，顶层定义不在作用域 → `ReferenceError`；现在用 `typeof packagingCadDisplayBox === "function"`
+    判定，缺时走**同口径内联兜底**（浏览器里永远走顶层），顶层 `packagingCadDisplayBox()` 与
+    `figureRows.map(row => packagingCadDisplayBox(row))` 一字不动（`test_part_dimension_display_fit_red` 仍绿）；
+  · `app.js` 批量入口的 `agent:task-progress` 派发显式带 `label` / `taskId` / `log`（此前靠 `...detail` 展开，
+    父壳的 900 字窗口里看不到这三个键）。
+- **按新 Spec 重指的期望值（本批唯一改测试，1 处）**：`tests/test_tech_agent_echo_bubble_and_single_exec_card_red.py`
+  的 `PROMPT_COUNT_PER_FILE[APP_JS]` 由 1 重指为 **2**。理由：10-10 的 Spec
+  `docs/specs/packaging-batch-process-real-execution.md` 明确要求「按钮动作必须提供 prompt 与唯一 runId，先用户气泡
+  再 Agent 执行卡」，2.1 的「一键生成全部工艺推荐」批量入口据此在 `app.js` 声明第二处 `prompt:`
+  （`test_packaging_batch_real_execution_red` 一直这么断言 `assert(emitted[0].prompt)`）。该计数只是「第 6 / 7 类
+  动作不加气泡」的代理判据，与批量动作（属「Agent 主动发起且真会跑起来」那一类）不冲突；该文件其余断言、其它四个文件
+  （1/1/2/1）与「第 6 / 7 类动作一处都不声明」全部原样。三个受保护红测（`chain_consistency_batch1_red` /
+  `packaging_part_figure_fidelity_red` / `packaging_business_part_basis_in_panel_red`）未改。
+- 验证：14 条红所在 9 个模块 `Ran 180 ... OK`；成本保护网
+  （`cost_engine` / `cost_red_closure` / `cost_stage_must_see_the_parsed_parts` / `cost_quantity_scope` /
+  `cost_review_loss_projection` / `tech_cost_confirm_zero_waiver` / `tech_cost_review_agent` /
+  `e2e_packaging_downstream_handoff`）`Ran 174 ... OK`；`parts_extraction` / `business_part_process_entry` /
+  `authority_workbook_upload` / 四个「一键生成全部工艺推荐」模块 `Ran 120 ... OK`；全量分片见上。
+  `node --check app.js` 与 `git diff --check` 干净。
+- 改动文件 5 个：`tech_app/backend/services/cost_review.py`、`tech_app/backend/main.py`、
+  `tech_app/backend/services/packaging_parts.py`、`tech_app/frontend/app.js`、
+  `tests/test_tech_agent_echo_bubble_and_single_exec_card_red.py`（仅计数 + 注释）。
+  恒定不入库未跟踪项不变：`拆分程序/`、`.~亿纬锂能DA梳理.xlsx`。
+
 - 2026-10-10 包装统一公式成本账（本地未部署）：单件成本、4.1、整单与汇总归集同一份整单公式明细，停止新成本回填独立POC材料记录；单件重算与批量重试刷新同账，批量只提交一次。展示材料/人工为主，加工、模具、包装、运输保留明细，不再误称制造费用；用量与损耗不重复计费，对账失败禁止确认/发送。报价数量写入共同需求源并统一过期判定，新账重建撤销旧财务确认而保留历史正文。Spec/红测先行，相关243项回归、真实临时SQLite公式账回放对账及Node前端运行验证通过；未提交、未推送、未部署，未做线上或浏览器视觉验收。
 
 - 2026-10-10 单件图尺寸标注修复（本地未部署）：精确形状绑定独立保留标注范围、分量与引用，缺标注包络时依据已绑定实体恢复，不把邻件线加入形状；尺寸文字长度、字高、旋转的展示范围纳入单件与整图默认适应窗口。两项红测先失败后通过，55项相关测试及JS语法/diff检查通过。未伪造尺寸、未改成本有效性、未进行线上或浏览器视觉验收。

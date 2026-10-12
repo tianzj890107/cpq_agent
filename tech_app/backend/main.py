@@ -9336,24 +9336,102 @@ def _packaging_business_cost_analysis(inputs: Dict[str, Any], line: Dict[str, An
 
 
 @app.post(PACKAGING_BUSINESS_PART_COST_PATH)
+def _packaging_business_part_authority_cost(pid: str, code: str, quantity: int,
+                                            loaded: Dict[str, Any], user: dict) -> Dict[str, Any]:
+    """不是包装需求单时的兼容路径：按业务清单尺寸算这一件的材料开料成本（`## 412`）。
+
+    统一公式账只认 `industry='packaging'` 的需求单（`packaging_cost.compute_project`）；
+    早期 / POC 项目没有这个标记，这里保留本来的单件口径（口径四键照给），既不写旧单件
+    文档以外的任何账，也不改统一账。任务返回值里仍带 `size_source` / `size_source_ref`
+    / `size_text` / `geometry`（Spec `packaging-business-part-conclusion-basis-in-panel.md` §C3）。
+    """
+    doc = loaded["doc"]
+    try:
+        row = packaging_parts.verified_business_part_input_row(loaded["row"], doc)
+    except ValueError as exc:
+        raise HTTPException(409, {"code": str(exc),
+                                  "message": "图纸推导件尚未人工确认几何归属与尺寸，不能按候选尺寸算成本。"}) from exc
+    requirement = store.load_requirement(pid) or {}
+    qty = max(1, int(quantity or 1))
+    inputs = packaging_parts.business_cost_inputs(row, requirement=requirement, quantity=qty)
+    if not inputs["ok"]:
+        raise _packaging_business_part_reject(inputs)
+    geometry_label = _packaging_business_geometry_label(row)
+    tasks.report_progress("按清单尺寸（%s）算这一件的材料开料成本"
+                          % (inputs.get("size_text") or
+                             "%s×%s mm" % (packaging_parts._mm_text(
+                                 inputs["variables"].get("cut_length")),
+                                 packaging_parts._mm_text(
+                                     inputs["variables"].get("cut_width")))))
+    from .services import packaging_sections
+    line = packaging_sections.compute_material(inputs, packaging_cost.compute_line)
+    amount = line.get("amount")
+    tasks.report_progress(
+        "  ↳ 单件 %.4f 元（批量 %d 件）" % (amount, qty) if amount is not None
+        else "  ↳ 缺输入变量，暂给不出金额：%s" % ((line.get("gap") or {}).get("code") or ""))
+    analysis = _packaging_business_cost_analysis(inputs, line, qty, geometry_label)
+    summary = cost.compute(analysis)
+    if line.get('amount') is None:
+        summary.update(computed_total=None, complete=False)
+        summary.setdefault('warnings', []).append(
+            '部分组成未算出成本，不能使用部分合计作为完整金额'
+            if line.get('sections') else '材料成本输入缺失，未形成完整金额')
+    packaging_parts.save_part_cost(pid, {
+        "part_code": inputs["part_code"],
+        # 这份结论**不是**按几何零件算的：`parts_id` 必须为空，免得读侧拿它去比几何版本。
+        "parts_id": "",
+        "engine_version": packaging_parts.ENGINE_VERSION,
+        "analysis": analysis, "summary": summary,
+        # 业务件没有知识库检索依据，不装样子（Spec §C3）。
+        "lookup": {},
+        "sections": line.get('sections') or [],
+        "size_source": inputs["size_source"], "size_source_ref": inputs["size_source_ref"],
+        "size_text": inputs["size_text"], "geometry": geometry_label,
+        "business_part_code": inputs["part_code"],
+        "business_parts_id": str(doc.get("business_parts_id") or ""),
+        "business_parts_hash": str(doc.get("business_parts_hash") or ""),
+        "source": {"task_id": tasks.current_task_id(),
+                   "computed_at": now_cst_str(),
+                   "actor": str(user.get("username") or "")},
+    })
+    return {"part_code": inputs["part_code"], "analysis": analysis, "summary": summary,
+            "line": line, "sections": line.get('sections') or [],
+            "size_source": inputs["size_source"],
+            "size_source_ref": inputs["size_source_ref"],
+            "size_text": inputs["size_text"], "geometry": geometry_label}
+
+
 async def packaging_business_part_cost(
     pid: str, code: str, quantity: int = 1,
     note: str = Form(""),
     attachments: List[UploadFile] = File(default=[]),
     user: dict = Depends(current_user),
 ):
-    """更新整单公式成本账，任务返回所选业务零件的同账成本视图。"""
+    """更新整单公式成本账，任务返回所选业务零件的同账成本视图。
+
+    包装需求单（`industry='packaging'`）走统一公式账（Spec
+    `packaging-single-cost-ledger.md`）—— 单件是整单明细的视图，不另立一份单件金额。
+    不是包装需求单的历史 / POC 数据退回「按清单尺寸」的单件材料成本，那条路只作兼容。
+    """
     _require(user, packaging_cost.COST_WRITE_ROLES, "需要财务经理、工艺经理、工艺技术总监或管理员权限")
     _workflow_project(pid)
-    _packaging_business_part_row(pid, code)
+    loaded = _packaging_business_part_row(pid, code)
     # 包装单件是整单公式账的视图；批量取需求单数量，不将每套用量误作报价数量。
     await _read_attachments(attachments)
     from .services import packaging_cost_ledger
-    def ledger_job():
+
+    def job():
         tasks.report_progress("刷新同一份整单公式成本账并读取本件明细")
-        return packaging_cost_ledger.rebuild_part(pid, code, user)
-    return {"task_id": tasks.submit(pid, "packaging_business_part_cost", ledger_job,
-        actor=user.get("username", ""))}
+        try:
+            return packaging_cost_ledger.rebuild_part(pid, code, user)
+        except packaging_cost.CostError as exc:
+            # 统一账只对包装需求单生效（`not_packaging`）；其余错误照常抛给任务层。
+            if getattr(exc, "code", "") != "not_packaging":
+                raise
+        return _packaging_business_part_authority_cost(pid, code, quantity, loaded, user)
+
+    return {"task_id": tasks.submit(pid, "packaging_business_part_cost", job,
+                                    actor=user.get("username", ""))}
 
 @app.get(PACKAGING_BUSINESS_PART_COST_PATH)
 def get_packaging_business_part_cost(pid: str, code: str,

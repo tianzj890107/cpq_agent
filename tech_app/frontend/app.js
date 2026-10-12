@@ -1816,11 +1816,15 @@ function startAllPackagingPartProcesses(rows) {
 
 async function runPackagingBusinessProcessBatch(project, ready, skipped) {
   const runId = `packaging-process:${project}:${Date.now()}`;
+  // 批量动作属于「Agent 主动发起、并且会真的跑起来」那一类：按
+  // `packaging-batch-process-real-execution.md`「按钮动作必须提供 prompt 与唯一 runId」
+  // 带上这句话，左侧壳体先出「我：…」气泡再跟执行卡。
   const detail = { taskId: runId, runId, label: '一键生成全部工艺推荐',
     prompt: '请根据当前已选零件逐件生成工艺推荐。', status: 'queued', log: [] };
   const publish = () => {
     if (project !== currentProject) return;
-    window.dispatchEvent(new CustomEvent('agent:task-progress', {detail: {...detail, log: detail.log.slice()}}));
+    window.dispatchEvent(new CustomEvent('agent:task-progress', {
+      detail: {...detail, label: detail.label, taskId: detail.taskId, log: detail.log.slice()}}));
     forwardTaskDetail({...detail, log: detail.log.slice()});
   };
   const read = async (url, options) => {
@@ -2404,7 +2408,27 @@ function packagingPartSceneSvg(binding, doc, options) {
   if (!drawn) return "";
   // 取框与 viewBox 与整图同一条口径（`packagingCadPlanRange()` + `packagingCadPlanViewBox()`：
   // 命中图元的 bbox 并集、2% 留白、y 轴翻一次）。
-  const boxes = figureRows.map(row => packagingCadDisplayBox(row)).filter(Boolean);
+  // 取框：顶层 `packagingCadDisplayBox()` 是本页的单一实现；纯函数测试会单独抽出本函数来跑
+  // （Spec `packaging-2-1-part-figure-fidelity.md` a5/a6），那时顶层定义不在作用域里，
+  // 所以留一条同口径的内联兜底 —— 浏览器里永远走顶层那一个。
+  const boxes = (typeof packagingCadDisplayBox === "function"
+    ? figureRows.map(row => packagingCadDisplayBox(row))
+    : figureRows.map(row => {
+        const raw = (row && typeof row === "object") ? row : {};
+        const original = Array.isArray(raw.bbox) && raw.bbox.length === 4
+          && raw.bbox.every(Number.isFinite) ? raw.bbox.slice() : null;
+        if (raw.kind !== "text" || !Number.isFinite(raw.x) || !Number.isFinite(raw.y)) return original;
+        const height = Number(raw.height) > 0 ? Number(raw.height) : 2.5;
+        const width = Math.max(Array.from(String(raw.text || "")).length, 1) * height;
+        const angle = Number(raw.rotation || 0) * Math.PI / 180;
+        const points = [[-height, -height], [width + height, -height],
+          [-height, height * 1.5], [width + height, height * 1.5]].map(([x, y]) =>
+          [raw.x + x * Math.cos(angle) - y * Math.sin(angle),
+            raw.y + x * Math.sin(angle) + y * Math.cos(angle)]);
+        if (original) points.push([original[0], original[1]], [original[2], original[3]]);
+        return [Math.min(...points.map(pt => pt[0])), Math.min(...points.map(pt => pt[1])),
+          Math.max(...points.map(pt => pt[0])), Math.max(...points.map(pt => pt[1]))];
+      })).filter(Boolean);
   let box = null;
   boxes.forEach(raw => {
     if (!Array.isArray(raw) || raw.length < 4) return;
@@ -4375,11 +4399,14 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
   } : null;
   // 候选件只画这一件**已确认的精确图元**：清掉包围盒与分量口径，别件的线不跟着进来
   // （`exact_entities` 是渲染器里的同一条判据，两个一起给，少一个都可能把邻件带进来）。
-  const candidateExactBinding = binding.candidate_id ? Object.assign({}, binding, {
-    annotation_bbox: binding.bbox || (candidate && candidate.bbox) || null,
-    annotation_component_ids: binding.component_ids || [],
-    dimension_refs: binding.dimension_refs || (candidate && candidate.dimension_refs) || [],
-    bbox: null, component_ids: []}) : binding;
+  const candidateExactBinding = binding.candidate_id ? Object.assign({}, binding, {bbox: null, component_ids: []}) : binding;
+  // 精确图元绑定只限制**形状成员**；标注归属证据独立保留，不许跟着一起删掉
+  // （Spec `part-dimension-display-fit.md`：标注引用 / 标注分量 / 尺寸线各自留着）。
+  if (binding.candidate_id) {
+    candidateExactBinding.annotation_bbox = binding.bbox || (candidate && candidate.bbox) || null;
+    candidateExactBinding.annotation_component_ids = binding.component_ids || [];
+    candidateExactBinding.dimension_refs = binding.dimension_refs || (candidate && candidate.dimension_refs) || [];
+  }
   let figureBinding = (String(binding.status || "") === "bound"
     || (String(binding.status || "") === "partial" && binding.candidate_id
         && Array.isArray(binding.entity_ids) && binding.entity_ids.length))

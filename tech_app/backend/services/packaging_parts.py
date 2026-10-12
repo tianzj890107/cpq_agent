@@ -4538,6 +4538,13 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
                 continue
             if (selected_entities.intersection(binding.get('entity_ids') or [])
                     or set(ids).intersection(binding.get('component_ids') or [])):
+                # 手工改选**可以**覆盖一件已经认下的图形（那是有意的重分配，留
+                # `overlap_part_codes` 供审计）；但挡住它的那份认下本身还没定下来
+                # （`partial`：候选里含没进保留分量的原始图元）时不能共享图元
+                # （Spec `packaging-drawing-order-circles-and-dimension-scene.md`
+                # §4：候选实体冲突与 component_ids 冲突都检查，手动组成选择不得绕过）。
+                if binding.get('status') == 'partial':
+                    raise ValueError('candidate_entities_already_assigned_to_another_part')
                 overlap_codes.append(other['business_part_code'])
     else:
         for other in record.get('business_parts') or []:
@@ -4729,15 +4736,21 @@ def auto_bind_business_candidates(doc: Any) -> Dict[str, Any]:
                 proposed = set_geometry_binding(
                     record, code, best.get("component_ids") or [], bound_by="auto",
                     reason="最高证据分候选自动归属", candidate_id=candidate_id)
-                proposed_row = next((row for row in (proposed.get("business_parts") or [])
-                                     if isinstance(row, dict) and _text(row.get("business_part_code")) == code), {})
-                if (proposed_row.get("geometry_binding") or {}).get("status") == "bound":
-                    record = proposed
-                    accepted = True
-                    break
-                reason = "highest_candidate_geometry_incomplete"
             except ValueError as exc:
+                # 候选已被别的件按图纸顺序认下 → 按证据分往后找下一个候选
+                # （Spec `packaging-drawing-order-circles-and-dimension-scene.md` §4）。
                 reason = str(exc)
+                continue
+            proposed_row = next((row for row in (proposed.get("business_parts") or [])
+                                 if isinstance(row, dict) and _text(row.get("business_part_code")) == code), {})
+            if (proposed_row.get("geometry_binding") or {}).get("status") == "bound":
+                record = proposed
+                accepted = True
+                break
+            # 最高证据分的候选自身几何不完整（候选图元与保留分量对不上）：不许悄悄退到更低
+            # 分的候选把这一件绑上，也不许把不完整候选当绑定 —— 只 CAD 完整证据可确权。
+            reason = "highest_candidate_geometry_incomplete"
+            break
         if accepted:
             continue
         current = next((row for row in (record.get("business_parts") or [])
