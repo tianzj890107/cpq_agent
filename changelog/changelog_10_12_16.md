@@ -33,3 +33,18 @@
   （`geometry_region` / `bbox_only` 保留，成本门禁照旧 `BUSINESS_PART_SIZE_UNCONFIRMED`）；
   「人工改选必须归档并失效旧尺寸」的红测保持绿。未删断言、未改期望值、未放宽判据。
 - 未做：线上 34 的人工校正项目未改写；未建立圆盘盒人工金标，不宣称自动选件全量准确。
+
+## 2026-10-12 区域优先自动选件：提交、双远端推送与 34 部署记录
+
+- 提交 `b35e02e`：12 个文件（6 改 + 6 新增，665 insertions / 18 deletions）。
+  恒定不入库未跟踪项不变：`拆分程序/`、`.~亿纬锂能DA梳理.xlsx`。
+- 双远端：GitHub `28f3d53..b35e02e`；GitLab（当日 DNS 不可用，走 `172.16.5.150` +
+  `HostKeyAlias=gitlab.boulderaitech.com`）`28f3d53..b35e02e`；三方 `ls-remote` 回读一致
+  `b35e02ef2d72627a3973f635f72918a675f5b916`。
+- 34 部署：`bash scripts/deploy_34_bare.sh ytbz` → `01e442365 → b35e02ef2`；
+  `build.commit=b35e02ef2d72`（branch=ytbz）、8010 pid=`3665601`、health `status=ok`。
+  真转两份样本 `converter_role=primary`（酒盒 6711 实体/8 层、圆盘盒 3457/32，`dxf + preview` 齐全）。
+  隔离端到端自检 `verdict=ok`：酒盒八步 8/8、263 件、`closed_ratio=0.510`、可算 13/可挤出 13；
+  圆盘盒 312 件、`closed_ratio=0.840`、可算 101/可挤出 262；两条权威实样路线 `confirm=confirmed`；
+  隔离目录已删，运行目录项目数 84 → 84 未污染。
+- 能力口径不变：DWG 编排能力完成，真实转换能力未验收；线上原人工校正项目未改写。
