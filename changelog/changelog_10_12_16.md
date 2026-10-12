@@ -131,6 +131,22 @@
   来自演示输入。脚本 `scripts/packaging_demo_prepare.py`（干跑 / `--apply`）写入演示输入并按现有
   顺序重排 BOM → 路线 → 成本，逐件打印尺寸、材料与推荐来源。
 
+## 2026-10-12 包装账 → 整机成本 → 回传销售 的投影补齐
+
+- 新增 Spec `docs/specs/packaging-cost-to-quote-integration-projection.md` 与红测
+  `tests/test_packaging_cost_to_quote_integration_projection_red.py`（4 条，2 红转全绿）。
+- 定位到的断点：包装项目的包装账算齐并签字之后，集成计划里的"整机成本"仍然是空的 ——
+  包装 2.3 只算包装账、从不回填整机成本，回传销售于是被"请先完成整机成本测算"拦死。
+  线上项目酒盒实测：包装账对账通过、材料 11.46 元、合计 15.60 元，`确认成本` 通过，
+  但 `回传销售` 400 —— "全流程回到销售"这一步在包装链上从未真的通到过。
+- 现在：包装项目的整机成本 = 同一份包装账（金额逐字取包装账对账结果，标注
+  `source=packaging_ledger` 与来源成本账版本），只在"从来没有整机成本"时补位；
+  已有人工或模型测算过的整机成本一个字都不动；包装账缺失或过期仍照旧拒绝。
+- 相关回归：`test_packaging_single_cost_ledger_red` 18、`test_packaging_cost_engine_red` 81、
+  `test_packaging_cost_gaps_red` 10、`test_e2e_packaging_downstream_handoff_red` 12、
+  `test_packaging_quote_close_loop_red` 96、`test_packaging_cost_ledger_section_recon_red` 10、
+  `test_cost_review_single_primary_and_drop_run_step_red` 23 全部通过。
+
 ## 2026-10-12 报价卡片回到销售视角（技术整包/零件表撤出、定价块按步骤、第 4 步不再复制第 3 步）
 
 - 新增 Spec `docs/specs/packaging-quote-card-sales-view-parity.md`（C1–C6）与红测

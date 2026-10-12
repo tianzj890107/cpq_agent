@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 from typing import Optional
 
+from ..models.cost import CostAnalysis
 from ..models.cost_review import CostAction
 from ..models.integration import MaterialWrite, QuoteHandoff
 from ..storage import store
@@ -391,11 +392,73 @@ def confirm_review(project_id: str, user: Optional[dict] = None,
 # --------------------------------------------------------------------------- #
 # 2.2 的两个对外正文（写主数据 / 发送报价）—— 2.2 与 2.3 路由共用
 # --------------------------------------------------------------------------- #
-def integration_ready_cost(project_id: str):
-    """取出可以对外的 2.2 结果。成本没算完就不该往主数据和报价里送。"""
+#: 包装账分类 → 整机成本明细行的类别（同一笔钱，换个口径名词）。
+_PACKAGING_COST_ROWS = (
+    ("material", "material", "包装材料费"),
+    ("labor", "labor", "人工"),
+    ("processing", "machining", "加工费"),
+    ("tooling", "tooling", "工装/模具"),
+    ("packaging", "logistics", "包装/物流"),
+    ("freight", "logistics", "运费"),
+    ("other", "other", "其它"),
+)
+
+
+def packaging_cost_projection(project_id: str) -> Optional[dict]:
+    """把包装账投影成"整机成本"（对外口径）；不可投影时返回 None。
+
+    Spec `docs/specs/packaging-cost-to-quote-integration-projection.md` §2.1：包装项目的
+    整机成本就是**同一份包装账** —— 金额逐字取包装账的对账结果，不重算、不复制算法；
+    `cost_model` 直接写这份结果，报价侧读到的整机成本与 2.3 看到的包装账是同一份数。
+    """
+    requirement = store.load_requirement(project_id) or {}
+    if (requirement.get("data") or {}).get("industry") != "packaging":
+        return None
+    from . import packaging_cost_ledger
+    view = packaging_cost_ledger.load(project_id)
+    ledger = view.get("packaging_cost") or {}
+    if not ledger.get("built") or ledger.get("stale"):
+        return None
+    final = view.get("final") or {}
+    if float(final.get("total") or 0) <= 0:
+        return None
+    items = []
+    for key, category, label in _PACKAGING_COST_ROWS:
+        amount = round(float(final.get(key) or 0), 2)
+        if amount:
+            items.append({"category": category, "name": label, "unit": "元",
+                          "amount": amount, "source": "包装账投影", "confidence": 1.0})
+    estimate_id = str(ledger.get("estimate_id") or "")
+    return {
+        "part_id": integration.ASSEMBLY_PART_ID,
+        "part_name": "整机（包装账投影）",
+        "quantity": int(ledger.get("quote_quantity") or 1),
+        "summary": "整机成本来自同一版包装账，未按企业成本口径重算。",
+        "items": items,
+        "cost_model": {**final, "source": "packaging_ledger", "estimate_id": estimate_id},
+        "assumptions": [
+            "整机成本 = 包装账投影（Spec packaging-cost-to-quote-integration-projection §2.1）："
+            "金额逐字取包装成本账，未重算。",
+            f"来源包装成本账版本：{estimate_id or '（无版本号）'}",
+        ],
+    }
+
+
+def integration_ready_cost(project_id: str, *, author: str = "system"):
+    """取出可以对外的 2.2 结果。成本没算完就不该往主数据和报价里送。
+
+    包装项目多一条兜底：包装账已经算齐（`built` 且不过期）而集成计划里从来没有整机成本
+    时，把这份账**投影**成整机成本再往下走 —— 否则"包装账有值、整机成本为空"会让
+    回传销售永远停在"请先完成整机成本测算"。已存在的整机成本（人工或模型算的）优先，
+    投影只在空位补。
+    """
     plan = integration.load_plan(project_id)
     if not (plan.cost and plan.cost.items):
-        raise CostFlowError("请先完成整机成本测算，再写入数据库或发送至报价")
+        projection = packaging_cost_projection(project_id)
+        if projection is None:
+            raise CostFlowError("请先完成整机成本测算，再写入数据库或发送至报价")
+        plan.cost = CostAnalysis(**projection)
+        integration.save_plan(project_id, plan, author or "system")
     return plan
 
 
@@ -684,7 +747,7 @@ def integration_send_to_quote_body(project_id: str, *, product_name: str = "",
     权限和正文必须分开，复用正文的人才不会连带继承另一步的权限。
     """
     user = user or {}
-    plan = integration_ready_cost(project_id)
+    plan = integration_ready_cost(project_id, author=str(user.get("username") or "system"))
     # 上一次回传可能只成功了一半（报价回了、来源任务没关成）：先把它补完整，
     # 再决定这次要不要重发。补不成不影响这一次回传继续走。
     resume_incomplete_handoff(project_id, user, token=token)
