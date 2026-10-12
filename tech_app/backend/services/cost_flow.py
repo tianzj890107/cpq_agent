@@ -20,7 +20,8 @@ from typing import Optional
 
 from ..models.cost import CostAnalysis
 from ..models.cost_review import CostAction
-from ..models.integration import MaterialWrite, QuoteHandoff
+from ..models.integration import (IntegrationParam, IntegrationParamPlan,
+                               MaterialWrite, QuoteHandoff)
 from ..storage import store
 from ..time_utils import now_cst_str
 from . import cost_model, cost_review, cpq_bridge, integration, product_params
@@ -444,6 +445,67 @@ def packaging_cost_projection(project_id: str) -> Optional[dict]:
     }
 
 
+def packaging_handoff_family(project_id: str) -> Optional[str]:
+    """包装项目的回传必填按哪个产品族校验；非包装返回 None（沿用既有口径）。
+
+    Spec `docs/specs/packaging-cost-to-quote-integration-projection.md` §2.5：包装项目的
+    成品参数就是需求单 3.1–3.6 的字段，不许被当成"其他成品"去问产品系列 / 工作温度 ——
+    那些字段在包装链上没有来源，问了就成死结。
+    """
+    return integration.project_family(project_id)
+
+
+def packaging_param_projection(project_id: str) -> Optional[list]:
+    """包装项目：需求单里**已经有值**的成品参数 → 参数行；非包装返回 None。
+
+    只搬需求单里已有的值，缺的照旧由 `missing_required()` 如实点名 —— 不编值
+    （包装产品名称 / 包装品类这类只写在需求文本里的字段，由「参数推荐」环节补）。
+    """
+    from . import product_params
+    if not packaging_handoff_family(project_id):
+        return None
+    requirement = store.load_requirement(project_id) or {}
+    data = requirement.get("data") or {}
+    rows = []
+    for field in product_params.packaging_family_fields():
+        code = str(field.get("code") or "")
+        value = data.get(code)
+        if not code or value in (None, "", [], {}):
+            continue
+        rows.append(IntegrationParam(
+            name=str(field.get("name") or code), value=str(value),
+            unit=str(field.get("unit") or "") or None, param_code=code,
+            category=str(field.get("group") or "") or None,
+            basis="需求单投影（未经过模型「参数推荐」）"))
+    return rows
+
+
+def ensure_packaging_params(project_id: str, plan=None) -> Optional[object]:
+    """把包装需求单的成品参数投影进「参数推荐」结果并落盘；非包装返回 None。
+
+    已存在的行一个字不改（人工或模型填过的优先）；只在缺行时补，并注明来源是需求单投影。
+    """
+    family = packaging_handoff_family(project_id)
+    if not family:
+        return None
+    rows = packaging_param_projection(project_id) or []
+    plan = plan if plan is not None else integration.load_plan(project_id)
+    if plan.params is None:
+        plan.params = IntegrationParamPlan(product_family=family, assembly_name="")
+    if not plan.params.product_family:
+        plan.params.product_family = family
+    known = {str(getattr(row, "param_code", "") or "") for row in (plan.params.params or [])}
+    added = [row for row in rows if row.param_code not in known]
+    needs_family = plan.params.product_family == family
+    if added or needs_family:
+        if added:
+            plan.params.params = list(plan.params.params or []) + added
+            plan.params.assumptions = list(plan.params.assumptions or []) + [
+                "包装成品参数按需求单投影补齐（未经过模型「参数推荐」）；需求单没有的字段如实留缺。"]
+        integration.save_plan(project_id, plan, "system")
+    return plan.params
+
+
 def integration_ready_cost(project_id: str, *, author: str = "system"):
     """取出可以对外的 2.2 结果。成本没算完就不该往主数据和报价里送。
 
@@ -759,7 +821,9 @@ def integration_send_to_quote_body(project_id: str, *, product_name: str = "",
     # 同一个人 —— 缺口照旧随返回体带出去（status.required_missing / params_complete
     # 为 false / status.waiver），财务与销售都看得见哪几格还空着。签字之后新冒出来的
     # 缺口（编码集合变大）覆盖不成立，仍然逐个点名拒绝。
-    missing = product_params.missing_required(plan.params) if plan.params else []
+    ensure_packaging_params(project_id, plan)
+    missing = (product_params.missing_required(plan.params, packaging_handoff_family(project_id))
+               if plan.params else [])
     if missing:
         missing_codes = sorted({str(field.get("code") or "") for field in missing
                                 if str(field.get("code") or "")})

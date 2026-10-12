@@ -30,8 +30,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tech_app.backend.models.cost import CostAnalysis  # noqa: E402
+from tech_app.backend.models.integration import IntegrationParamPlan  # noqa: E402
 from tech_app.backend.services import cost_flow, cost_model, integration  # noqa: E402
+from tech_app.backend.services import product_params  # noqa: E402
 from tech_app.backend.services import packaging_cost_ledger  # noqa: E402
+from tech_app.backend.storage import store  # noqa: E402
 from tests.test_packaging_cost_engine_red import CostCase, PID  # noqa: E402
 
 
@@ -93,6 +96,60 @@ class A包装账投影(ProjectionCase):
         except Exception:                                           # noqa: BLE001
             return
         self.fail("没有包装账、也没有整机成本时，不许凭空造一份整机成本")
+
+def _handoff_error(self):
+    """跑一次回传正文，取回业务拒绝的原文；桥接层/令牌等问题与本批无关，返回空串。"""
+    try:
+        cost_flow.integration_send_to_quote_body(
+            PID, product_name="礼盒", user={"username": "FI1", "display_name": "FI1"})
+    except cost_flow.CostFlowError as exc:
+        return str(exc)
+    except Exception:                                               # noqa: BLE001
+        return ""
+    return ""
+
+
+class B包装参数族(ProjectionCase):
+    """Spec §2.5/§2.6：包装项目的回传必填按包装族校验，参数从需求单投影。
+
+    现场（34 实测，项目 `6beeeebb19a1`）：参数推荐环节在包装链上跑过，`plan.params` 里
+    只有平台自动写的成品编码 / 名称、`product_family` 是空的 —— 回传于是按「其他成品」
+    校验，去问产品系列 / 工作温度，而这两个字段在包装链上根本没有来源。
+    """
+
+    def handoff_text(self, **over):
+        self.prepare(**over)
+        self.build_cost()
+        plan = integration.load_plan(PID)
+        plan.params = IntegrationParamPlan()
+        integration.save_plan(PID, plan, "PE1")
+        return _handoff_error(self)
+
+    def test_b1_packaging_handoff_never_demands_non_packaging_fields(self):
+        text = self.handoff_text()
+        self.assertNotIn("整机成本", text, "回传不该还卡在整机成本：包装账投影要先补上")
+        self.assertNotIn("产品系列", text, "包装项目不该被当成「其他成品」问产品系列")
+        self.assertNotIn("工作温度", text, "包装项目不该被当成「其他成品」问工作温度")
+
+    def test_b2_requirement_fields_are_not_asked_again(self):
+        text = self.handoff_text()
+        self.assertNotIn("整机成本", text, "回传不该还卡在整机成本：包装账投影要先补上")
+        for name in ("成品内长", "成品内宽", "成品内高", "盒型", "闭合方式", "面纸克重"):
+            self.assertNotIn(name, text, "需求单已经有「%s」，回传不该再问一遍" % name)
+
+    def test_b3_projection_never_invents_values(self):
+        """需求单里没有的字段不许被编出来 —— 只能由「参数推荐」环节补。"""
+        self.handoff_text(packaging_product_name=None, packaging_category=None)
+        data = (store.load_requirement(PID) or {}).get("data") or {}
+        self.assertIsNone(data.get("packaging_product_name"))
+        self.assertIsNone(data.get("packaging_category"))
+        params = integration.load_plan(PID).params
+        self.assertIsNotNone(params, "包装项目必须有一份参数推荐结果（含需求单投影）")
+        projected = {row.param_code: row.value for row in (params.params or [])}
+        for code in ("packaging_product_name", "packaging_category"):
+            self.assertNotIn(code, projected, "需求单没有 %s，不许编一个值出来" % code)
+        missing = [row["name"] for row in product_params.missing_required(params)]
+        self.assertIn("包装产品名称", missing, "需求单没有的字段必须如实留在缺口里")
 
 
 if __name__ == "__main__":

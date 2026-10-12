@@ -1,7 +1,7 @@
 # Spec：包装项目的成本确认之后，整机成本必须是同一份包装账（否则回传销售走不通）
 
-状态：Spec + 红测（已实现）
-红测：`tests/test_packaging_cost_to_quote_integration_projection_red.py`（3 条）
+状态：Spec + 红测（成本投影已实现；包装参数投影本批已实现）
+红测：`tests/test_packaging_cost_to_quote_integration_projection_red.py`（7 条：成本投影 4 + 包装参数 3）
 血缘：`docs/specs/packaging-single-cost-ledger.md`（单份成本账、不复制算法）、
 `docs/specs/tech-cost-confirm-gaps-and-waiver.md`（确认成本与缺口签字）、
 `docs/specs/packaging-multipart-business-part-complete.md`（一个业务零件多组成）。
@@ -61,7 +61,26 @@ C1 成立之后，`cost_flow.send_to_quote()` 不再卡在 `integration_ready_co
 参数（`plan.params`）为空时既有口径不变（`product_params.missing_required(None)` 不拦），
 本批不改参数与工艺环节。
 
-## 3. 不改的东西
+### 2.5 C5：包装项目的回传必填按包装族校验
+
+包装项目的 `integration_send_to_quote_body()` 做必填检查时用的产品族**必须**是
+`pkg_box`（`integration.project_family()` 的既有口径），不许因为
+`plan.params.product_family` 为空就退回「其他成品」去问 **产品系列 / 产品型号 / 最大尺寸 /
+重量 / 工作温度 / 成品描述** —— 这些字段在包装链上**没有任何来源**，问了就是死结。
+
+现场（34 实测，项目 `6beeeebb19a1`）：参数推荐跑过，`plan.params` 里只有平台自动写的
+`product_item_code` / `product_item_name`，`product_family` 是空的，回传于是报
+「报价必填的成品参数还缺：产品系列、产品型号、最大尺寸、重量、工作温度」。
+
+### 2.6 C6：包装成品参数从需求单投影，且不许编值
+
+包装项目的「参数推荐」结果里，需求单 `data` **已有值**的包装族字段（内长 / 内宽 / 内高 /
+盒型 / 闭合方式 / V 槽 / 面纸克重 / 报价数量 …）必须直接投影进去并落盘，来源注明是需求单
+投影；**需求单没有的字段一个都不许编**（`包装产品名称` / `包装品类` 这类只写在需求文本里的，
+由「参数推荐」环节补，或者由文本抽取补）—— 缺的照旧由 `missing_required()` 如实点名。
+已存在的参数行（人工或模型填过的）一个字不改。
+
+
 
 - 不改包装成本算法、费率、损耗、缺口分级、对账口径；
 - 不改 `cost_review.confirm_review` 的缺口与签字口径；
@@ -91,3 +110,17 @@ C1 成立之后，`cost_flow.send_to_quote()` 不再卡在 `integration_ready_co
   `material/labor/overhead/machining/total` 与包装账 `final` 逐项相等（红测 a2 钉住）。
 - 红测 `tests/test_packaging_cost_to_quote_integration_projection_red.py` 4 条由 2 红转全绿
   （a1/a2 红→绿；a3 已有整机成本不被覆盖、a4 没有包装账仍拒绝，两条护栏自始为绿）。
+
+## 6. 第二轮实现及测试记录（2026-10-12）
+
+- 现场推进：成本投影上线后，回传的拒绝文案从「请先完成整机成本测算」变成
+  「报价必填的成品参数还缺：产品系列、产品型号、最大尺寸、重量、工作温度」——
+  即 §2.5 的族口径问题浮出水面。
+- 实现：`cost_flow.py` 新增 `packaging_handoff_family()`（直接复用
+  `integration.project_family()`）、`packaging_param_projection()`、
+  `ensure_packaging_params()`；`integration_send_to_quote_body()` 在必填检查前调用
+  `ensure_packaging_params()`，并把族显式传给 `product_params.missing_required()`。
+- 红测 b1（不许问产品系列 / 工作温度）、b3（不许给需求单没有的字段编值）由红转绿；
+  b2（需求单已有的字段不许再问一遍）本批为护栏。
+- 仍未闭合的一步：`包装产品名称` / `包装品类` 只写在需求文本里，本批**不编值**，
+  由「参数推荐」环节（模型）或文本抽取补上。

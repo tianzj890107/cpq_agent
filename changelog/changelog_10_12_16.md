@@ -147,6 +147,21 @@
   `test_packaging_quote_close_loop_red` 96、`test_packaging_cost_ledger_section_recon_red` 10、
   `test_cost_review_single_primary_and_drop_run_step_red` 23 全部通过。
 
+## 2026-10-12 包装回传的参数族与成品参数投影
+
+- 新增红测 3 条（`tests/test_packaging_cost_to_quote_integration_projection_red.py` 的 b1–b3，
+  其中 2 条由红转绿），Spec 补 §2.5 / §2.6 与第二轮实现记录。
+- 问题：包装项目回传时按「其他成品」校验报价必填，去问产品系列 / 产品型号 / 最大尺寸 /
+  重量 / 工作温度 —— 这些字段在包装链上没有任何来源。线上实测拒绝文案逐字如此。
+- 现在：包装项目的回传必填锁定 `pkg_box` 族（复用 `integration.project_family()`）；
+  需求单里已有值的包装族字段直接投影进参数推荐结果并注明来源；需求单没有的字段
+  （包装产品名称 / 包装品类）不编值，仍如实留在缺口里，交给「参数推荐」环节或文本抽取补。
+- 相关回归：`test_packaging_cost_to_quote_integration_projection_red` 7、
+  `test_packaging_tech_param_bom_route_cost_closure_red` 20、`test_quote_agent_industry_alignment_red` 33、
+  `test_tech_handoff_atomic_idempotent_red` 35、`test_tech_integration_dependency_waiver_red` 20、
+  `test_tech_quote_business_case_linkage_red` 39、`test_tech_waiver_reuse_across_handoffs_red` 11、
+  `test_packaging_quote_close_loop_red` 96 全部通过。
+
 ## 2026-10-12 报价卡片回到销售视角（技术整包/零件表撤出、定价块按步骤、第 4 步不再复制第 3 步）
 
 - 新增 Spec `docs/specs/packaging-quote-card-sales-view-parity.md`（C1–C6）与红测
