@@ -181,6 +181,24 @@
   `test_packaging_round_geometry_and_requirement_facts_red` 与 `test_packaging_full_flow_20260929_red` 共 33、
   包装链路 11 套共 392 全部通过。
 
+## 2026-10-12 包装需求原文直接生成成品参数：提交、双远端推送与 34 部署记录
+
+- 提交 `7ac21dc`（作者 张真 <zhangzhen@boulderaitech.com>）：Spec
+  `docs/specs/packaging-requirement-text-derived-params.md`、红测
+  `tests/test_packaging_requirement_text_params_red.py` 11 条、
+  `requirement_service.py` 报文字段抽取补两个键、`cost_flow.py` 回传投影按同一份原文补齐。
+- 双远端：`gitlab/ytbz` 与 `origin/ytbz` 均回读为 `7ac21dc`。
+- 34 部署：`bash scripts/deploy_34_bare.sh ytbz`，`5e739f3ff → 7ac21dcc9`；
+  8010 pid=901523；两份真实样本主转换器（ODA 27.1）直出、`converter_role=primary`；
+  隔离端到端自检 verdict=ok；运行目录项目数 92 → 92（未写生产数据）。
+- 部署后线上复验（项目 `6beeeebb19a1`）：产品族 `pkg_box`；回传必填缺口 **无**
+  （此前逐字为「报价必填的成品参数还缺：包装产品名称、包装品类」）；投影得到
+  包装产品名称 `700ML双开门酒盒`、包装品类 `酒盒`；整机成本来源 `packaging_ledger`、
+  合计 15.60 元。
+- 仍差一步：脚本直调 `send_to_quote` 在报价侧桥接处报「请先登录」——回传需要
+  **CPQ 操作人本人会话**（34 已接统一登录，本地登录被拒），浏览器里以 FI1 登录后即可完成；
+  这是会话要求，不是数据缺口。
+
 ## 2026-10-12 报价卡片回到销售视角（技术整包/零件表撤出、定价块按步骤、第 4 步不再复制第 3 步）
 
 - 新增 Spec `docs/specs/packaging-quote-card-sales-view-parity.md`（C1–C6）与红测
