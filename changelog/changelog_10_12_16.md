@@ -89,3 +89,31 @@
   隔离目录已删、运行目录项目数 86 → 86 未污染。代码与部署前一致（本批只含 Spec/红测），
   因此本次部署不改变线上行为。
 - 能力声明不变：DWG 编排能力完成，真实转换能力未验收。
+
+## 2026-10-12 报价卡片回到销售视角（技术整包/零件表撤出、定价块按步骤、第 4 步不再复制第 3 步）
+
+- 新增 Spec `docs/specs/packaging-quote-card-sales-view-parity.md`（C1–C6）与红测
+  `tests/test_packaging_quote_card_sales_view_parity_red.py`：先跑红 9 条 —— 整包 dump 的节点与调用、
+  零件面的 12 个标识符、两个具名判据缺失（`cardSnapshotSectionSkipped` / `packagingQuotePanelStepVisible`）、
+  `s4_markup` 的 `fields`/`rows` 与 `s3_markup` 逐字相同；实现后 18 条全绿。
+- 按新 Spec C2 反转三份旧契约对应的红测（口径变化改 Spec、不删断言）：
+  `tests/test_packaging_card_step6_parts_must_be_the_business_parts_list_red.py`（A/B/C 组反转 + D 组护栏改指技术侧）、
+  `tests/test_packaging_parts_in_card_and_material_fill_red.py` A 组（§2.2/§2.3 与 B/C/D 组不动）、
+  `tests/test_packaging_card_parts_lookup_link_key_parity_red.py`（A 组反转 + 写侧护栏保留）；
+  三份 Spec 加「取代」指针，`packaging-quote-workspace-render-routing.md` §4 注明卡片部分被 C1 取代。
+- 实现 `确认需求解析结果.html`：删 `#packagingPackageContent` 与全部 `renderPackage(...)` 调用（缓存与非缓存两条路）、
+  删第 6 步触发点与整段零件面（`ensureCardPackagingParts` / `resolveCardTechProject` / `packagingPartCardRows` /
+  `packagingBusinessPartCardRows` / `cardBusinessPartsAccountingText` / `PACKAGING_PART_COLUMNS` 等）、
+  未知段通用渲染保留但包装卡片的 `packaging_parts` 段安静跳过（`cardSnapshotSectionSkipped(sectionId, industry)`）、
+  `#packagingQuotePanel` 按步骤显示（`packagingQuotePanelStepVisible(step)`：3–5 可见，1/2/6 隐藏，新建时也按当前步设一次）。
+  整包仍留在快照与页面状态里（第 6 步门禁、定价、历史版本重建照旧读得到）。
+- 实现 `cpq_packaging_quote.py`：`sections()` 的 `s4_markup` 改为只讲加价与折扣（fields：加价合计 / 加价后单价 /
+  折扣率 / 折扣金额 / 折后未税单价；rows：沿用第 3 步定价 + 逐条加价或「本版无其他加价」+ 折扣或「本版无折扣」）；
+  `s3_markup` 与其它三段、`money_view`、定价引擎、文档八节与版本表一字未动。
+- 验证：新红测 18 OK；反转后三份 30 OK；`online_business_closure / quote_workspace_render_routing /
+  quote_draft_and_card_visibility / quote_close_loop / drawing_board_two_column_parts_and_3d / parts_extraction /
+  quote_send_button_entry / quote_version_persistence / quote_step5_* / e2e_quote_session_completion /
+  2_1_result_parts / online_two_dwg_closure / round_geometry` 共 316 项 OK；`test_spec_status_truth_red` 7 OK；
+  页面两个内联 `<script>` 块 `node --check` 通过；`git diff --check` 干净。
+- 未做：技术项目深链（Spec §5 非目标，没有现成 URL 方案）留待后续批次；未 push、未建 MR/tag/Release、未部署、
+  未起服务、未连库、未改任何业务数据。

@@ -14,6 +14,9 @@
 `packaging-business-parts` 一个引用都没有，业务部件清单在卡片上根本读不到。本行由 `## 457`
 按状态守卫 `tests.test_spec_status_truth_red` 更正：点名的红测现在
 `Ran 11 … OK`，红基 6 红是 A1–A3 / B1–B2 / C1）
+取代（2026-10-12）：本 Spec 的**整份卡片侧契约**由 `packaging-quote-card-sales-view-parity.md` C2 取代 ——
+报价卡片第 6 步不再有零件表（业务部件清单仍留在技术工艺侧 2.1 看板与两个读接口）；
+本文件点名的红测已按新口径反转（现在的判据是「卡片不许出现零件/几何/业务部件表」）。
 红测：`tests/test_packaging_card_step6_parts_must_be_the_business_parts_list_red.py`
 本批 changelog 条目号：`## 457`（原写 `## 455`；该号已被同期的
 `packaging-cost-stage-must-see-the-parsed-parts.md` 占用，本批按实际落地条目改号）

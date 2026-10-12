@@ -1,6 +1,9 @@
 """红测：卡片上看得见拆出来的零件 + 缺材料的件补得进去。
 
 Spec：`docs/specs/packaging-parts-in-card-and-material-fill.md`
+口径更新（2026-10-12）：本 Spec §2.1（卡片第 6 步显示零件表）已由
+`packaging-quote-card-sales-view-parity.md` C2 取代 —— 零件表撤出销售卡片，
+A 组按新口径反转；§2.2/§2.3（件级补材料/补料厚）与 B/C/D 组不变。
 
 现状缺口（34 真跑，2026-09-22，报价会话 `c0239386c1c4` / 技术项目 `a42e5e60a720` /
 卡片 `3991598492811269436`，不是推断）：
@@ -92,36 +95,33 @@ def restore_body():
 
 
 # --------------------------------------------------------------------------- #
-# A 组：卡片第 6 步真的渲染得出零件表
+# A 组：卡片与零件表的关系（口径已由新 Spec 反转）
 # --------------------------------------------------------------------------- #
 class ACardPartVisibility(unittest.TestCase):
     def test_a1_unknown_table_section_is_not_silently_dropped(self):
-        """快照里 `kind == 'table'` 的未知节必须渲染，不许 `FORMS.find` 取不到就 return。"""
+        """护栏：快照里 `kind == 'table'` 的未知节仍必须走通用渲染（新 Spec C6）。"""
         body = restore_body()
-        self.assertTrue(body, "取不到 wfRestoreStepData() —— 测试前提失效（Spec §2.1）")
+        self.assertTrue(body, "取不到 wfRestoreStepData() —— 测试前提失效")
         anchor = body.find("FORMS.find")
         self.assertGreaterEqual(anchor, 0, "wfRestoreStepData 必须仍然按 FORMS 找已知节")
-        window = body[anchor:anchor + 800]
-        generic = (("'table'" in window) or ('"table"' in window)) and ("renderTableSection" in window)
-        catalog = "packaging_parts" in SUITE_PY.read_text(encoding="utf-8", errors="replace")
-        self.assertTrue(generic or catalog,
-                        "卡片页必须能渲染快照里 kind=table 的未知节（通用渲染），"
-                        "或把 packaging_parts 登记进固定表单目录 —— 现在两条都没有（Spec §2.1 第 1 条）")
+        window = body[anchor:anchor + 1200]
+        self.assertTrue((("'table'" in window) or ('"table"' in window))
+                        and ("renderTableSection" in window),
+                        "卡片页必须仍能渲染快照里 kind=table 的未知节（通用渲染，新 Spec C6）")
 
-    def test_a2_card_page_resolves_project_and_reads_parts(self):
+    def test_a2_card_page_no_longer_reads_the_parts_endpoint(self):
+        """卡片页不许再反查技术项目读零件 —— 零件表只在技术侧 2.1（新 Spec C2）。"""
         text = html_text()
-        for token in ("/api/projects", "source_session_id", "packaging-parts"):
-            self.assertIn(token, text,
-                          "卡片页必须按会话反查技术项目并读零件端点，缺 %s（Spec §2.1 第 4 条）" % token)
+        for token in ("packaging-parts", "ensureCardPackagingParts", "resolveCardTechProject"):
+            self.assertNotIn(token, text,
+                             "卡片页不许再出现 %s（零件表已撤出销售卡片，新 Spec C2）" % token)
 
-    def test_a3_part_table_declares_the_required_columns(self):
-        sources = [html_text()]
-        for path in (PARTS_PY, MAIN_PY, SUITE_PY):
-            sources.append(path.read_text(encoding="utf-8", errors="replace"))
-        blob = "\n".join(sources)
+    def test_a3_part_columns_are_still_declared_by_the_backend(self):
+        """护栏：列定义的唯一来源仍是后端 `packaging_parts.CARD_COLUMNS`（技术侧照旧用）。"""
+        blob = "\n".join(path.read_text(encoding="utf-8", errors="replace")
+                         for path in (PARTS_PY, MAIN_PY, SUITE_PY))
         missing = [col for col in REQUIRED_PART_COLUMNS if col not in blob]
-        self.assertEqual([], missing,
-                         "卡片零件表缺少这些列：%s（Spec §2.1 第 2 条）" % "、".join(missing))
+        self.assertEqual([], missing, "后端零件列定义缺少这些列：%s" % "、".join(missing))
 
     def test_a4_existing_form_catalog_is_intact(self):
         """护栏：不许为了让第 6 步显示零件而改坏既有 17 节固定表单。"""

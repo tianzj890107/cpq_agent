@@ -9,6 +9,8 @@
 
 状态：Spec + 红测（已实现）（卡片第 6 步渲染零件表、件级「补材料」入口已由并行实现轮落进工作区
 ——**未提交**，见 §7 复核 `Ran 13 tests … OK`；§6 里那份 `FAILED (failures=10)` 保留为写 Spec 当时的历史记录）
+取代（2026-10-12）：本 Spec §2.1（卡片第 6 步显示零件表）由 `packaging-quote-card-sales-view-parity.md` C2 取代
+（零件表撤出销售卡片）；§2.2 / §2.3（件级补材料、补料厚）与 B/C/D 组照旧。
 红测：`tests/test_packaging_parts_in_card_and_material_fill_red.py`
 本批 changelog 条目号：`## 315`。
 

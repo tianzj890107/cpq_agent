@@ -1,18 +1,21 @@
 # -*- coding: utf-8 -*-
-"""红测：报价卡片第 6 步的「零件」必须是业务部件清单，263 个几何分量不许整表冒充（Spec §2）。
+"""红测：报价卡片第 6 步不许再出现零件/几何/业务部件表（销售视角与三行业对齐）。
 
-Spec：`docs/specs/packaging-card-step6-parts-must-be-the-business-parts-list.md`
+Spec：`docs/specs/packaging-quote-card-sales-view-parity.md`（C2）
 
-现状缺口（2026-09-23 在 34 只读实测 + 本机读源码，不是推断）：
-  · 卡片页 `确认需求解析结果.html` 里 `/requirement/packaging-parts`（几何口径）出现 4 次，
-    `packaging-business-parts` **0 次** —— 业务部件清单在卡片上根本读不到；
-  · 34 上项目 `8131f6d29d99`：几何文档 `total=263`；业务部件文档 `built=false`
-    （`gap.message = 已识别几何区域 263 个，尚未形成业务部件清单`）；
-  · 卡片第 6 步照旧渲染成「图纸拆出来的零件（263 件）」8 列（`DWG-P01`…`DWG-P263`），
-    与 `packaging-business-parts-and-cad-plan-view.md` §7「不能产生 263 行任务」相反；
-  · 后端 `_business_parts_body()` 早就不回退成几何件 —— 缺口只在卡片页这一侧。
+血缘与取代：本文件原契约是 `packaging-card-step6-parts-must-be-the-business-parts-list.md`
+（「卡片第 6 步的零件必须是业务部件清单」）—— 该契约已由上面那份新 Spec 的 C2 **整份取代**：
+卡片第 6 步不再有零件表，因此「业务部件 vs 几何分量」的取舍不再发生在卡片上。
+业务部件与几何证据仍在**技术工艺侧**（`tech_app/frontend/app.js` 的 2.1 看板、
+`.../requirement/packaging-business-parts` 与 `.../requirement/packaging-parts` 两个端点），
+本文件只断言它们**不再**出现在报价卡片页。
 
-本文件只读源码 + 真文档形状（不发 HTTP、不连 PG、不写业务数据）。
+现状缺口（本机读码，2026-10-12，不是推断）：
+  · 卡片页 `packaging-business-parts` 命中 2 次、`ensureCardPackagingParts()` 在 `showStep(6)`
+    里被调用（`确认需求解析结果.html:1749`）、几何端点 1 次 —— 卡片刻意反查技术项目读零件；
+  · 业务行字段 `business_part_code` / `geometry_binding`、几何兜底标题、`geometry_component_total`
+    与后端缺口文案都在卡片页里。
+
 禁止为了让红测转绿而修改本文件；口径变化请改 Spec。
 """
 from __future__ import annotations
@@ -27,119 +30,97 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 CARD_HTML = ROOT / "确认需求解析结果.html"
+APP_JS = ROOT / "tech_app" / "frontend" / "app.js"
 MAIN_PY = ROOT / "tech_app" / "backend" / "main.py"
 PARTS_PY = ROOT / "tech_app" / "backend" / "services" / "packaging_parts.py"
+HANDOFF_PY = ROOT / "tech_app" / "backend" / "services" / "packaging_handoff.py"
 
 BUSINESS_READ_TOKEN = "packaging-business-parts"
 GEOMETRY_READ_TOKEN = "/requirement/packaging-parts"
 GEOMETRY_FALLBACK_TITLE = "图纸拆出来的零件"
 
-#: 34 上真实返回的缺口文案（`packaging_parts.BUSINESS_PARTS_MISSING_MESSAGE`）。
-MISSING_MESSAGE = "已识别几何区域 %d 个，尚未形成业务部件清单"
+#: 技术侧 2.1 仍必须读得到的东西（本批不动，护栏用）。
+TECH_BOARD_TOKENS = (BUSINESS_READ_TOKEN, GEOMETRY_READ_TOKEN, "business_part_code",
+                     "geometry_binding")
 
-#: `## 315` 落地的业务列（几何口径），卡片页照抄后端 `part_columns`。
-GEOMETRY_CARD_LABELS = ["零件号", "名称", "角色", "材料", "厚度(mm)", "展开长(mm)", "展开宽(mm)",
-                        "轮廓状态", "可算", "不可算原因"]
+#: 卡片页必须一并消失的零件面标识符。
+CARD_FORBIDDEN_TOKENS = ("ensureCardPackagingParts", "resolveCardTechProject",
+                         "cardBusinessPartsAccountingText", "geometry_component_total",
+                         "PACKAGING_PARTS_SECTION", "PACKAGING_PART_COLUMNS",
+                         "part_columns", BUSINESS_READ_TOKEN, GEOMETRY_READ_TOKEN,
+                         "business_part_code", "geometry_binding")
 
 
 def html_text() -> str:
-    return CARD_HTML.read_text(encoding="utf-8")
+    return CARD_HTML.read_text(encoding="utf-8", errors="replace")
 
 
 def fn_body(name: str) -> str:
     """取 `[async] function <name>() { ... }` 的函数体（卡片页缩进是 4 空格）。"""
     pattern = (r"(?:async\s+)?function\s+" + re.escape(name) + r"\s*\([^)]*\)\s*\{(?P<body>.*?)\n    \}")
     match = re.search(pattern, html_text(), re.S)
-    assert match, "卡片页必须仍有 %s()（Spec §2.1/§3 的既有路径）" % name
+    assert match, "卡片页必须仍有 %s()（Spec §4.1）" % name
     return match.group("body")
 
 
-def business_read_index_in(body: str) -> int:
-    return body.find(BUSINESS_READ_TOKEN)
+class CardStep6NoPartsTableRed(unittest.TestCase):
+    # ---------------- A 组：卡片不再去技术项目读零件（今天红） ----------------
 
+    def test_a1_card_page_does_not_read_the_business_parts_endpoint(self):
+        count = html_text().count(BUSINESS_READ_TOKEN)
+        self.assertEqual(0, count,
+                         "卡片页不许再读 `.../requirement/packaging-business-parts`；"
+                         "现在命中 %d 次（技术侧 app.js 才是它的读方）" % count)
 
-def geometry_read_index_in(body: str) -> int:
-    return body.find(GEOMETRY_READ_TOKEN)
-
-
-class CardStep6BusinessPartsRed(unittest.TestCase):
-    # ---------------- A 组：卡片第 6 步优先按业务部件口径出表（今天红） ----------------
-
-    def test_a1_card_page_reads_the_business_parts_endpoint(self):
-        """业务清单在卡片上必须读得到 —— 今天整个卡片页 0 处引用（Spec §1/§2.1 第 1 条）。"""
+    def test_a2_card_page_has_no_lookup_and_no_part_table_renderer(self):
         text = html_text()
-        self.assertTrue(BUSINESS_READ_TOKEN in text,
-                        "卡片页必须读 `.../requirement/packaging-business-parts`；"
-                        "现在 `packaging-business-parts` 出现 %d 次（几何端点 4 次）"
-                        % text.count(BUSINESS_READ_TOKEN))
+        left = [name for name in ("ensureCardPackagingParts", "resolveCardTechProject",
+                                  "cardBusinessPartsAccountingText") if name in text]
+        self.assertEqual([], left, "卡片页不许再出现：%s" % "、".join(left))
 
-    def test_a2_business_read_happens_before_the_geometry_read(self):
-        """同一条兜底链里，业务端点的读必须早于几何端点（Spec §2.1 第 1 条）。"""
-        body = fn_body("ensureCardPackagingParts")
-        business = business_read_index_in(body)
-        geometry = geometry_read_index_in(body)
-        self.assertGreaterEqual(business, 0,
-                                "ensureCardPackagingParts() 里必须出现业务部件端点的读")
-        self.assertGreaterEqual(geometry, 0,
-                                "几何端点的读必须还在（§3：几何证据仍要能读）")
-        self.assertLess(business, geometry,
-                        "业务部件端点必须**先**读，几何端点只能做兜底；"
-                        "现在业务端点位置 %d、几何端点位置 %d" % (business, geometry))
-
-    def test_a3_business_rows_carry_business_identity_and_binding(self):
-        """业务行要带业务件号与几何绑定状态，不能用 `DWG-Pxx` 那套几何列冒充（Spec §2.1 第 2 条）。"""
+    def test_a3_business_row_fields_are_not_rendered_on_the_card(self):
         text = html_text()
-        for token in ("business_part_code", "geometry_binding"):
-            self.assertTrue(token in text,
-                            "卡片页渲染业务部件行时必须用到 `%s`（今天 0 处）" % token)
+        left = [token for token in ("business_part_code", "geometry_binding") if token in text]
+        self.assertEqual([], left, "卡片页不许再渲染业务部件字段：%s" % "、".join(left))
 
-    # ---------------- B 组：没有业务清单时，说清是几何区域（今天红） ----------------
+    # ---------------- B 组：几何兜底与缺口文案也不再上卡片（今天红） ----------------
 
-    def test_b1_missing_business_list_is_disclosed_with_the_backend_wording(self):
-        """空清单必须把后端那条缺口文案说出来，不许拿几何行顶上（Spec §2.2 第 1 条）。"""
+    def test_b1_missing_list_wording_is_not_on_the_card(self):
         text = html_text()
-        disclosed = ("尚未形成业务部件清单" in text) or ("business_parts_missing" in text)
-        self.assertTrue(disclosed,
-                        "卡片第 6 步在 `built=false` 时必须说「%s」（或引用 `business_parts_missing`）；"
-                        "今天卡片页里既没有这句话、也没有这个码" % (MISSING_MESSAGE % 263))
+        left = [token for token in ("尚未形成业务部件清单", "business_parts_missing")
+                if token in text]
+        self.assertEqual([], left, "卡片页不许再出现业务部件缺口文案：%s" % "、".join(left))
 
-    def test_b2_geometry_fallback_is_not_titled_as_the_parts_list(self):
-        """几何兜底的表标题必须自带「几何」字样，`图纸拆出来的零件` 只给业务表（Spec §2.2 第 2 条）。"""
-        body = fn_body("ensureCardPackagingParts")
-        titles = re.findall(r"title:\s*'([^']*)'", body) + re.findall(r'title:\s*"([^"]*)"', body)
-        self.assertTrue(titles, "兜底渲染必须仍有显式 title（否则测试前提失效）")
-        for title in titles:
-            self.assertIn("几何", title,
-                          "几何兜底那条路的标题必须说明这是几何区域，不许继续叫「零件」；"
-                          "现在写的是 %r" % (title,))
+    def test_b2_geometry_fallback_title_is_not_on_the_card(self):
+        count = html_text().count(GEOMETRY_FALLBACK_TITLE)
+        self.assertEqual(0, count,
+                         "「%s」只许留在技术侧；卡片页现在命中 %d 次"
+                         % (GEOMETRY_FALLBACK_TITLE, count))
 
-    # ---------------- C 组：两笔账分开说（今天红） ----------------
+    # ---------------- C 组：两笔账的字段也不再上卡片（今天红） ----------------
 
-    def test_c1_geometry_and_business_counts_are_kept_apart(self):
-        """263（几何区域）与业务部件数必须在卡片上分别给得出（Spec §2.3 第 1 条）。"""
-        text = html_text()
-        self.assertTrue("geometry_component_total" in text,
-                        "卡片页必须读得出几何区域数（`geometry_component_total`），"
-                        "并与业务部件数分开说；今天 0 处引用")
+    def test_c1_geometry_accounting_field_is_not_on_the_card(self):
+        count = html_text().count("geometry_component_total")
+        self.assertEqual(0, count,
+                         "几何区域计数只在技术侧给（Spec C2）；卡片页现在命中 %d 次" % count)
 
     # ---------------- D 组：护栏（今天就是绿的，不许被改红） ----------------
 
-    def test_d1_project_lookup_keeps_both_session_keys(self):
-        body = fn_body("resolveCardTechProject")
-        for key in ("source_session_id", "quote_session_id"):
-            self.assertIn(key, body,
-                          "反查两键同义（`## 446`）不许回退：缺 %s" % key)
+    def test_d1_write_side_keeps_both_session_keys_equivalent(self):
+        source = HANDOFF_PY.read_text(encoding="utf-8", errors="replace")
+        self.assertIn('link.get("quote_session_id")', source,
+                      "回传通道仍把 quote_session_id 当来源会话（写侧两键同义，Spec C6）")
 
-    def test_d2_historical_snapshot_section_still_renders(self):
-        text = html_text()
-        self.assertIn("PACKAGING_PARTS_SECTION", text,
-                      "老卡片快照里那份段的渲染路径不许删（只追加不迁移）")
-        self.assertRegex(text, r"kind\s*===?\s*'table'",
-                         "`kind:'table'` 的未知段仍必须渲染（`## 315`）")
+    def test_d2_generic_unknown_table_section_still_renders(self):
+        body = fn_body("wfRestoreStepData")
+        self.assertRegex(body, r"kind\s*===?\s*'table'",
+                         "`kind:'table'` 的未知段仍必须走通用渲染（Spec C6）")
+        self.assertIn("renderTableSection", body, "通用渲染必须还在")
 
-    def test_d3_geometry_endpoint_stays_reachable(self):
-        self.assertIn(GEOMETRY_READ_TOKEN, html_text(),
-                      "几何证据端点仍要能读（右栏 CAD 平面图 / 绑定都依赖它）")
+    def test_d3_tech_board_still_reads_both_endpoints(self):
+        text = APP_JS.read_text(encoding="utf-8", errors="replace")
+        for token in TECH_BOARD_TOKENS:
+            self.assertIn(token, text, "技术侧 2.1 零件树不许被本批动掉：缺 %s（Spec C2 末条）" % token)
 
     def test_d4_backend_read_is_still_business_side(self):
         source = MAIN_PY.read_text(encoding="utf-8")
@@ -152,17 +133,13 @@ class CardStep6BusinessPartsRed(unittest.TestCase):
         self.assertNotRegex(body, r"business_parts\"\]\s*=\s*geometry",
                             "后端不许把几何分量塞进 `business_parts`")
         parts = PARTS_PY.read_text(encoding="utf-8")
-        self.assertIn(MISSING_MESSAGE, parts,
+        self.assertIn("尚未形成业务部件清单", parts,
                       "缺口文案的唯一来源仍是 `packaging_parts.BUSINESS_PARTS_MISSING_MESSAGE`")
 
-    def test_d5_card_columns_still_come_from_the_backend(self):
+    def test_d5_card_page_is_free_of_the_whole_parts_surface(self):
         text = html_text()
-        self.assertIn("part_columns", text,
-                      "卡片列定义仍必须照抄后端 `part_columns`（唯一来源，不许前端另写一套）")
-        parts = PARTS_PY.read_text(encoding="utf-8")
-        for label in GEOMETRY_CARD_LABELS:
-            self.assertIn('"%s"' % label, parts,
-                          "几何口径的卡片列定义不许被本批动掉：缺 %s" % label)
+        left = [token for token in CARD_FORBIDDEN_TOKENS if token in text]
+        self.assertEqual([], left, "卡片页仍残留零件/几何标识符：%s" % "、".join(left))
 
 
 if __name__ == "__main__":

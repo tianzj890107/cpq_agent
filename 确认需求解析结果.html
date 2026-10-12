@@ -1742,17 +1742,19 @@
       if (n === 5 && currentSessionId && wfUser()) {
         wfRestoreStepData(5).catch(() => {});
       }
-      // 第 6 步：零件表只在技术项目里（快照不一定带）——按会话反查技术项目后读零件端点，
-      // 让报价卡片第 6 步**直接**看得见拆出来的零件（Spec
-      // `packaging-parts-in-card-and-material-fill.md` §2.1）。
-      if (n === 6 && currentSessionId && wfUser()) {
-        ensureCardPackagingParts().catch(() => {});
-      }
+      // 第 6 步不再反查技术项目读零件（Spec `packaging-quote-card-sales-view-parity.md` C2）：
+      // 零件 / 几何证据只在技术工艺侧 2.1 看板展示，销售卡片第 6 步只留报价内容。
       renderProgressBar();
       $('stepTitle').textContent = STEPS[n - 1];
       const viewingPast = (n !== currentStep);
       $('stepBadge').textContent = viewingPast ? '查看 / 编辑' : '进行中';
       sections.forEach(sec => { sec.el.style.display = (sec.step === n) ? '' : 'none'; });
+      // 包装定价块按步骤显示（Spec `packaging-quote-card-sales-view-parity.md` C3）：它不属于
+      // 任何 FORMS 分区，以前不随步骤隐藏 —— 于是销售在第 6 步也看到它常驻。
+      const packagingQuotePanelEl = $('packagingQuotePanel');
+      if (packagingQuotePanelEl) {
+        packagingQuotePanelEl.style.display = packagingQuotePanelStepVisible(n) ? '' : 'none';
+      }
       const placeholder = $('panelPlaceholder');
       if (placeholder) placeholder.style.display = 'none';
       $('resultsContent').scrollTop = 0;
@@ -4309,6 +4311,21 @@
       return PACKAGING_RESTORED_RATE;
     }
 
+    /* 包装定价块的可见步骤（Spec `packaging-quote-card-sales-view-parity.md` C3）：毛利率输入与
+       s3/s4/s5 定价分区只属于第 3–5 步；其余步骤与三行业一致保持隐藏，不再常驻结果区末尾。 */
+    function packagingQuotePanelStepVisible(step) {
+      const n = Number(step) || 0;
+      return n >= 3 && n <= 5;
+    }
+
+    /* 零件/几何段判定（Spec `packaging-quote-card-sales-view-parity.md` C2）：包装卡片里的
+       `packaging_parts` 段是技术证据（几何分量 / 业务部件），销售卡片不展示；非包装行业不受影响
+       （那些行业没有这一段，规则也不替它们做决定）。 */
+    function cardSnapshotSectionSkipped(sectionId, industry) {
+      if (String(industry || '') !== 'packaging') return false;
+      return String(sectionId || '') === 'packaging_parts';
+    }
+
     async function renderPackagingQuotePanel(snap) {
       const pricingSession = currentSessionId;
       const pkg = snap && snap.packaging_package;
@@ -4324,7 +4341,6 @@
                    ((pkg.cost || {}).total_cost === undefined ? '' : (pkg.cost || {}).total_cost),
                    (rate === null ? '' : rate)].join('|');
       if (key === PACKAGING_PANEL_KEY && LAST_PACKAGING_QUOTE) {
-        window.PackagingQuotePanel.renderPackage(document.getElementById('packagingPackageContent'), pkg);
         applyPackagingQuoteRows(LAST_PACKAGING_QUOTE);
         return null;
       }
@@ -4335,6 +4351,7 @@
         host.id = 'packagingQuotePanel';
         host.className = 'collapse-block open';
         $('resultsContent').insertBefore(host, null);
+        host.style.display = packagingQuotePanelStepVisible(shownStep) ? '' : 'none';
       }
       host.innerHTML =
         '<div class="collapse-header" onclick="this.parentElement.classList.toggle(\'open\')">' +
@@ -4342,7 +4359,6 @@
           '<span class="readonly-chip" id="packagingPanelChip">系统计算</span></div>' +
           '<i class="ti ti-chevron-down collapse-arrow"></i>' +
         '</div><div class="collapse-content">' +
-          '<div id="packagingPackageContent"></div>' +
           '<label for="packagingMarginInput">毛利率（%）</label> ' +
           '<input id="packagingMarginInput" type="number" min="0" max="99.99" step="0.01"' +
           ' value="' + (rate === null ? '' : String((rate * 100).toFixed(2))) + '"' +
@@ -4355,7 +4371,6 @@
         renderPackagingQuotePanel({ packaging_package: LAST_PACKAGING_PACKAGE });
       });
       const content = document.getElementById('packagingQuoteContent');
-      window.PackagingQuotePanel.renderPackage(document.getElementById('packagingPackageContent'), pkg);
       const options = { base: AGENT_URL };
       if (rate === null) {
         content.textContent = '请先输入明确的毛利率，再点“按此毛利率重算”；系统不会默认填入费率。';
@@ -4443,228 +4458,6 @@
       return true;
     }
 
-    /* ================= 第 6 步：图纸拆出来的零件（Spec
-       `packaging-parts-in-card-and-material-fill.md` §2.1） =================
-       零件只在技术侧的零件文档里，报价卡片快照不一定带。这里按会话号自己找技术项目
-       （`business_case.source_session_id === currentSessionId` 或
-       `business_case.quote_session_id === currentSessionId`）再读零件端点；命中不到
-       （卡片还没有技术项目）就什么都不画，**不报错、不阻塞其它步骤**。
-       列定义的唯一来源是后端 `packaging_parts.CARD_COLUMNS`（随读接口 `part_columns`
-       下发）；「可算 / 不可算原因」也一律用后端 `processability()` 的同一判据同文案 ——
-       前端不自己写第二套"能不能算"的规则，下面这份只是后端没下发时的兜底显示标签。 */
-    const PACKAGING_PART_COLUMNS = [
-      { key: 'part_code', label: '零件号' },
-      { key: 'name', label: '名称' },
-      { key: 'role', label: '角色' },
-      { key: 'material', label: '材料' },
-      { key: 'thickness_mm', label: '厚度(mm)' },
-      { key: 'unfolded_length_mm', label: '展开长(mm)' },
-      { key: 'unfolded_width_mm', label: '展开宽(mm)' },
-      { key: 'outline_status', label: '轮廓状态' },
-      { key: 'processable_text', label: '可算' },
-      { key: 'unprocessable_reason', label: '不可算原因' },
-    ];
-    const PACKAGING_PARTS_SECTION = 'packaging_parts';
-
-    /* 业务部件清单（Spec `packaging-card-step6-parts-must-be-the-business-parts-list.md` §2.1）：
-       卡片第 6 步的「零件」是**业务部件**（读接口 `.../requirement/packaging-business-parts`，
-       件号 `business_part_code` + `geometry_binding.status`）；几何连通分量只是**证据**，
-       只在没有业务清单时出现，并且那条路的标题必须写明是几何区域。
-       业务表的标题放在常量里：几何兜底路的标题必须是显式字面量（自带「几何」字样），
-       `图纸拆出来的零件` 只许挂在业务部件表上。 */
-    const PACKAGING_BUSINESS_PARTS_COLUMNS = [
-      { key: 'business_part_code', label: '业务件号' },
-      { key: 'name', label: '名称' },
-      { key: 'geometry_binding', label: '几何绑定' },
-      { key: 'size_text', label: '尺寸' },
-      { key: 'material_text', label: '材料' },
-      { key: 'layout_text', label: '排版' },
-      { key: 'process_text', label: '工艺' },
-      { key: 'note', label: '备注' },
-    ];
-    const PACKAGING_BUSINESS_PARTS_TITLE = '图纸拆出来的零件（业务部件清单）';
-    // 后端缺口的稳定码（`packaging_parts.BUSINESS_PARTS_MISSING`）：页面照原码引用，不另造词。
-    const PACKAGING_BUSINESS_MISSING_CODE = 'business_parts_missing';
-    // 绑定状态 → 人话（逐字同 2.1 看板 `app.js` 的 `PACKAGING_BINDING_COPY`，两处同义）。
-    const PACKAGING_BINDING_COPY = {
-      bound: '已在图纸中定位', partial: '部分定位',
-      ambiguous: '定位待人工确认', unbound: '尚未在 CAD 图中定位',
-    };
-
-    /* 汇总形状分区快照（`kind:'summary'`）的只读列：服务端/定价引擎已经算好（第 5 步的
-       「报价明细」是 13 行 {项目,值,来源}、「报价基本信息」是 fields 列表），卡片只读上屏，
-       不做任何判定。Spec：`packaging-quote-step5-reported-detail-must-satisfy-step-gate.md` §2.5。 */
-    const SUMMARY_ROWS_COLUMNS = [
-      { key: '项目', label: '项目' },
-      { key: '值', label: '值' },
-      { key: '来源', label: '来源' },
-      { key: '公式', label: '公式' },
-    ];
-    const SUMMARY_FIELDS_COLUMNS = [
-      { key: '字段', label: '字段' },
-      { key: '值', label: '值' },
-    ];
-
-    // `kind:'summary'` 的分区快照 → 只读表行（`rows` 是定价引擎的汇总；`fields` 是基本信息）。
-    function summarySectionRows(payload) {
-      const rows = Array.isArray(payload.rows) ? payload.rows : [];
-      if (rows.length) {
-        return { columns: SUMMARY_ROWS_COLUMNS, rows: rows.filter(r => r && typeof r === 'object') };
-      }
-      const fields = Array.isArray(payload.fields) ? payload.fields : [];
-      if (fields.length) {
-        return {
-          columns: SUMMARY_FIELDS_COLUMNS,
-          rows: fields.filter(f => f && typeof f === 'object')
-            .map(f => ({ '字段': f.label == null ? (f.key || '') : f.label, '值': f.value == null ? '' : f.value })),
-        };
-      }
-      return { columns: SUMMARY_ROWS_COLUMNS, rows: [] };
-    }
-
-    function _cardPartsCell(value) {
-      return (value === null || value === undefined) ? '' : String(value);
-    }
-
-    // 行 → 表格行：只做展示规整（空值成空串、材料字典取 spec），**不做任何判定**。
-    function packagingPartCardRows(rows) {
-      return (Array.isArray(rows) ? rows : []).map(part => {
-        const row = (part && typeof part === 'object') ? part : {};
-        const material = row.material && (row.material.spec || row.material.name || row.material);
-        return Object.assign({}, row, {
-          material: material ? String(material) : '',
-          thickness_mm: _cardPartsCell(row.thickness_mm),
-          unfolded_length_mm: _cardPartsCell(row.unfolded_length_mm),
-          unfolded_width_mm: _cardPartsCell(row.unfolded_width_mm),
-          processable_text: row.processable_text || (row.processable ? '可算' : ''),
-          unprocessable_reason: row.unprocessable_reason || '',
-        });
-      });
-    }
-
-    // 业务部件的权威尺寸文案（逐字同 2.1 看板 `app.js packagingBusinessPartSizeText()`）。
-    function packagingBusinessPartSizeText(row) {
-      const authority = (row && row.authority) || {};
-      const text = String(authority.product_size_text || '').trim();
-      if (text) return text;
-      const length = authority.length_mm; const width = authority.width_mm;
-      if (length && width) return length + '×' + width + ' mm';
-      return '';
-    }
-
-    // 业务部件行 → 卡片表行（纯展示规整）：件号 / 名称 / 绑定状态 / 权威尺寸 / 材料 / 排版 /
-    // 工艺 / 备注一律取自业务端点，**不**拿几何列（`DWG-Pxx` + `尺寸来源=component_bbox`）冒充。
-    function packagingBusinessPartCardRows(rows) {
-      return (Array.isArray(rows) ? rows : []).map(part => {
-        const row = (part && typeof part === 'object') ? part : {};
-        const authority = (row.authority && typeof row.authority === 'object') ? row.authority : {};
-        const binding = (row.geometry_binding && typeof row.geometry_binding === 'object')
-          ? row.geometry_binding : {};
-        const status = String(binding.status || 'unbound');
-        return {
-          business_part_code: String(row.business_part_code || ''),
-          name: String(row.name || ''),
-          geometry_binding: PACKAGING_BINDING_COPY[status] || status,
-          size_text: packagingBusinessPartSizeText(row),
-          material_text: _cardPartsCell(authority.material_text),
-          layout_text: _cardPartsCell(authority.layout_text),
-          process_text: _cardPartsCell(authority.process_text),
-          note: _cardPartsCell(authority.note),
-        };
-      });
-    }
-
-    // 两笔账 + 缺口披露（Spec §2.2/§2.3）：几何区域数与业务部件数**分开**给，不许用一个盖另一个；
-    // 没有业务清单时逐字用后端那条缺口文案（`business_parts_missing`）。纯函数，不碰 DOM / fetch。
-    function cardBusinessPartsAccountingText(payload, geometryFallback) {
-      const doc = (payload && typeof payload === 'object') ? payload : {};
-      const gap = (doc.gap && typeof doc.gap === 'object') ? doc.gap : {};
-      const summary = (doc.summary && typeof doc.summary === 'object') ? doc.summary : {};
-      const stats = (summary.stats && typeof summary.stats === 'object') ? summary.stats : {};
-      const businessTotal = Array.isArray(doc.business_parts) ? doc.business_parts.length
-        : (stats.business_part_total || 0);
-      let geometryTotal = (gap.geometry_component_total != null) ? gap.geometry_component_total
-        : summary.geometry_component_total;
-      if (geometryTotal == null) geometryTotal = (geometryFallback || 0);
-      const lines = ['几何区域（连通分量）' + geometryTotal + ' 个 · 业务部件 ' + businessTotal + ' 件'];
-      if (gap.message) {
-        lines.push(String(gap.message));
-      } else if (!businessTotal) {
-        lines.push('已识别几何区域 ' + geometryTotal + ' 个，尚未形成业务部件清单（'
-          + PACKAGING_BUSINESS_MISSING_CODE + '）');
-      }
-      if (gap.action) lines.push('下一步：' + String(gap.action));
-      return lines.join('；');
-    }
-
-    // 按会话号找技术项目：GET /api/projects?scope=all 里 business_case.source_session_id
-    // **或** business_case.quote_session_id 命中的那一个（两个键同义：认回通道
-    // `/quote-link/recover` 写的是 `quote_session_id`，而
-    // `packaging_handoff` 读的时候又把它映射成 `source_session_id`）。
-    // 找不到就回空串（调用方据此安静跳过）。
-    async function resolveCardTechProject() {
-      try {
-        const d = await cpqAuthFetch('/api/projects?scope=all').then(r => r.ok ? r.json() : null);
-        const list = (Array.isArray(d) && d)
-          || (d && (d.projects || d.items || d.data)) || [];
-        const hit = list.find(p => {
-          const bc = (p && p.business_case) || {};
-          const sid = bc.source_session_id || bc.quote_session_id
-            || (p && (p.source_session_id || p.quote_session_id)) || '';
-          return String(sid) === String(currentSessionId || '');
-        });
-        return (hit && (hit.project_id || hit.id)) || '';
-      } catch (e) { return ''; }
-    }
-
-    // 卡片第 6 步的零件表：快照没带就自己按会话反查技术项目后读**业务部件**端点
-    // （Spec `packaging-card-step6-parts-must-be-the-business-parts-list.md` §2.1）：
-    // 业务清单优先，读不到才退到几何端点；几何只当**证据**说清楚（§2.2），不再整表冒充零件。
-    async function ensureCardPackagingParts() {
-      if (sections.has(PACKAGING_PARTS_SECTION)) return true;   // 快照已经带回来过了
-      const projectId = await resolveCardTechProject();
-      if (!projectId) return false;                             // 还没有技术项目：安静跳过
-      // ① 业务部件清单是**唯一**的零件来源（件号 + 几何绑定状态，§2.1 第 1–2 条）。
-      let business = null;
-      try {
-        business = await cpqAuthFetch('/api/projects/' + encodeURIComponent(projectId)
-          + '/requirement/packaging-business-parts').then(r => r.ok ? r.json() : null);
-      } catch (e) { business = null; }
-      const businessRows = (business && Array.isArray(business.business_parts))
-        ? business.business_parts : [];
-      if (businessRows.length) {
-        renderTableSection({
-          action: 'render_table', step: 6, section_id: PACKAGING_PARTS_SECTION,
-          title: PACKAGING_BUSINESS_PARTS_TITLE, editable: false,
-          columns: PACKAGING_BUSINESS_PARTS_COLUMNS,
-          rows: packagingBusinessPartCardRows(businessRows),
-          footer: cardBusinessPartsAccountingText(business),
-        });
-        if (shownStep !== 6) { const sec = sections.get(PACKAGING_PARTS_SECTION); if (sec) sec.el.style.display = 'none'; }
-        return true;
-      }
-      // ② 还没形成业务部件清单：几何连通分量只能当证据读（在业务端点之后），标题写明是
-      //    几何区域，并把两笔账与后端缺口文案一起摆出来（§2.2 / §2.3）。
-      let payload = null;
-      try {
-        payload = await cpqAuthFetch('/api/projects/' + encodeURIComponent(projectId)
-          + '/requirement/packaging-parts').then(r => r.ok ? r.json() : null);
-      } catch (e) { payload = null; }
-      const rows = (payload && (payload.parts || payload.items)) || [];
-      if (!rows.length) return false;                           // 还没跑一键解析
-      renderTableSection({
-        action: 'render_table', step: 6, section_id: PACKAGING_PARTS_SECTION,
-        title: '图纸的几何区域（' + rows.length + ' 个连通分量，尚未形成业务部件清单，不是零件表）',
-        editable: false,
-        columns: (payload.part_columns && payload.part_columns.length)
-          ? payload.part_columns : PACKAGING_PART_COLUMNS,
-        rows: packagingPartCardRows(rows),
-        footer: cardBusinessPartsAccountingText(business || payload, rows.length),
-      });
-      if (shownStep !== 6) { const sec = sections.get(PACKAGING_PARTS_SECTION); if (sec) sec.el.style.display = 'none'; }
-      return true;
-    }
-
     async function wfRestoreStepData(step) {
       if (!wfUser() || !currentSessionId || !FORMS.length) return false;
       let snap = null;
@@ -4684,9 +4477,11 @@
       Object.keys(snap).forEach(sid => {
         const f = FORMS.find(x => x.section_id === sid);
         const payload = snap[sid] || {};
-        // 未知节：快照里只要是 kind === 'table' 的只读表（如第 6 步「图纸拆出来的零件」）
-        // 就必须渲染出来 —— 以前这里直接 return，把零件表无声丢掉（Spec
-        // `packaging-parts-in-card-and-material-fill.md` §2.1 第 1 条）。
+        // 零件 / 几何段不进销售卡片（Spec `packaging-quote-card-sales-view-parity.md` C2）：技术整包与
+        // 零件表只在技术工艺侧与工作区引擎展示；这里安静跳过，不报错、不影响其它段。
+        if (cardSnapshotSectionSkipped(sid, currentIndustry())) return;
+        // 未知节：快照里只要是 kind === 'table' 的只读表就必须渲染出来 —— 以前这里直接 return，
+        // 把未知的只读表无声丢掉（Spec `packaging-quote-card-sales-view-parity.md` C6）。
         if (!f) {
           const unknownRows = payload['数据'] !== undefined ? payload['数据'] : payload.data;
           const unknownSummary = summarySectionRows(payload);
@@ -4696,9 +4491,8 @@
               action: 'render_table', step: step, section_id: sid,
               title: payload.title || sid, editable: false,
               columns: (Array.isArray(payload.columns) && payload.columns.length)
-                ? payload.columns
-                : (sid === 'packaging_parts' ? PACKAGING_PART_COLUMNS : []),
-              rows: sid === 'packaging_parts' ? packagingPartCardRows(unknownRows) : unknownRows,
+                ? payload.columns : [],
+              rows: unknownRows,
             });
             restored = true;
           } else if (unknownSummary.rows.length) {

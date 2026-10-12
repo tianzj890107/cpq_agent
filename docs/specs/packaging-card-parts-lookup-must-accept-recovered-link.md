@@ -5,6 +5,9 @@
 `packaging-quote-close-loop.md`（回传通道把 `quote_session_id` 当来源会话用）。
 
 状态：Spec + 红测（已实现）（原状：本批只写 Spec 与红测，卡片侧反查只认 `business_case.source_session_id`）
+取代（2026-10-12）：本 Spec 整份由 `packaging-quote-card-sales-view-parity.md` C2 取代 —— 报价卡片不再反查技术项目
+读零件（`resolveCardTechProject` / `/api/projects` / 两个零件端点整段撤出卡片页）；写侧两键同义
+（`recover_quote_link` 的线索键、`packaging_handoff` 的映射）不变。
 红测：`tests/test_packaging_card_parts_lookup_link_key_parity_red.py`
 本批 changelog 条目号：`## 444`（缺口类，作者侧）；落地条目见 `## 446`。
 

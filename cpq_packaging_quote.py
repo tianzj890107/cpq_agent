@@ -682,6 +682,32 @@ def sections(quote: dict) -> dict:
     for item in (q.get("addons") or []):
         markup_rows.append({"加价": _text(item.get("label")),
                             "金额": _money(item.get("amount")), "来源": "Spec §2.4"})
+    # 第 4 步只讲「报价」：加价与折扣（Spec `packaging-quote-card-sales-view-parity.md` C5）。
+    # 以前 s4_markup 直接复用 markup_fields/markup_rows，于是与第 3 步逐字相同、被误读成"没做什么"。
+    addon_items = [item for item in (q.get("addons") or []) if isinstance(item, dict)]
+    discount_rate = _num(q.get("discount_rate")) or 0.0
+    quote_fields = [
+        {"key": "addon_total", "label": "加价合计", "value": money.get("addon_total")},
+        {"key": "subtotal_unit", "label": "加价后单价", "value": money.get("subtotal_unit")},
+        {"key": "discount_rate", "label": "折扣率", "value": _rate_text(discount_rate)},
+        {"key": "discount_amount", "label": "折扣金额", "value": money.get("discount_amount")},
+        {"key": "net_unit_price", "label": "折后未税单价", "value": money.get("net_unit_price")},
+    ]
+    quote_rows = [
+        {"项目": "基础定价", "值": money.get("untaxed_unit_price"),
+         "来源": "沿用第 3 步「定价-利润加成」（Spec §1.2）"},
+    ]
+    if addon_items:
+        for item in addon_items:
+            quote_rows.append({"加价": _text(item.get("label")),
+                               "金额": _money(item.get("amount")), "来源": "Spec §2.4"})
+    else:
+        quote_rows.append({"加价": "本版无其他加价", "金额": _money(0), "来源": "Spec §2.4"})
+    if discount_rate:
+        quote_rows.append({"折扣": "折扣率 " + _rate_text(discount_rate),
+                           "金额": money.get("discount_amount"), "来源": "Spec §2.4"})
+    else:
+        quote_rows.append({"折扣": "本版无折扣", "金额": _money(0), "来源": "Spec §2.4"})
     detail_rows = [
         {"项目": label, "值": money.get(key), "来源": "定价引擎"}
         for key, label in _MONEY_FIELDS]
@@ -692,7 +718,7 @@ def sections(quote: dict) -> dict:
         "s3_markup": {"kind": "markup", "step_no": 3, "title": "定价-利润加成",
                       "fields": markup_fields, "rows": markup_rows},
         "s4_markup": {"kind": "markup", "step_no": 4, "title": "报价-加价与折扣",
-                      "fields": markup_fields, "rows": markup_rows},
+                      "fields": quote_fields, "rows": quote_rows},
         "s5_basic": {"kind": "summary", "title": "报价基本信息", "fields": [
             {"key": "quote_session_id", "label": "报价会话",
              "value": _text(q.get("quote_session_id"))},
