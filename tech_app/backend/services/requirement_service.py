@@ -63,6 +63,59 @@ def values_equivalent(left, right) -> bool:
         return False
 
 
+#: 通用包装品类词表（产品侧常识；不含任何客户 / 项目 / 图号）。最长命中优先，
+#: 同长多命中视为有歧义 —— 宁可留缺也不猜一个。
+PACKAGING_CATEGORY_KEYWORDS = (
+    "保健品盒", "化妆品盒", "日用品盒", "礼品盒", "圆盘盒", "包装盒", "展示盒",
+    "手提盒", "折叠盒", "精装盒", "食品盒", "茶叶盒", "月饼盒", "玩具盒",
+    "服装盒", "电子盒", "酒盒", "礼盒", "药盒", "烟盒", "纸盒", "木盒",
+)
+
+#: 品类 / 产品名称在原文里的标签（后面 : ：可有可无，值取到标点为止）。
+PACKAGING_CATEGORY_LABEL = r"包装品类\s*[:：]?\s*([^；;\n，,]+)"
+PACKAGING_PRODUCT_NAME_LABEL = r"包装产品名称\s*[:：]?\s*([^；;\n，,]+)"
+
+
+def _category_from_vocabulary(source: str):
+    """按通用词表认品类：最长命中优先；同长命中多个不同词时返回 None（不猜）。"""
+    hits: dict = {}
+    for keyword in PACKAGING_CATEGORY_KEYWORDS:
+        if keyword in source:
+            hits.setdefault(len(keyword), set()).add(keyword)
+    if not hits:
+        return None
+    matched = hits[max(hits)]
+    return next(iter(matched)) if len(matched) == 1 else None
+
+
+def _product_name_for_category(source: str, category):
+    """取含品类词、且不是「包装品类X」标签行的那一片段当产品名称。
+
+    片段按 `； ; 。 换行` 切分；带冒号的是标签行（如「项目：…」「盒族：…」），
+    一律不算产品名称。唯一片段直接用；多个片段只有严格最短的那个才用，否则留缺。
+    """
+    if not category:
+        return None
+    candidates = []
+    for clause in re.split(r"[；;。\n]", source):
+        piece = clause.strip()
+        if not piece or category not in piece or piece == category:
+            continue
+        if re.search(r"包装品类\s*[:：]?\s*" + re.escape(category), piece):
+            continue
+        if "：" in piece or ":" in piece:
+            continue
+        candidates.append(piece)
+    distinct = list(dict.fromkeys(candidates))
+    if len(distinct) == 1:
+        return distinct[0]
+    if len(distinct) > 1:
+        ordered = sorted(distinct, key=len)
+        if len(ordered[0]) < len(ordered[1]):
+            return ordered[0]
+    return None
+
+
 def extract_explicit_packaging_quote_fields(text: str) -> dict:
     """仅抄录报价文字里带明确标签且唯一的包装字段，不从 DWG 幅面或案例反推。"""
     source = str(text or "")
@@ -111,6 +164,16 @@ def extract_explicit_packaging_quote_fields(text: str) -> dict:
     quantity = unique(r"数量\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(?:只|个|件)\b")
     if quantity and float(quantity) > 0:
         out["quote_quantity"] = quantity
+    category = unique(PACKAGING_CATEGORY_LABEL)
+    product_name = unique(PACKAGING_PRODUCT_NAME_LABEL)
+    if not category:
+        category = _category_from_vocabulary(source)
+    if category:
+        out["packaging_category"] = category
+    if not product_name:
+        product_name = _product_name_for_category(source, out.get("packaging_category"))
+    if product_name:
+        out["packaging_product_name"] = product_name
     return out
 
 

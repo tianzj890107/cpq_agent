@@ -458,17 +458,21 @@ def packaging_handoff_family(project_id: str) -> Optional[str]:
 def packaging_param_projection(project_id: str) -> Optional[list]:
     """包装项目：需求单里**已经有值**的成品参数 → 参数行；非包装返回 None。
 
-    只搬需求单里已有的值，缺的照旧由 `missing_required()` 如实点名 —— 不编值
-    （包装产品名称 / 包装品类这类只写在需求文本里的字段，由「参数推荐」环节补）。
+    先搬需求单已有的值；需求单 `data` 里没有、但**报价原文**认得出的字段（如
+    包装产品名称 / 包装品类只写在需求文本里）再按同一份原文抽取补上 —— 历史项目
+    不需要重建需求单。仍认不出的，照旧由 `missing_required()` 如实点名，不编值。
+    Spec：`docs/specs/packaging-requirement-text-derived-params.md`（C5）。
     """
-    from . import product_params
+    from . import product_params, requirement_service
     if not packaging_handoff_family(project_id):
         return None
     requirement = store.load_requirement(project_id) or {}
     data = requirement.get("data") or {}
+    fields = {str(field.get("code") or ""): field
+              for field in product_params.packaging_family_fields()}
     rows = []
-    for field in product_params.packaging_family_fields():
-        code = str(field.get("code") or "")
+    claimed = set()
+    for code, field in fields.items():
         value = data.get(code)
         if not code or value in (None, "", [], {}):
             continue
@@ -477,6 +481,18 @@ def packaging_param_projection(project_id: str) -> Optional[list]:
             unit=str(field.get("unit") or "") or None, param_code=code,
             category=str(field.get("group") or "") or None,
             basis="需求单投影（未经过模型「参数推荐」）"))
+        claimed.add(code)
+    text = requirement_service.quote_requirement_text(project_id, data=data)
+    derived = requirement_service.extract_explicit_packaging_quote_fields(text) if text else {}
+    for code, value in derived.items():
+        field = fields.get(code)
+        if not field or code in claimed or value in (None, "", [], {}):
+            continue
+        rows.append(IntegrationParam(
+            name=str(field.get("name") or code), value=str(value),
+            unit=str(field.get("unit") or "") or None, param_code=code,
+            category=str(field.get("group") or "") or None,
+            basis="需求原文抽取（标签 / 通用品类词表）"))
     return rows
 
 

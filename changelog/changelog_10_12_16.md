@@ -162,6 +162,25 @@
   `test_tech_quote_business_case_linkage_red` 39、`test_tech_waiver_reuse_across_handoffs_red` 11、
   `test_packaging_quote_close_loop_red` 96 全部通过。
 
+## 2026-10-12 包装需求原文直接生成「包装产品名称 / 包装品类」
+
+- 新增 Spec `docs/specs/packaging-requirement-text-derived-params.md` 与红测
+  `tests/test_packaging_requirement_text_params_red.py` 11 条（先跑 6 条红：标签不认识、
+  词表不认识、空位不填、回传不补；实现后全绿）。
+- 定位到的断点：包装需求单 3.1 的前两个必填「包装产品名称 / 包装品类」只写在报价原文里
+  （原文写着「包装品类酒盒」），可 1.1 的报文字段抽取从来没认这两个键 —— 需求单里一直空着，
+  回传销售被「报价必填的成品参数还缺：包装产品名称、包装品类」拦死，一次已经算齐、账已对平
+  的包装成本反而回不到报价侧。
+- 现在：报文字段抽取补上这两个键 —— 带「包装产品名称 / 包装品类」标签时逐字抄录；没有标签时
+  按**通用包装品类词表**（酒盒 / 礼盒 / 食品盒 / 化妆品盒 … 22 个词，与客户、项目、图号无关）
+  最长命中定品类，取含品类词的片段当产品名称；两种品类同长同现视为有歧义、留缺不猜。只填空位，
+  人工 / CAD / 模型已填的值一个字不动，来源与原文证据照旧入档。
+- 历史项目不用重建需求单：回传销售时按**同一份原文抽取**补投影，需求单已有值优先。原文也认不出的
+  必填照旧逐个点名，不编值、不豁免。
+- 相关回归：`test_packaging_cost_to_quote_integration_projection_red` 7、
+  `test_packaging_round_geometry_and_requirement_facts_red` 与 `test_packaging_full_flow_20260929_red` 共 33、
+  包装链路 11 套共 392 全部通过。
+
 ## 2026-10-12 报价卡片回到销售视角（技术整包/零件表撤出、定价块按步骤、第 4 步不再复制第 3 步）
 
 - 新增 Spec `docs/specs/packaging-quote-card-sales-view-parity.md`（C1–C6）与红测
