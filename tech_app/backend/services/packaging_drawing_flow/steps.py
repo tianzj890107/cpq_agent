@@ -395,7 +395,7 @@ def _resolve_business_parts(ctx: Dict[str, Any], ir: Dict[str, Any], geometry_pa
         if str(exc).startswith("multiple_packaging_schemes"):
             detail["unavailable"] = [{
                 "code": "multiple_packaging_schemes",
-                "message": "图纸含多个互斥方案，请拆成独立 DWG 后分别建项目解析；本次不生成混合 BOM。",
+                "message": "业务解析器仍拒绝多方案，请检查版本与方案范围；几何区域不能冒充业务零件。",
             }]
             return {"detail": detail, "document": None}
         detail["unavailable"] = [{"code": BUSINESS_PARTS_RESOLVE_FAILED,
@@ -528,12 +528,21 @@ def parts_extract(ctx: Dict[str, Any]) -> Dict[str, Any]:
     # 业务名称和候选几何只来自 DWG；263 个连通分量不等于 263 个业务件。
     business = _resolve_business_parts(ctx, ir, saved, module)
     detail.update(business["detail"])
+    if business['document'] is None and any(
+            r.get('code') in (BUSINESS_PARTS_RESOLVE_FAILED, 'multiple_packaging_schemes') for r in detail.get('unavailable') or []
+            if isinstance(r,dict)):
+        return _failed(BUSINESS_PARTS_RESOLVE_FAILED,
+                       '几何区域已解析，但业务零件清单生成失败；请查看原因并重试零件提取',detail)
+    if business['document'] is None and any(r.get('code') == BUSINESS_PARTS_RESOLVER_MISSING
+            for r in detail.get('unavailable') or [] if isinstance(r,dict)):
+        return _blocked(BUSINESS_PARTS_RESOLVER_MISSING,'业务零件解析能力不可用',detail,
+                        action='检查部署版本后重试零件提取；不要把几何区域当成零件清单')
     if business["document"] is not None:
         detail["business_parts_total"] = model._as_int(
             (business["document"].get("stats") or {}).get("business_part_total"))
     if detail["parts_total"]:
         _emit(str(ctx.get("project_id")), str(ctx.get("run_id")), "parts",
-              "零件提取：%d 件（已剔除 %d 个非零件分量）"
+              "几何区域：%d 个（已剔除 %d 个非零件分量）"
               % (detail["parts_total"], detail["filtered_total"]))
     if business["document"] is not None:
         _emit(str(ctx.get("project_id")), str(ctx.get("run_id")), "parts",

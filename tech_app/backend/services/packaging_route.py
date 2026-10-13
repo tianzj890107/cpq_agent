@@ -665,6 +665,11 @@ def _stale_reasons(row: dict, steps: list, versions: list, project_id: str) -> t
             current = None
             recompute_unavailable = {"code": _text(getattr(exc, "code", "")),
                                      "reason": str(getattr(exc, "message", "") or exc)}
+        except ValueError as exc:
+            if not str(exc).startswith('packaging_scheme_selection_required'):
+                raise
+            current = None
+            recompute_unavailable = {'code':'packaging_scheme_selection_required','reason':str(exc)}
     stored_fingerprint = _steps_fingerprint(steps)
     current_fingerprint = (_steps_fingerprint(current["steps"]) if current
                            else stored_fingerprint)
@@ -826,7 +831,10 @@ def build_route(project_id: str, requirement_no: str = "") -> dict:
     # 判死之前**先**读零件 / 业务部件文档（Spec `packaging-business-tables-are-answer-keys-only.md`
     # §2.3）：判据是"这个项目有没有零件文档"，不是"业务表（工艺模板表）里有没有模板"。
     from . import packaging_parts, packaging_process_instances
-    instances = packaging_process_instances.collect(project_id)
+    try:
+        instances = packaging_process_instances.collect(project_id)
+    except ValueError as exc:
+        raise RouteError(str(exc), 409, 'packaging_scheme_selection_required') from exc
     if instances['active'] and instances['missing']:
         raise RouteError('以下制造件缺工序推荐：' + '、'.join(instances['missing']),
                          409, 'part_process_incomplete')

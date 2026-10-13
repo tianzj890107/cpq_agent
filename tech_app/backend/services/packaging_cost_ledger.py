@@ -46,11 +46,20 @@ def _owner_part_code(code, codes, item):
 
 def project(doc, ledger):
     from . import packaging_cost
+    from . import packaging_layout
+    scheme_error = ''
+    try:
+        doc = packaging_layout.active_business_document(doc)
+    except ValueError:
+        scheme_error = 'packaging_scheme_selection_required'
+        doc = dict(doc or {}, business_parts=[])
     parts = (doc or {}).get('business_parts') or []
     ledger = ledger or {}
     built, stale = bool(ledger.get('built')), bool(ledger.get('stale'))
     totals = {key: _number(ledger.get(field, 0)) for key, field in TOTAL_KEYS.items()}
     errors = []
+    if scheme_error:
+        errors.append(scheme_error)
     if any(value is None for value in totals.values()):
         errors.append('invalid_category_total')
     totals = {key: value if value is not None else 0 for key, value in totals.items()}
@@ -60,9 +69,14 @@ def project(doc, ledger):
         errors.append('category_total_mismatch')
     final['total'] = expected if expected is not None else 0
     grouped = {}
+    unused_contents={str(row.get('content_code') or '') for row in ledger.get('gaps_unbound_to_order') or []
+        if row.get('binding_status')=='unbound' and str(row.get('code') or '').startswith('content_formula_error:')}
     codes = {str(row.get('business_part_code')) for row in parts}
     for item in ledger.get('items') or []:
         code = str(item.get('part_code') or '')
+        if (not code and item.get('cost_category')=='packaging' and item.get('amount') is None
+                and str(item.get('content_code') or '') in unused_contents):
+            continue  # 明确未绑定本单的包材缺口只披露，与主成本门禁保持一致。
         if _number(item.get('amount')) is None:
             errors.append('invalid_amount:' + (code or 'project'))
         owner = _owner_part_code(code, codes, item) if code else ''
@@ -76,6 +90,8 @@ def project(doc, ledger):
         code = str(part.get('business_part_code') or '')
         ref = part.get('reference') or part.get('authority') or {}
         quantity = _number(ref.get('quantity', part.get('quantity', 1)))
+        if quantity is None and doc.get('poc_demo') is True and (part.get('poc_inputs') or {}).get('mock') is True:
+            quantity=_number((part.get('poc_inputs') or {}).get('quantity'))
         valid_quantity = quantity is not None and quantity > 0
         quantity = quantity if valid_quantity else 1
         values = dict.fromkeys(KEYS, 0.0)
@@ -142,6 +158,15 @@ def part_view(project_id, code, view=None):
     view = view or load(project_id)
     row = next((row for row in view['parts'] if row['id'] == code), None)
     if row is None:
+        from . import packaging_parts, packaging_layout, packaging_cost
+        doc = packaging_parts.load_business_parts(project_id) or {}
+        try:
+            active = packaging_layout.active_business_document(doc)
+        except ValueError as exc:
+            raise packaging_cost.CostError(str(exc),409,'packaging_scheme_selection_required') from exc
+        if any(r.get('business_part_code') == code for r in doc.get('business_parts') or []) \
+                and not any(r.get('business_part_code') == code for r in active.get('business_parts') or []):
+            raise packaging_cost.CostError('此零件属于未采用方案，不计入当前整单成本',409,'packaging_part_inactive_scheme')
         raise ValueError('packaging_business_part_not_found')
     ledger = view['packaging_cost']
     analysis = None
@@ -179,7 +204,15 @@ def part_view(project_id, code, view=None):
 
 
 def rebuild_part(project_id, code, actor):
-    from . import packaging_cost
+    from . import packaging_cost, packaging_parts, packaging_layout
+    doc = packaging_parts.load_business_parts(project_id) or {}
+    try:
+        active = packaging_layout.active_business_document(doc)
+    except ValueError as exc:
+        raise packaging_cost.CostError(str(exc),409,'packaging_scheme_selection_required') from exc
+    if len(doc.get('scheme_labels') or []) > 1 and not any(
+            r.get('business_part_code') == code for r in active.get('business_parts') or []):
+        raise packaging_cost.CostError('此零件属于未采用方案，不计入当前整单成本',409,'packaging_part_inactive_scheme')
     packaging_cost.build_cost(project_id, actor=actor)
     return part_view(project_id, code)
 

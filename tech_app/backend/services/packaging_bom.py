@@ -567,6 +567,11 @@ def business_part_rows(business_doc: Any) -> list:
     - **不写** `role`（业务角色留给人工映射）、**不写** `material_code`（材料码映射是另一批）、
       **不写**三个尺寸表达式（对照表没有表达式）。
     """
+    from . import packaging_layout
+    try:
+        business_doc = packaging_layout.active_business_document(business_doc)
+    except ValueError as exc:
+        raise BomError(str(exc), 409, 'packaging_scheme_selection_required') from exc
     rows = business_doc.get("business_parts") if isinstance(business_doc, dict) else None
     if not isinstance(rows, list):
         return []
@@ -641,7 +646,7 @@ def business_part_rows(business_doc: Any) -> list:
             try:
                 verified = packaging_parts.verified_business_part_input_row(row, business_doc)
                 candidate_size = _reference_block(verified)
-                if candidate_size.get("size_source") == "verified_cad_dimension":
+                if candidate_size.get("size_source") in ("verified_cad_dimension","auto_selected_cad_geometry"):
                     size_values = candidate_size
                     cad_size = True
             except ValueError:
@@ -660,7 +665,7 @@ def business_part_rows(business_doc: Any) -> list:
                            reference, business_parts_id=doc_id,
                            business_parts_hash=doc_hash)))
         if cad_size and not missing:
-            size_origin = {"kind": "verified_cad_dimension", "business_parts_id": doc_id,
+            size_origin = {"kind": candidate_size.get('size_source') or "verified_cad_dimension", "business_parts_id": doc_id,
                            "business_parts_hash": doc_hash,
                            "entity_ids": list(binding.get("entity_ids") or [])}
         out.append({

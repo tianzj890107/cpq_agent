@@ -249,11 +249,11 @@ def verified_sections(row):
     seen = set()
     for section in sections:
         sid = str(section.get('section_id') or '')
-        size = section.get('confirmed_size') or {}
+        size = section.get('confirmed_size') or section.get('automatic_size') or {}
         ids = set(section.get('entity_ids') or [])
         if (section.get('status') != 'bound' or not ids or seen & ids
                 or not positive(section.get('quantity')) or not positive(size.get('length_mm'))
-                or not positive(size.get('width_mm')) or size.get('source') not in ('manual_confirmed_drawing','verified_cad_dimension')
+                or not positive(size.get('width_mm')) or size.get('source') not in ('manual_confirmed_drawing','verified_cad_dimension','auto_selected_cad_geometry')
                 or set(size.get('entity_ids') or []) != ids):
             raise ValueError('section_size_not_confirmed:' + sid)
         if size.get('source') == 'manual_confirmed_drawing' and not (size.get('confirmed_by') and size.get('note')):
@@ -277,7 +277,8 @@ def section_input_rows(row):
         if len(row.get('sections') or []) > 1:
             for key in ('ton_price','material_price','material_code','product_item_code','gsm','cost_parameters'):
                 reference.pop(key,None)
-        reference.update(section['confirmed_size'],size_quality='unfolded')
+        size=section.get('confirmed_size') or section.get('automatic_size') or {}
+        reference.update(size,size_source=size.get('source'),size_quality='auto_geometry_reference' if size.get('source')=='auto_selected_cad_geometry' else 'unfolded')
         if section.get('material_text'):
             reference['material_text'] = section['material_text']
         child = {'business_part_code':row['business_part_code']+'::'+section['section_id'],
@@ -286,6 +287,8 @@ def section_input_rows(row):
                  'quantity':section['quantity'],'entity_ids':section['entity_ids'],
                  'material_code':section.get('material_code'),
                  'cost_parameters':copy.deepcopy(section.get('cost_parameters') or {})}
+        if size.get('source')=='auto_selected_cad_geometry':
+            child['automatic_size']=copy.deepcopy(size)
         out.append(child)
     return out
 

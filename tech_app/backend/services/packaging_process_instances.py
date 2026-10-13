@@ -65,7 +65,8 @@ def expand(records):
 
 def collect(project_id):
     from . import packaging_parts
-    doc=packaging_parts.load_business_parts(project_id) or {}
+    from . import packaging_layout
+    doc=packaging_layout.active_business_document(packaging_parts.load_business_parts(project_id) or {})
     rows=doc.get('business_parts') or []
     records=[]
     missing=[]

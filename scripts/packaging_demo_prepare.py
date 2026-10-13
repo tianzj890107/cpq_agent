@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用演示装配：给一个项目的业务部件补演示输入，再重排 BOM → 路线 → 成本。
 
-不针对任何一份图纸：尺寸来自这一件绑定的几何分量，材料原文来自图纸（缺失时按件名推定），
+不针对任何一份图纸：尺寸优先本件CAD/标注，缺失明示演示占位；材料原文来自图纸（缺失时按件名推定），
 单价优先取库内材料价、取不到才按材质族给演示价，**每一条 mock 都写在成本结论里**。
 
 用法：
@@ -9,7 +9,7 @@
     python scripts/packaging_demo_prepare.py <project_id>                      # 只算不写（干跑）
     python scripts/packaging_demo_prepare.py <project_id> --apply --actor PE1   # 写入并重算
 
-只做三件事：写业务部件文档的演示输入（新版本，不删历史）、重排 BOM 与路线、重算成本。
+写业务部件演示输入、按原生路线或相似参照生成逐件工艺、重排BOM与路线并重算成本。
 不删项目、不改历史会话、不改人工确认尺寸。
 """
 from __future__ import annotations
@@ -89,6 +89,12 @@ def main(argv=None) -> int:
                                                 prepared["business_parts_id"]))
     if prepared["skipped"]:
         print("跳过的件：%s" % json.dumps(prepared["skipped"], ensure_ascii=False))
+
+    processes=packaging_demo_inputs.prepare_processes(project_id,actor=args.actor)
+    print('逐件工艺：'+json.dumps(processes,ensure_ascii=False))
+    if processes['failures']:
+        print('工艺未全部生成：保留失败明细，不声称演示全流程完成')
+        return 2
 
     bom = packaging_bom.build_bom(project_id)
     print("BOM 重排：%d 行（来源 %s）" % (len(bom.get("items") or []), bom.get("box_type_code") or ""))

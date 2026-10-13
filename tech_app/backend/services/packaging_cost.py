@@ -1882,6 +1882,13 @@ READINESS_PROVISIONAL = "provisional"
 
 #: 缺口码前缀 → 结构化字段（变量 / 补数入口 / 严重度）。有冒号的码按前缀匹配。
 GAP_RESOLUTIONS = {
+    **{code:{'missing_variable':['layout_cut_inputs'],'resolution_action':'核对3.2开料尺寸、每件排出数量及材料关联',
+              'entry':'packaging-layout','severity':'blocking'} for code in (
+        'layout_part_multiple_sheets','layout_association_incomplete','layout_cut_size_role_unconfirmed',
+        'layout_part_association_missing','layout_part_count_missing','layout_part_area_missing',
+        'layout_part_usage_missing','layout_sheet_size_missing','layout_mixed_material_or_rate',
+        'layout_material_formula_missing','layout_cost_input_invalid','layout_material_price_unit_mismatch',
+        'layout_material_price_missing','layout_duplicate_material_row','cut_allowance_invalid')},
     'process_formula_missing': {'missing_variable':['formula_code'],
         'resolution_action':'给该工序关联公式或补人工报价','entry':'packaging-route','severity':'blocking'},
     'process_parameters_missing': {'missing_variable':['machine_length','machine_width','imposition_count'],
@@ -2203,6 +2210,11 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     data, overrides = _requirement_context(project_id, requirement_no, scenario)
     if _industry_of(data) != PACKAGING_INDUSTRY:
         raise _fatal("not_packaging", "包装成本引擎只对 industry='packaging' 的需求单生效", 400)
+    from . import packaging_parts, packaging_layout
+    try:
+        packaging_layout.active_business_document(packaging_parts.load_business_parts(project_id) or {})
+    except ValueError as exc:
+        raise _fatal('packaging_scheme_selection_required', str(exc)) from exc
     req_no = _resolve_requirement_no(project_id, requirement_no)
 
     record = da_repo.load_box_match(project_id, req_no) or {}
@@ -2253,6 +2265,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     business_scope = _business_parts_scope(project_id)
     from . import packaging_parts
     demo_doc = packaging_parts.load_business_parts(project_id) or {}
+    demo_doc = packaging_layout.active_business_document(demo_doc)
     demo_rows = {str(row.get('business_part_code')):row.get('poc_inputs') or {}
                  for row in demo_doc.get('business_parts') or []}
     demo_enabled = data.get('poc_demo') is True and demo_doc.get('poc_demo') is True
@@ -2276,6 +2289,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     machine_length = _num(data.get("machine_length"))
     machine_width = _num(data.get("machine_width"))
     imposition = _num(data.get("imposition_count")) or 1.0
+    from . import packaging_sheet_cost
     for row in bom_rows:
         if _text(row.get("bom_category")) not in ("box_part", "optional_part"):
             continue
@@ -2298,11 +2312,18 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         # 计价单位核对（Spec `packaging-material-price-unit-truth.md` §C2）：读不到就是读不到，
         # 不给默认单位；结果逐行留痕，事后能回答"这一版按什么单位算的"。
         unit_status, price_unit = material_price_unit_status(price_row)
-        variables = {"cut_length": length, "cut_width": (width + 5) if width is not None else None,
+        try:
+            cut = packaging_sheet_cost.individual_cut(row,data)
+        except ValueError as exc:
+            cut = {'sheet_mm':[None,None],'size_source':'invalid_allowance','allowance_mm':[]}
+            gaps.append({'code':'cut_allowance_invalid','where':part_code,'detail':str(exc)})
+        variables = {"cut_length": cut['sheet_mm'][0], "cut_width": cut['sheet_mm'][1],
+                     "material_code":material.get('material_code') if material else '',
+                     "cut_size_source":cut['size_source'],"cut_allowance_mm":cut['allowance_mm'],
                      "gsm": gsm, "gsm_source": gsm_source,
                      "price_unit": price_unit, "price_unit_status": unit_status,
                      "ton_price": (price * 1000) if price is not None else None,
-                     "imposition_count": imposition, "proof_base": _num(data.get("proofing_base")) or 0.0,
+                     "imposition_count": 1.0, "proof_base": _num(data.get("proofing_base")) or 0.0,
                      "quote_quantity": quantity, "tax_factor": tax_factor,
                      "usage_qty": usage_qty,
                      "machine_length": machine_length,
@@ -2370,6 +2391,10 @@ def compute_project(project_id: str, requirement_no: str = "", *,
             variables["loss_rate_source"] = rate_source
             line["inputs"] = variables
         lines.append(line)
+
+    gaps.extend(packaging_sheet_cost.apply_layout_costs(demo_doc.get('layout_rows') or [],
+                [dict(row,part_code=_text(row.get('part_code') or row.get('item_key'))) for row in bom_rows],
+                lines,quantity,compute_line,formula_rows))
 
     # 2) 工序类（BOM process 行 + 第 6 批工序） ---------------------------- #
     sheet_length = machine_length
@@ -2701,6 +2726,8 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         # 路线版本 / BOM 指纹 / BOM 行数一起落库。字段名说的是"照着哪一版算的"，
         # 就必须在读接口那一刻**不再重取**（读侧的比对见 `load_cost()`）。
         "source_versions": {
+            "sheet_cost_rule_version":packaging_sheet_cost.RULE_VERSION,
+            "cut_allowance_fingerprint":packaging_sheet_cost.allowance_fingerprint(data),
             "route_version": _upstream_route_version(project_id, req_no),
             "engine_version": ENGINE_VERSION,
             "bom_hash": bom_input_hash(bom_rows),
@@ -2786,11 +2813,17 @@ def _business_parts_scope(project_id: str) -> dict:
     if not isinstance(doc, dict):
         blank["gap"] = packaging_parts.business_parts_gap({})
         return blank
+    from . import packaging_layout
+    try:
+        doc = packaging_layout.active_business_document(doc)
+    except ValueError:
+        blank['gap'] = {'code':'packaging_scheme_selection_required','message':'请先选择采用的方案，不能混算'}
+        return blank
     rows = doc.get("business_parts") if isinstance(doc.get("business_parts"), list) else []
     stats = doc.get("stats") if isinstance(doc.get("stats"), dict) else {}
     return {"business_parts_id": _text(doc.get("business_parts_id")),
             "business_parts_hash": _text(doc.get("business_parts_hash")),
-            "business_part_total": int(stats.get("business_part_total") or len(rows)),
+            "business_part_total": len(rows),
             "available": bool(rows),
             "gap": {} if rows else packaging_parts.business_parts_gap_of(doc)}
 
@@ -2956,6 +2989,11 @@ def load_cost(project_id: str, requirement_no: str = "", *,
         result["stale_reasons"] = list(result["stale_reasons"]) + [business_reason]
     result["stale"] = bool(result["stale"] or business_reason)
     result["business_parts_unavailable"] = dict(business_unavailable)
+    from . import packaging_sheet_cost
+    allowance_now=packaging_sheet_cost.allowance_fingerprint(_requirement_data(project_id))
+    if stored.get('cut_allowance_fingerprint') and stored['cut_allowance_fingerprint'] != allowance_now:
+        result['stale']=True
+        result['stale_reasons']=list(result['stale_reasons'])+['cut_allowance_changed']
     return _with_readiness(with_current_quote_quantity(result, _requirement_data(project_id)))
 
 

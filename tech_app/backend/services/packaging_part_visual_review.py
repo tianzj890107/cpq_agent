@@ -978,6 +978,10 @@ def _compound_named_groups(ir: Any, regions: Any, views: Any, frames: Any) -> Li
         frame_ids = {_frame_for_region(str(row.get("region_id") or ""), frames) for row in members}
         if len(frame_ids) > 1:
             continue
+        view_ids = {views.get(str(r.get('region_id') or ''),'') for r in members}
+        if len(sections) <= 1 and (len(view_ids) != 1 or '' in view_ids):
+            # 一个名字附近有多个闭合件不是复合关系证据，尤其不能跨局部视图区。
+            continue
         group = _group_record(members, doc, views, frames, GROUP_REASON_SPATIAL)
         group["evidence_reasons"].append("compound_name_anchor")
         group["name_anchor_entity_id"] = str(anchor.get("entity_id") or "")

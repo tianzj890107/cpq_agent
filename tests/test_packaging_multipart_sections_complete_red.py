@@ -357,6 +357,7 @@ class MultipartSectionsTest(unittest.TestCase):
     def test_each_size_is_independent_and_all_are_required(self):
         s = self.service()
         doc = self.assigned()
+        doc['auto_geometry_inputs'] = False  # 旧严格核验模式；默认自动模式由新Spec覆盖。
         doc = s.confirm_section_size(doc,'BP-A','inside',100,40,actor='PE1',note='标注')
         row = doc['business_parts'][0]
         with self.assertRaisesRegex(ValueError, 'outside'):

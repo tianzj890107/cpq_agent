@@ -156,6 +156,23 @@ class DemoFlow(unittest.TestCase):
             self.assertNotIn("confirmed_size", row,
                              "演示输入不是人工确认尺寸，不许写 confirmed_size")
 
+    def test_a5_native_per_part_processes_reach_material_and_labor_ledger(self):
+        self._prepare_project()
+        packaging_demo_inputs.prepare(PID, actor='tester', enable_demo=True)
+        lookup={'status':'matched','match_method':'exact_name','routes':[{'steps':[
+            {'line_number':10,'operation_name':'组装'}]}]}
+        with mock.patch('tech_app.backend.services.da_process_routing.for_row',return_value=lookup):
+            result=packaging_demo_inputs.prepare_processes(PID,actor='tester',
+                run=mock.Mock(side_effect=AssertionError('native route must not call model')))
+        self.assertTrue(result['ready'],result['failures'])
+        self.assertEqual(2,len(result['results']))
+        packaging_bom.build_bom(PID, REQ_NO)
+        packaging_route.build_route(PID, REQ_NO)
+        packaging_route.confirm_route(PID, REQ_NO, actor={'username':'tester'})
+        cost=packaging_cost.build_cost(PID,REQ_NO,actor={'username':'tester'})
+        self.assertGreater(cost['material_total'],0)
+        self.assertGreater(cost['labor_total'],0)
+
 
 if __name__ == "__main__":
     unittest.main()

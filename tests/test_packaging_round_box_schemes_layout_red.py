@@ -48,9 +48,12 @@ class RoundBoxLayoutRed(unittest.TestCase):
     def test_mixed_schemes_must_not_become_one_bom(self):
         mixed = {"texts": self.ir["texts"] + [
             {"entity_id": "scheme1", "raw_text": "内托方案1", "position": [500, 800], "layer": "TEXT"}]}
-        with self.assertRaisesRegex(ValueError, "multiple_packaging_schemes"):
-            resolver.resolve_business_parts("demo", mixed, {"parts": []},
-                                            use_model=False, strict_schemes=True)
+        result = resolver.resolve_business_parts("demo", mixed, {"parts": []},
+                                                use_model=False, strict_schemes=True)
+        self.assertEqual(['1','2'],result['reference']['scheme_labels'])
+        with self.assertRaisesRegex(ValueError, "packaging_scheme_selection_required"):
+            packaging_layout.active_business_document({'scheme_labels':['1','2'],
+                                                       'business_parts':result['reference']['parts']})
 
     def test_multi_fragment_representation_keeps_each_piece(self):
         fragments = packaging_layout.part_fragments(["c1", "c2"], [

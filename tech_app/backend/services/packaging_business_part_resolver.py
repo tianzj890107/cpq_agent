@@ -1670,6 +1670,91 @@ def _expand_family_groups(rows: List[Dict[str, Any]], anchors: List[Dict[str, An
     return ordered, detail_plans
 
 
+def _resolve_scheme_parts(project_id, ir, geometry_parts, *, use_model, model_reviewer, review_progress):
+    """同图不同方案独立解析，实体 ID 和原始几何不变，只有业务编号加命名空间。"""
+    import copy
+    from . import packaging_parts
+    regions = regions_from_geometry_parts(geometry_parts) or build_geometry_regions(ir)
+    scopes = packaging_layout.scheme_scopes(ir, regions, extract_text_anchors(ir, layout_aware=True))
+    parts, bindings, layouts, candidates, scheme_components = [], [], [], [], []
+    def y_of(item, axis=1, sign=1):
+        pos = item.get('position') or []
+        box = item.get('bbox') or []
+        if len(pos) >= 2:
+            return sign*float(pos[axis])
+        if len(box) == 4:
+            return sign*(box[axis]+box[axis+2])/2
+        display = item.get('display_entities') or []
+        boxes = [e['bbox'] for e in display if len(e.get('bbox') or []) == 4]
+        return sign*(min(b[axis] for b in boxes)+max(b[axis+2] for b in boxes))/2 if boxes else None
+    def within(item, scope):
+        y = y_of(item,scope.get('coordinate_axis',1),scope.get('coordinate_sign',1))
+        return y is not None and scope['y_min'] <= y < scope['y_max']
+    for scope in scopes:
+        sid = scope['scheme_id']
+        def contains(item):
+            return within(item, scope)
+        owned = {r['region_id'] for r in regions if contains(r)}
+        selected_entities = {eid for r in regions if r['region_id'] in owned for eid in r.get('entity_ids') or []}
+        sub_ir = dict(ir)
+        sub_ir['geometry'] = {key:([r for r in value if isinstance(r,dict) and contains(r)]
+                            if isinstance(value,list) else value)
+                            for key,value in (ir.get('geometry') or {}).items()}
+        for key in ('texts','dimensions','entities'):
+            sub_ir[key] = [r for r in ir.get(key) or [] if r.get('entity_id') in selected_entities or contains(r)]
+        # 包住多个方案标题的闭合大图框不是制造件；否则完整圆件会被错误当成其内孔。
+        sub_ir['entities'] = [r for r in sub_ir['entities'] if not (r.get('closed') and len(r.get('bbox') or [])==4
+            and sum(r['bbox'][0] <= s['position'][0] <= r['bbox'][2]
+                    and r['bbox'][1] <= s['position'][1] <= r['bbox'][3] for s in scopes) > 1)]
+        from .cad_ir import parser as cad_parser
+        sub_ir['geometry'] = cad_parser._geometry_block(sub_ir['entities'],float((ir.get('geometry') or {}).get('tolerance') or 1e-6))
+        original_ids = {tuple(sorted(r.get('entity_ids') or [])):r['component_id']
+                        for r in (ir.get('geometry') or {}).get('components') or []}
+        for component in sub_ir['geometry']['components']:
+            component['component_id'] = original_ids.get(tuple(sorted(component['entity_ids'])),
+                                                        'scheme:'+sid+':'+component['component_id'])
+        # 图纸标题本身不能再触发递归多方案。
+        sub_ir['texts'] = [r for r in sub_ir['texts'] if not packaging_layout._SCHEME.search(
+            packaging_layout.clean_cad_text(r.get('raw_text') or r.get('normalized_text')))]
+        # 整版过滤门槛可能丢掉某个方案的小闭合件；用作用域内完整 CAD 证据重新提取，
+        # 不把整版的“保留/剔除”决定当作各方案的零件边界。
+        sub_geo = packaging_parts.extract(sub_ir)
+        result = resolve_business_parts(project_id, sub_ir, sub_geo, use_model=use_model,
+                     strict_schemes=True, model_reviewer=model_reviewer, review_progress=review_progress)
+        built = packaging_parts.business_parts_document(result['reference'], sub_geo, bindings=result['match'])
+        scheme_components.extend(built['geometry_evidence'].get('components') or [])
+        mapped = {r['business_part_code']: 'DWG-S'+sid+'-'+r['business_part_code'].removeprefix('DWG-')
+                  for r in built['business_parts']}
+        for row in result['reference']['parts']:
+            row = copy.deepcopy(row)
+            row['business_part_code'] = mapped[row['business_part_code']]
+            row.update(scheme_id=sid, scheme_title=scope['title'], scheme_scope_status=scope['scope_status'])
+            parts.append(row)
+        for row in built['business_parts']:
+            binding = copy.deepcopy(row['geometry_binding'])
+            binding['business_part_code'] = mapped[row['business_part_code']]
+            bindings.append(binding)
+        layouts.extend(dict(r, scheme_id=sid) for r in result['reference'].get('layout_rows') or [])
+        candidates.extend(built.get('unassigned_candidates') or [])
+    reference = {'parts':parts,'layout_rows':layouts,'scheme_labels':[s['scheme_id'] for s in scopes],
+                 'schemes':scopes,'scheme_mode':'alternatives','derived_from_drawing':True,
+                 'gold_standard_used':False,'refused_sources':list(RUNTIME_REFUSED_SOURCES),
+                 'scheme_notice':'方案范围由标题及图纸空间间隔推断；同名件保留各方案身份，不混算。'}
+    reference['scheme_components'] = scheme_components
+    outside = [r for r in regions if not any(within(r,s) for s in scopes)]
+    reference['unscoped_evidence'] = {'region_ids':[r['region_id'] for r in outside],
+        'notice':'方案范围之外的图形保留在原图；未自动当公共件或计入用量。'}
+    detail = {'authority_source':'dwg' if parts else 'missing','business_part_total':len(parts),
+              'derived_from_drawing':True,'gold_standard_used':False,'refused_sources':list(RUNTIME_REFUSED_SOURCES),
+              'scheme_labels':reference['scheme_labels'],'scheme_mode':'alternatives',
+              'geometry_component_total':len(regions)}
+    match={'bindings':bindings,'unassigned_candidates':candidates,
+           **{s+'_total':sum(b.get('status')==s for b in bindings) for s in ('bound','partial','ambiguous','unbound')}}
+    detail.update({k:v for k,v in match.items() if k.endswith('_total')})
+    return {'authority_source':detail['authority_source'],'reference':reference,'authority':reference,
+            'authority_rows':parts,'match':match,'detail':detail}
+
+
 def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
                            attachments: Any = None, kb: Any = None,
                            *, seed_path: Any = None,
@@ -1695,7 +1780,24 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
     ir = cad_ir if isinstance(cad_ir, dict) else {}
     source_block = ir.get("source") if isinstance(ir.get("source"), dict) else {}
     if strict_schemes and len(packaging_layout.scheme_labels(ir)) > 1:
-        raise ValueError("multiple_packaging_schemes: 先将不同方案拆成独立图纸项目，不得合成同一份 BOM")
+        scopes = packaging_layout.scheme_scopes(ir)
+        if not scopes or not all(s.get('kind') == 'layout' for s in scopes):
+            return _resolve_scheme_parts(project_id, ir, geometry_parts, use_model=use_model,
+                       model_reviewer=model_reviewer, review_progress=review_progress)
+        # 纯排模方案不改变业务件集合，仍启用排模文字过滤。
+        scoped_ir = dict(ir, texts=[t for t in ir.get('texts') or [] if not packaging_layout._SCHEME.search(
+             packaging_layout.clean_cad_text(t.get('raw_text') or t.get('normalized_text')))])
+        result = resolve_business_parts(project_id, scoped_ir, geometry_parts, use_model=use_model,
+                  strict_schemes=True,model_reviewer=model_reviewer,review_progress=review_progress)
+        result['reference'].update(scheme_labels=[s['scheme_id'] for s in scopes],schemes=scopes,scheme_mode='layout_only')
+        for row in result['reference']['parts']:
+            row['scheme_id'] = 'common'
+        for row in result['reference']['layout_rows']:
+            pos = row.get('position') or []
+            owner = next((s for s in scopes if len(pos)>1 and s['y_min'] <=
+                          s.get('coordinate_sign',1)*pos[s.get('coordinate_axis',1)] < s['y_max']),None)
+            row['scheme_id'] = owner['scheme_id'] if owner else 'unscoped'
+        return result
     drawing_sha256 = _text(source_block.get("source_sha256"))
 
     anchors = _apply_view_direction_rule(extract_text_anchors(ir, layout_aware=strict_schemes))
@@ -1788,7 +1890,8 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
     structure_rows = [row for row in rows if _text(row.get("structure_rule"))]
     reference = {
         "parts": rows,
-        "layout_rows": packaging_layout.extract_layout_rows(ir),
+        "layout_rows": packaging_layout.attach_cut_dimension_candidates(ir,
+            packaging_layout.extract_layout_rows(ir) + packaging_layout.extract_drawing_layout_candidates(ir,anchors,regions)),
         "scheme_labels": packaging_layout.scheme_labels(ir),
         "derived_from_drawing": True,
         "gold_standard_used": False,

@@ -1781,7 +1781,7 @@ async function packagingPartAnalyze(mode) {
 function startAllPackagingPartProcesses(rows) {
   if (allPartsProcessBusy) return {ok: false, error: {code: 'busy', message: '正在生成工艺推荐，请稍候'}};
   const list = Array.isArray(rows) ? rows
-    : ((currentPackagingParts && currentPackagingParts.parts) || []);
+    : packagingBusinessPartRows(currentPackagingBusinessParts);
   const ready = [];
   const skipped = [];
   list.forEach(row => {
@@ -3449,17 +3449,23 @@ function packagingBusinessPartSizeCostTarget(row, partsDoc) {
   }
   if (partsDoc && partsDoc.derived_from_drawing) {
     if ((Array.isArray(part.sections) && part.sections.length > 1) || part.sections_source === 'manual') {
-      return packagingSectionsReady(part)
+      return packagingSectionsReady(part, partsDoc.auto_geometry_inputs !== false)
         ? {ok:true,code:'',message:'',part_code:code}
         : {ok:false,code:'section_size_not_confirmed',part_code:code,message:'请核对全部组成的归属、尺寸和用量，不能只计算第一部分。'};
     }
     const binding = part.geometry_binding || {};
     const confirmed = part.confirmed_size || {};
+    const box = Array.isArray(binding.bbox) ? binding.bbox : [];
+    const autoReady = partsDoc.auto_geometry_inputs !== false && binding.status === 'bound'
+      && (binding.component_ids || []).length > 0 && (binding.entity_ids || []).length > 0
+      && ((positive(binding.length_mm) && positive(binding.width_mm))
+          || (box.length === 4 && positive(Number(box[2])-Number(box[0])) && positive(Number(box[3])-Number(box[1]))));
+    if (autoReady) return {ok:true,code:'',part_code:code,message:'已自动采用选中CAD几何尺寸（估算）'};
     if (binding.status !== "bound" || !["manual", "auto"].includes(binding.bound_by)
         || binding.size_confirmed !== true || !positive(confirmed.length_mm)
         || !positive(confirmed.width_mm)) {
       return {ok: false, code: "drawing_part_size_not_confirmed", part_code: code,
-              message: "图纸推导件尚未人工确认几何归属与尺寸；先核对图纸标注并确认尺寸。"};
+              message: "当前CAD归属或有效尺寸缺失，请重新解析或选择完整候选。"};
     }
     return {ok: true, code: "", message: "", part_code: code};
   }
@@ -3492,18 +3498,23 @@ function packagingBusinessPartProcessTarget(row, partsDoc) {
   }
   if (partsDoc && partsDoc.derived_from_drawing) {
     if ((Array.isArray(part.sections) && part.sections.length > 1) || part.sections_source === 'manual') {
-      if (!packagingSectionsReady(part)) return {ok:false,code:'section_size_not_confirmed',part_code:code,message:'请核对全部组成的归属、尺寸和用量。'};
+      if (!packagingSectionsReady(part, partsDoc.auto_geometry_inputs !== false)) return {ok:false,code:'section_size_not_confirmed',part_code:code,message:'全部组成的CAD归属、尺寸或用量不完整，请重新解析或选择完整候选。'};
       if (!text(reference.material_text) && !text(part.material)
           && !(part.sections || []).every(s=>text(s.material_text))) return {ok:false,code:'material_missing',part_code:code,message:'补上各组成材料后再排工艺。'};
       return {ok:true,code:'',message:'',part_code:code};
     }
     const binding = part.geometry_binding || {};
     const confirmed = part.confirmed_size || {};
-    if (binding.status !== "bound" || !["manual", "auto"].includes(binding.bound_by)
+    const box = Array.isArray(binding.bbox) ? binding.bbox : [];
+    const autoReady = partsDoc.auto_geometry_inputs !== false && binding.status === 'bound'
+      && (binding.component_ids || []).length > 0 && (binding.entity_ids || []).length > 0
+      && ((positive(binding.length_mm) && positive(binding.width_mm))
+          || (box.length === 4 && positive(Number(box[2])-Number(box[0])) && positive(Number(box[3])-Number(box[1]))));
+    if (!autoReady && (binding.status !== "bound" || !["manual", "auto"].includes(binding.bound_by)
         || binding.size_confirmed !== true || !positive(confirmed.length_mm)
-        || !positive(confirmed.width_mm)) {
+        || !positive(confirmed.width_mm))) {
       return {ok: false, code: "drawing_part_size_not_confirmed", part_code: code,
-              message: "图纸推导件尚未人工确认几何归属与尺寸；先核对图纸标注并确认尺寸。"};
+              message: "当前CAD归属或有效尺寸缺失，请重新解析或选择完整候选。"};
     }
     if (!text(reference.material_text) && !text(part.material)) {
       return {ok: false, code: "material_missing", part_code: code,
@@ -3848,6 +3859,38 @@ function renderPackagingBusinessTree(tree, rows) {
   head.dataset.qqBusinessParts = "1";
   head.textContent = `业务部件 ${rows.length} 件（${packagingBusinessPartsSourceLabel(currentPackagingBusinessParts)}）`;
   tree.appendChild(head);
+  const schemes = (currentPackagingBusinessParts || {}).schemes || [];
+  if (schemes.length > 1) {
+    const controls = document.createElement('div');
+    controls.className = 'packaging-business-head';
+    const note = document.createElement('div');
+    const selected = (currentPackagingBusinessParts || {}).selected_scheme_id || '';
+    note.textContent = selected ? `当前采用方案 ${selected}；其他方案保留，不计入整单成本。`
+      : '多方案已分别解析；请采用一个方案后生成整单 BOM 和成本。';
+    controls.appendChild(note);
+    schemes.forEach(scheme => {
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = 'part-row-action';
+      button.textContent = `${selected === scheme.scheme_id ? '已采用' : '采用'} ${scheme.title}`;
+      button.disabled = selected === scheme.scheme_id || allPartsProcessBusy;
+      button.addEventListener('click', async () => {
+        const project = currentProject;
+        button.disabled = true;
+        try {
+          const response = await fetch(`${API}/api/projects/${encodeURIComponent(project)}/requirement/packaging-business-parts/scheme`, {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({scheme_id:scheme.scheme_id,business_parts_hash:currentPackagingBusinessParts.business_parts_hash})});
+          const result = await response.json();
+          if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : `HTTP ${response.status}`);
+          if (currentProject !== project) return;
+          currentPackagingBusinessParts = result;
+          renderTree(currentIR || {});
+        } catch (error) { status(`采用方案失败：${error.message}`); button.disabled = false; }
+      });
+      controls.appendChild(button);
+    });
+    tree.appendChild(controls);
+  }
   // 同一句对账（Spec「两笔账同屏对账」§2.2）：业务账有行的这一路也要把
   // 几何账的分子摆在旁边 —— 人在两条路上看到的口径必须一致；空串时不出现空节点。
   const ledgerLine = packagingTwoLedgersLine(currentPackagingParts, currentPackagingBusinessParts);
@@ -3896,6 +3939,10 @@ function renderPackagingBusinessTree(tree, rows) {
     line.className = "part part-item packaging-business-part";
     line.dataset.partId = code;
     line.dataset.businessPartCode = code;
+    if (row.scheme_id) {
+      line.dataset.schemeId = row.scheme_id;
+      line.title = `${row.scheme_title || '方案 '+row.scheme_id}（图纸空间归属）`;
+    }
     line.dataset.bindingStatus = status;
     line.addEventListener("click", () => openPackagingBusinessPart(code));
     // 件名只有一个来源（Spec §2.1b）：缺失时用兜底词并给自己一个钩子，不许回落成编码。
@@ -3925,6 +3972,7 @@ function renderPackagingBusinessTree(tree, rows) {
     line.innerHTML = `<div class="part-icon part-icon-box" aria-hidden="true"></div>`
       + `<div class="part-body" title="${esc(rowTitle).replace(/"/g, "&quot;")}">`
       + `<div class="part-name">${esc(displayCode)} ${esc(partName)}</div>`
+      + (row.scheme_id ? `<div class="part-meta">${esc(row.scheme_title || '方案 '+row.scheme_id)}</div>` : '')
       + `<div class="part-meta">${esc(size)}</div>`
       + (material ? `<div class="part-material">${esc(material)}</div>` : "")
       + (bindingText ? `<div class="part-note">${esc(bindingText)}</div>` : "")
@@ -4119,7 +4167,7 @@ function packagingPartAnnotationFilteredLine(row, partsDoc) {
 // 候选“置信度”仅是 CAD 证据排序分，不是统计正确率，也不能代替人工确权。
 // 各项最高：实体 15、已保留分量 10、文字锚点落区 20、尺寸标注空间吻合 20、
 // 几何可用 10、锚点距离相对候选对角线 15；未确认候选统一封顶 85%。
-function packagingCandidateConfidence(candidate) {
+function packagingCandidateConfidence(candidate, options) {
   const item = candidate && typeof candidate === "object" ? candidate : {};
   const hasEntities = Array.isArray(item.entity_ids) && item.entity_ids.length > 0;
   const hasComponents = Array.isArray(item.component_ids) && item.component_ids.length > 0;
@@ -4152,13 +4200,16 @@ function packagingCandidateConfidence(candidate) {
     // 极大的整版图框不能因自身对角线巨大而“显得很近”。
     if (diagonal > 0) score += 0.15 * Math.max(0, 1 - distance / Math.min(diagonal, 200));
   }
-  return Math.round(Math.min(0.85, Math.max(0, score)) * 100);
+  return Math.round((options && options.uncapped === true
+    ? Math.max(0,score) : Math.min(0.85, Math.max(0, score))) * 100);
 }
 
 function packagingRankedCandidates(candidates) {
   return (Array.isArray(candidates) ? candidates : []).map((candidate, index) => ({
     candidate, index, confidence: packagingCandidateConfidence(candidate),
-  })).sort((left, right) => right.confidence - left.confidence
+  })).sort((left, right) => packagingCandidateConfidence(right.candidate,{uncapped:true})
+    - packagingCandidateConfidence(left.candidate,{uncapped:true})
+    || Number(right.candidate.geometry_status === 'supported') - Number(left.candidate.geometry_status === 'supported')
     || String((left.candidate || {}).id || "").localeCompare(String((right.candidate || {}).id || ""))
     || left.index - right.index);
 }
@@ -4181,6 +4232,7 @@ function packagingAutoSelectionReason(binding) {
   const blocked = (binding || {}).auto_selection || {};
   return ({
     highest_candidate_geometry_incomplete: "最高分候选图元不完整，暂不能自动确认归属",
+    complete_candidate_claim_conflict: "完整候选存在归属冲突，未自动改选局部碎片，请检查候选",
     candidate_entities_already_assigned_to_another_part: "候选已被图纸顺序在前的零件选用，请选择其他候选",
     highest_candidate_has_no_cad_evidence: "最高分候选缺少真实 CAD 图元，暂不能自动确认归属",
     candidate_id_not_in_project_review_queue: "最高分候选已失效，请重新解析图纸",
@@ -4189,18 +4241,25 @@ function packagingAutoSelectionReason(binding) {
 
 const packagingSectionViews = new Map();
 
-function packagingSectionsReady(row) {
+function packagingSectionsReady(row, automatic = true) {
   const sections = Array.isArray(row && row.sections) ? row.sections : [];
   if (!row.sections_complete || !sections.length || (row.geometry_binding || {}).status !== 'bound') return false;
   const used = new Set();
   const positive = v => v !== null && v !== '' && typeof v !== 'boolean' && Number.isFinite(Number(v)) && Number(v) > 0;
   for (const s of sections) {
-    const size = s.confirmed_size || {};
+    let size = s.confirmed_size || {};
     const ids = Array.isArray(s.entity_ids) ? s.entity_ids.map(String) : [];
+    if (automatic && !positive(size.length_mm) && !positive(size.width_mm)) {
+      const box = Array.isArray(s.bbox) ? s.bbox : [];
+      const estimate = s.automatic_size || s.estimated_size || {};
+      size = {...estimate, source:'auto_selected_cad_geometry',entity_ids:ids,
+        length_mm:estimate.length_mm || (box.length===4 ? Number(box[2])-Number(box[0]) : null),
+        width_mm:estimate.width_mm || (box.length===4 ? Number(box[3])-Number(box[1]) : null)};
+    }
     const proof = new Set((size.entity_ids || []).map(String));
     if (s.status !== 'bound' || !ids.length || !positive(s.quantity)
         || !positive(size.length_mm) || !positive(size.width_mm)
-        || !['manual_confirmed_drawing','verified_cad_dimension'].includes(size.source)
+        || !['manual_confirmed_drawing','verified_cad_dimension','auto_selected_cad_geometry'].includes(size.source)
         || proof.size !== ids.length || ids.some(id => !proof.has(id) || used.has(id))) return false;
     if (size.source === 'manual_confirmed_drawing' && (!size.confirmed_by || !size.note)) return false;
     ids.forEach(id => used.add(id));
@@ -4647,7 +4706,7 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
         + `长宽仍须核对图纸标注后单独确认，不能从候选包围盒直接计算。</div>`
       : `<div class="packaging-part-note">单件工艺 / 成本按业务部件版本另跑；`
         + `几何没绑定只影响依赖几何的尺寸，不影响有清单尺寸的材料与采购项。</div>`;
-    const drawingSizeReady = !(currentPackagingBusinessParts || {}).derived_from_drawing
+    const drawingSizeReady = sizeTarget.ok || !(currentPackagingBusinessParts || {}).derived_from_drawing
       || (binding.status === "bound" && ["manual", "auto"].includes(binding.bound_by)
           && binding.size_confirmed === true && !!((row || {}).confirmed_size || {}).length_mm
           && !!((row || {}).confirmed_size || {}).width_mm);
@@ -4657,7 +4716,7 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
         + `<button id="packagingBusinessPartProcess" class="part-row-action" type="button"`
         + ` data-qqBusinessDownstreamMode="process">工艺推荐</button>`
       : `<div class="packaging-part-note" data-qqBusinessDownstreamReason="1">`
-        + `${esc(!drawingSizeReady ? "图纸推导件尚未确认尺寸；归属不完整时仍需补齐 CAD 证据。" : target.message)}</div>`
+        + `${esc(!drawingSizeReady ? "当前CAD归属或有效尺寸缺失，请重新解析或选择完整候选。" : target.message)}</div>`
         + (sizeTarget.ok
            ? `<div class="packaging-part-note" data-qqBusinessSizeCost="1">`
              + `${esc((currentPackagingBusinessParts || {}).derived_from_drawing
@@ -7492,7 +7551,7 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
       getState: () => {
         return {
           visible: true,
-          enabled: Boolean(currentProject) && Boolean(currentIR && (currentIR.parts || []).length)
+          enabled: Boolean(currentProject) && packagingBusinessPartRows(currentPackagingBusinessParts).length > 0
             && !allPartsProcessBusy,
           busy: Boolean(allPartsProcessBusy),
           role: (drawingParsed() && !partsProcessComplete()) ? "primary" : "aux",

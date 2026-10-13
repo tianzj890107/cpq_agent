@@ -14,11 +14,13 @@
 from __future__ import annotations
 
 import copy
+import json
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import packaging_material_match as material_match
 
-ENGINE_VERSION = "packaging-demo-inputs/1"
+ENGINE_VERSION = "packaging-demo-inputs/2"
 
 #: 件名关键词 → 材料族（**仅用于图纸没写材料时推定**，且必须随结论披露）。通用规则，不含图号。
 NAME_FAMILY_HINTS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
@@ -57,7 +59,7 @@ def _num(value: Any) -> Optional[float]:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return number if number == number else None
+    return number if math.isfinite(number) else None
 
 
 def geometry_sizes(parts_doc: Any) -> Dict[str, Dict[str, Any]]:
@@ -204,12 +206,136 @@ def _kb_tax_factor() -> float:
     return 1.13
 
 
+def demo_size(row, sizes):
+    """仅演示入口：保留真实尺寸；缺失使用明示占位，绝不写CAD确认。"""
+    for key in ('confirmed_size', 'reference', 'authority'):
+        value=row.get(key) or {}
+        length,width=_num(value.get('length_mm')),_num(value.get('width_mm'))
+        if length and width and length>0 and width>0:
+            return {'length_mm':length,'width_mm':width,'size_source':key,'component_ids':_component_ids(row)}
+    value=part_size(row,sizes)
+    if value.get('length_mm') and value.get('width_mm'): return value
+    return {**value,'length_mm':100.,'width_mm':100.,'size_source':'demo_placeholder_not_cad'}
+
+
+def demo_process_plan(part, lookup, inputs, *, run=None, allow_fallback=False):
+    from . import packaging_manufacturing, llm_client, packaging_process_instances, packaging_cost
+    lookup=json.loads(json.dumps(lookup,ensure_ascii=False,default=str))
+    try:
+        plan,coverage=packaging_manufacturing.outline(part,lookup=lookup,
+            note='演示项目：依据本件材料和尺寸适配工序，不增加无依据表面处理。'+str(inputs),
+            run=run or llm_client.run)
+    except Exception as exc:
+        if not allow_fallback: raise
+        fallback={'status':'matched','match_method':'demo_rule','routes':[{'steps':[
+            {'line_number':10,'operation_name':'开料'}, {'line_number':20,'operation_name':'检验'}]}]}
+        plan,coverage=packaging_manufacturing.outline(part,lookup=fallback)
+        coverage.update(process_origin='demo_rule_fallback',model_failure=type(exc).__name__,
+                        original_lookup=lookup)
+        plan.overall_note+='；模型不可用，演示基础工序估算，未声称AI推荐成功'
+    payload=plan.model_dump()
+    for step in payload['steps']:
+        decision=packaging_process_instances.billing({'step_name':step.get('name'),
+            'formula_code':step.get('formula_code')})
+        if decision['gap']:
+            step['formula_code']='PKG-C-LABOR'
+            step['note']=(step.get('note') or '')+'；无专用计费公式，演示按工时估算，不是标准加工单价'
+        parameters=dict(step.get('cost_parameters') or {})
+        parameters.update(mock=True,source='demo_process_parameters',
+            machine_length=inputs.get('length_mm'),machine_width=inputs.get('width_mm'),
+            imposition_count=1.,labor_rate=DEMO_LABOR_RATE)
+        if step.get('standard_seconds') is None:
+            step.update(standard_seconds=DEMO_STANDARD_SECONDS,duration_min=DEMO_STANDARD_SECONDS/60,
+                        time_source='poc_mock')
+        parameters['labor_seconds']=step['standard_seconds']
+        parameters.setdefault('hot_area_mm2',(_num(inputs.get('length_mm')) or 100)*(_num(inputs.get('width_mm')) or 100)*.1)
+        step['cost_parameters']=parameters
+    payload['overall_note']+='；演示估算：未知工时30秒、人工36元/小时、单排；非生产标准'
+    return payload,coverage
+
+
+def prepare_processes(project_id, *, actor='', run=None):
+    """显式演示准备：原生路线优先，未知件走现有相似检索+LLM，失败不伪报完成。"""
+    from . import packaging_parts, packaging_layout, da_process_routing
+    from .packaging_part_route_match import is_external_part
+    doc=packaging_parts.load_business_parts(project_id) or {}
+    if doc.get('poc_demo') is not True:
+        raise ValueError('demo_project_required')
+    doc=packaging_layout.active_business_document(doc)
+    results,failures=[],[]
+    for row in doc.get('business_parts') or []:
+        if is_external_part(row): continue
+        code=row.get('business_part_code')
+        try:
+            effective=packaging_parts.verified_business_part_input_row(row,doc)
+            lookup=da_process_routing.for_row(effective)
+            part=packaging_parts.business_as_ir_part(effective)
+            plan,coverage=demo_process_plan(part,lookup,row.get('poc_inputs') or {},run=run,allow_fallback=True)
+            # 多组成分别保留；不会把多个组成缩成一个父件工时。
+            children=[]
+            for section in row.get('sections') or []:
+                child=copy.deepcopy(effective)
+                child['name']=section.get('name') or row.get('name')
+                child['sections']=[]
+                child['reference']={**(child.get('reference') or {}),
+                    'material_text':section.get('material_text') or (child.get('reference') or {}).get('material_text')}
+                child_inputs={**(row.get('poc_inputs') or {}),
+                    **{k:v for k,v in (section.get('confirmed_size') or {}).items() if k in ('length_mm','width_mm')}}
+                child_plan,child_coverage=demo_process_plan(packaging_parts.business_as_ir_part(child),
+                    da_process_routing.for_row(child),child_inputs,run=run,allow_fallback=True)
+                children.append({'section_id':section.get('section_id'),
+                    'section_name':section.get('name'),'quantity':section.get('quantity') or 1,
+                    'plan':child_plan,'coverage':child_coverage,
+                    'cost_parameters':{'mock':True,'source':'demo_process_parameters'}})
+            packaging_parts.save_part_process(project_id,{
+                'part_code':code,'plan':plan,'coverage':coverage,'sections':children,
+                'business_parts_hash':doc.get('business_parts_hash'),
+                'business_parts_id':doc.get('business_parts_id'),
+                'process_origin':coverage.get('process_origin'),
+                'cost_parameters':{'mock':True,'source':'demo_process_parameters'},
+                'actor':actor,'mock':True})
+            results.append({'part_code':code,'match_method':lookup.get('match_method'),
+                            'process_origin':coverage.get('process_origin')})
+        except Exception as exc:
+            failures.append({'part_code':code,'error':str(exc)})
+    return {'mock':True,'results':results,'failures':failures,'ready':not failures}
+
+
+def prepare_demo_layouts(business):
+    """只补明文排模的缺失参数；草稿候选不自动升格为实际排模。"""
+    from . import packaging_sheet_cost
+    doc=copy.deepcopy(business)
+    parts={row.get('business_part_code'):row for row in doc.get('business_parts') or []}
+    for layout in doc.get('layout_rows') or []:
+        if layout.get('kind')=='drawing_layout_candidate': continue
+        codes=layout.get('part_codes') or []
+        if not codes or any(code not in parts for code in codes): continue
+        counts=dict(layout.get('part_counts') or {})
+        changed=False
+        for code in codes:
+            if not counts.get(code):
+                counts[code]=layout.get('n_up') if len(codes)==1 and layout.get('n_up') else 1
+                changed=True
+        layout['part_counts']=counts
+        if not layout.get('sheet_mm') and not layout.get('machine_mm'):
+            cuts=[packaging_sheet_cost.individual_cut(parts[code].get('poc_inputs') or {},{}) for code in codes]
+            if all(all(size.get('sheet_mm') or []) for size in cuts):
+                layout.update(sheet_mm=[sum(cut['sheet_mm'][0]*counts[code] for cut,code in zip(cuts,codes)),
+                                        max(cut['sheet_mm'][1] for cut in cuts)],
+                    size_source='demo_horizontal_sheet_estimate',dimension_role='cut_sheet')
+                changed=True
+        if changed:
+            layout.update(mock=True,demo_note='演示排模：未知排出数量按1，缺开料尺寸按横排包络估算；不是原图纸张标注')
+    return doc
+
+
 def demo_inputs_for(row: Any, sizes: Dict[str, Dict[str, Any]], *,
-                    materials: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+                    materials: Optional[List[Dict[str, Any]]] = None,
+                    allow_estimates: bool = False) -> Dict[str, Any]:
     """一件的演示输入（纯函数，不写库）。`ok=False` 时 `reason` 说清缺什么。"""
     record = row if isinstance(row, dict) else {}
     materials = materials if materials is not None else _kb_materials()
-    size = part_size(record, sizes)
+    size = demo_size(record, sizes) if allow_estimates else part_size(record, sizes)
     material = material_text_of(record)
     text = _text(material.get("material_text"))
     if not (size["length_mm"] and size["width_mm"]):
@@ -252,8 +378,12 @@ def demo_inputs_for(row: Any, sizes: Dict[str, Dict[str, Any]], *,
         notes.append(demo_price["note"])
     if price_source == "kb_material_price_unit_mismatch":
         notes.append("库内这条价格的单位是「%s」，不是元/kg，本行按演示价算" % price.get("unit"))
+    if not grammage.get('grammage') and allow_estimates:
+        grammage={'grammage':200.,'source':'demo_unknown_material_200gsm'}
     if not grammage.get("grammage"):
         notes.append("克重推导不出来：这一行材料费给不出金额")
+    if allow_estimates:
+        notes.append('演示尺寸来源：'+size['size_source']+'；无图形占位100×100mm、未知材料200g/㎡，不是CAD实测')
     notes.append("模数 %s、校版 %s 张、工时费率 %s 元/小时、标准工时 %s 秒为演示口径"
                  % (DEMO_IMPOSITION, DEMO_PROOF_BASE, DEMO_LABOR_RATE, DEMO_STANDARD_SECONDS))
     return {
@@ -282,7 +412,7 @@ def build(project_id: str, *, limit: int = 0) -> Dict[str, Any]:
             continue
         if limit and len(rows) >= limit:
             break
-        value = demo_inputs_for(row, sizes, materials=materials)
+        value = demo_inputs_for(row, sizes, materials=materials, allow_estimates=True)
         value.update({"business_part_code": _text(row.get("business_part_code")),
                       "name": _text(row.get("name"))})
         rows.append(value)
@@ -332,7 +462,8 @@ def prepare(project_id: str, *, actor: str = "", enable_demo: bool = False) -> D
                             "reason": (value or {}).get("reason") or "not_in_scope"})
             continue
         inputs = {
-            "length_mm": value.get("length_mm"), "width_mm": value.get("width_mm"), "quantity": 1,
+            "length_mm": value.get("length_mm"), "width_mm": value.get("width_mm"),
+            "quantity":row.get('usage_qty') or (row.get('reference') or {}).get('quantity') or row.get('quantity') or 1,
             "material_text": value.get("material_text"),
             "gsm": value.get("grammage"),
             "ton_price": (value.get("unit_price") or 0) * 1000,
@@ -353,18 +484,27 @@ def prepare(project_id: str, *, actor: str = "", enable_demo: bool = False) -> D
             },
         }
         row["poc_inputs"] = inputs
-        row["usage_qty"] = 1
-        row["cost_parameters"] = {
+        row["usage_qty"] = row.get('usage_qty') or (row.get('reference') or {}).get('quantity') or 1
+        row["cost_parameters"] = {**(row.get('cost_parameters') or {}),
+            "mock":True, "source":"demo_process_parameters",
+            "machine_length":value.get('length_mm'),"machine_width":value.get('width_mm'),
+            "imposition_count":DEMO_IMPOSITION,
             "labor_rate": DEMO_LABOR_RATE, "labor_seconds": DEMO_STANDARD_SECONDS,
             "standard_seconds": DEMO_STANDARD_SECONDS,
             "overhead_seconds": DEMO_OVERHEAD_SECONDS, "overhead_rate": DEMO_OVERHEAD_RATE,
         }
         written += 1
+    doc=prepare_demo_layouts(doc)
     saved = packaging_parts.save_business_parts(project_id, doc)
     if enable_demo:
         requirement = copy.deepcopy(store.load_requirement(project_id) or {})
         data = requirement.get("data") if isinstance(requirement.get("data"), dict) else {}
         data["poc_demo"] = True
+        quantity=_num(data.get('quote_quantity')) or 1000
+        for key,value in {'tooling_amortize_qty':quantity,'committed_volume':quantity,
+                          'cumulative_quantity':quantity}.items():
+            if data.get(key) is None: data[key]=value
+        data['demo_preparation_source']='mock parameters; not production authority'
         requirement["data"] = data
         store.save_requirement(project_id, requirement, author=actor or "system")
     store.audit(project_id, "poc:demo_inputs_prepared",

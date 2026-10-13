@@ -713,17 +713,39 @@ function aiRequiredCard() {
 function aiRenderPackagingLayout() {
   const rows = aiBusinessParts?.layout_rows || [];
   let html = '<section class="inline-card" data-packaging-layout><div class="inline-card-title">3.2 排版排模 · 图纸证据</div>';
-  if (!rows.length) return html + '<div class="inline-empty">图纸中没有识别到「排 N 模」说明；不得据此编造开料利用率。仍可使用下方参数推荐。</div></section>';
+  if (!rows.length) return html + '<div class="inline-empty">图纸中尚无明确排模说明或重复展开图候选；不能据此编造开料利用率。</div></section>';
   html += '<div class="inline-warn">排模说明不计入零件清单。确认只表示认可图上文字；未绑定到具体零件、未核实纸张与用量前，不参与正式成本。</div>';
   rows.forEach(row => {
+    const candidate = row.kind === 'drawing_layout_candidate';
+    const associated = (aiBusinessParts?.business_parts || []).filter(p => (row.part_codes || []).includes(p.business_part_code));
     const sheet = row.sheet_mm?.length === 2 ? `${row.sheet_mm[0]} × ${row.sheet_mm[1]} mm` : '纸张尺寸待确认';
-    const options = (aiBusinessParts?.business_parts || []).map(part => {
+    const options = (aiBusinessParts?.business_parts || []).filter(part => !row.scheme_id
+      || [row.scheme_id,'common'].includes(part.scheme_id)).map(part => {
       const code = String(part.business_part_code || '');
       return `<label class="ai-layout-option"><input type="checkbox" data-ai-layout-part-code value="${aiAttr(code)}"${(row.part_codes || []).includes(code) ? ' checked' : ''}><span>${esc(part.name || code)}</span></label>`;
     }).join('');
-    html += `<div class="ai-layout-row"><div class="inline-cov-row"><span class="inline-cov-name">${esc(row.text || row.raw_text)}</span>`
+    html += `<div class="ai-layout-row"><div class="inline-cov-row"><span class="inline-cov-name">${row.scheme_id ? esc('方案 '+row.scheme_id)+' · ' : ''}${esc(row.text || row.raw_text)}</span>`
       + `<span class="inline-cov-code">${esc(sheet)} · ${row.n_up ? `排 ${Number(row.n_up)} 模` : '模数待确认'} · ${row.confirmed ? '已核对文字' : '待核对'}</span>`
-      + `<button type="button" class="inline-action" data-ai-layout-confirm="${aiAttr(row.entity_id)}" data-confirmed="${row.confirmed ? 'true' : 'false'}">${row.confirmed ? '撤销确认' : '确认图上排模'}</button></div>`;
+      + (candidate ? '<span class="inline-cov-code">排模／草稿候选，尚非确认排模</span>'
+        : `<button type="button" class="inline-action" data-ai-layout-confirm="${aiAttr(row.entity_id)}" data-confirmed="${row.confirmed ? 'true' : 'false'}">${row.confirmed ? '撤销确认' : '确认图上排模'}</button>`) + '</div>';
+    if (associated.length) html += `<div class="ai-hint">已关联：${associated.map(p=>esc(p.name || p.business_part_code)).join('、')}；无需再次保存，展开可调整。</div>`;
+    if (row.classification_notice) html += `<div class="ai-hint">${esc(row.classification_notice)}</div>`;
+    if (row.machine_mm) html += `<div class="ai-hint">上机尺寸：${esc(row.machine_mm.join(' × '))} mm（不作为开料尺寸）</div>`;
+    html += `<details class="ai-layout-picker" data-ai-cut-region="${aiAttr(row.entity_id)}"><summary>开料尺寸与排出数量</summary>`
+      + '<div class="ai-hint">开料尺寸、上机尺寸、零件展开尺寸分别记录。近邻标注尚未证明是纸张尺寸；核实后再采纳。无排模件默认展开长+0mm、宽+5mm，可按材料配置余量。</div>';
+    (row.cut_dimension_candidates || []).forEach((dimension,index) => {
+      html += `<div class="inline-cov-row"><span>${Number(dimension.length_mm).toFixed(2)} × ${Number(dimension.width_mm).toFixed(2)} mm · ${dimension.dimension_role==='cut_sheet'?'明确开料标注':'尺寸角色待核实'}</span>`
+        + `<button class="inline-action" type="button" data-ai-cut-preview="${aiAttr(row.entity_id)}" data-index="${index}">查看原图标注</button>`
+        + `<button class="inline-action" type="button" data-ai-cut-use="${aiAttr(row.entity_id)}" data-index="${index}">填入开料尺寸</button></div>`;
+    });
+    html += `<div class="inline-cov-row"><label>开料长(mm) <input type="number" min="0.01" step="0.01" data-ai-cut-length value="${aiAttr(row.sheet_mm?.[0] || '')}"></label>`
+      + `<label>开料宽(mm) <input type="number" min="0.01" step="0.01" data-ai-cut-width value="${aiAttr(row.sheet_mm?.[1] || '')}"></label></div>`;
+    associated.forEach(part => {
+      html += `<label class="ai-layout-option">${esc(part.name || part.business_part_code)} · 每张排出 <input type="number" min="1" step="1" data-ai-cut-count="${aiAttr(part.business_part_code)}" value="${aiAttr(row.part_counts?.[part.business_part_code] || '')}">件</label>`;
+    });
+    html += `<div class="ai-hint">费用按各件所需展开面积占比分摊，合计等于整张费用；关联不自动推导用量。来源：${esc(row.size_source || '未取得开料尺寸')}</div>`
+      + `<button class="inline-action save" type="button" data-ai-cut-save="${aiAttr(row.entity_id)}">核实并保存开料参数</button></details>`;
+    if (row.association_gaps?.length) html += `<div class="ai-hint">未自动关联：${row.association_gaps.map(g=>esc(g.name)+(g.code==='ambiguous_part_name'?'（有多个对应件）':'（清单无唯一对应件）')).join('、')}</div>`;
     html += `<div class="ai-layout-association-bar"><details class="ai-layout-picker"><summary>关联零件 · 已选 ${(row.part_codes || []).length} 项</summary>`
       + `<div class="ai-hint">可多选；关联不推导用量，请单独核实排模与用量。</div>`
       + (row.assignment_source === 'cad_layout_full_name' ? `<div class="ai-hint">已按 DWG 排模文字中的零件名称自动关联，可修改。</div>` : '')
@@ -1699,6 +1721,45 @@ function aiLayoutSelectedCodes(group) {
 }
 
 function aiBindBody() {
+  document.querySelectorAll('[data-ai-cut-use]').forEach(button => {
+    button.onclick = () => {
+      const row=aiBusinessParts.layout_rows.find(r=>r.entity_id===button.dataset.aiCutUse);
+      const dimension=row?.cut_dimension_candidates?.[Number(button.dataset.index)];
+      const region=button.closest('[data-ai-cut-region]');
+      if (!dimension || !region) return;
+      region.querySelector('[data-ai-cut-length]').value=dimension.length_mm;
+      region.querySelector('[data-ai-cut-width]').value=dimension.width_mm;
+    };
+  });
+  document.querySelectorAll('[data-ai-cut-save]').forEach(button => {
+    button.onclick = async () => {
+      const region=button.closest('[data-ai-cut-region]');
+      const part_counts=Object.fromEntries(Array.from(region.querySelectorAll('[data-ai-cut-count]')).map(i=>[i.dataset.aiCutCount,Number(i.value)]));
+      try {
+        button.disabled=true;
+        aiBusinessParts=await api(`/api/projects/${encodeURIComponent(aiPid)}/requirement/packaging-layout/${encodeURIComponent(button.dataset.aiCutSave)}/confirmation`,{
+          method:'PUT',body:{confirmed:true,business_parts_hash:aiBusinessParts.business_parts_hash,
+            cut_inputs:{sheet_mm:[Number(region.querySelector('[data-ai-cut-length]').value),Number(region.querySelector('[data-ai-cut-width]').value)],part_counts}}});
+        aiRender();
+      } catch(error) { alert(error.message); button.disabled=false; }
+    };
+  });
+  document.querySelectorAll('[data-ai-cut-preview]').forEach(button => {
+    button.onclick=async () => {
+      try {
+        const response=await fetch(`/api/projects/${encodeURIComponent(aiPid)}/requirement/packaging-layout/${encodeURIComponent(button.dataset.aiCutPreview)}/dimension-preview?index=${button.dataset.index}`);
+        if (!response.ok) throw new Error(`标注读取失败 HTTP ${response.status}`);
+        const url=URL.createObjectURL(await response.blob());
+        const dialog=document.createElement('dialog'); dialog.className='inline-card';
+        dialog.style.width='75vw';
+        dialog.innerHTML='<div class="inline-card-title">原图标注局部 · 蓝色为选中标注，灰色为实际CAD轮廓</div><img alt="原图标注" style="width:100%;max-height:70vh"><button type="button" class="inline-action">关闭</button>';
+        dialog.querySelector('img').src=url;
+        dialog.querySelector('button').onclick=()=>dialog.close();
+        dialog.addEventListener('close',()=>{URL.revokeObjectURL(url);dialog.remove();});
+        document.body.appendChild(dialog); dialog.showModal();
+      } catch(error) { alert(error.message); }
+    };
+  });
   document.querySelectorAll('[data-ai-layout-parts]').forEach(group => {
     group.onchange = () => {
       const summary = group.closest('details')?.querySelector('summary');

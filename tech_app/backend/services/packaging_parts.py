@@ -4073,6 +4073,9 @@ def business_parts_document(reference: Any, geometry: Any, *,
     from . import packaging_layout
     rows = [row for row in (authority_doc.get("parts") or []) if isinstance(row, dict)]
     evidence = geometry_evidence_of(geometry)
+    if authority_doc.get('scheme_components'):
+        evidence['components'] = copy.deepcopy(authority_doc['scheme_components'])
+        evidence['kept_component_total'] = len(evidence['components'])
     plan = bindings if isinstance(bindings, dict) else bind_geometry(rows, evidence["components"])
     by_code = {_text(item.get("business_part_code")): item
                for item in (plan.get("bindings") or []) if isinstance(item, dict)}
@@ -4109,6 +4112,7 @@ def business_parts_document(reference: Any, geometry: Any, *,
             "sequence_no": _int_or(row.get('sequence_no'), len(business_parts)+1),
             "drawing_order": copy.deepcopy(row.get('drawing_order') or {}),
             "name": _text(row.get("name")),
+            **{key:copy.deepcopy(row[key]) for key in ('scheme_id','scheme_title','scheme_scope_status') if key in row},
             "declared_sections": [dict(item) for item in (row.get("declared_sections") or [])
                                   if isinstance(item, dict)],
             # 事实档（Spec `packaging-business-truth-state-disclosure.md` §2.1）：三档判定仍在
@@ -4137,6 +4141,11 @@ def business_parts_document(reference: Any, geometry: Any, *,
         "layout_rows": packaging_layout.auto_assign_layout_rows(
             [dict(row) for row in (authority_doc.get("layout_rows") or []) if isinstance(row, dict)],business_parts),
         "scheme_labels": list(authority_doc.get("scheme_labels") or []),
+        "schemes": copy.deepcopy(authority_doc.get('schemes') or []),
+        "scheme_mode": authority_doc.get('scheme_mode') or '',
+        "selected_scheme_id": authority_doc.get('selected_scheme_id') or '',
+        "scheme_notice": authority_doc.get('scheme_notice') or '',
+        "unscoped_evidence": copy.deepcopy(authority_doc.get('unscoped_evidence') or {}),
         "business_parts": business_parts,
         "geometry_evidence": evidence,
         "stats": stats,
@@ -4721,7 +4730,7 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
     return record
 
 
-def candidate_confidence_percent(candidate: Any) -> int:
+def candidate_confidence_percent(candidate: Any, *, capped: bool = True) -> int:
     """与看板同口径的 CAD 证据排序分；未校准为正确概率，不能当尺寸证据。"""
     item = candidate if isinstance(candidate, dict) else {}
     entities = item.get("entity_ids") if isinstance(item.get("entity_ids"), list) else []
@@ -4758,7 +4767,8 @@ def candidate_confidence_percent(candidate: Any) -> int:
             diagonal = math.hypot(values[2] - values[0], values[3] - values[1])
             if diagonal > 0:
                 score += 0.15 * max(0, 1 - distance / min(diagonal, 200))
-    return int(math.floor(min(0.85, max(0, score)) * 100 + 0.5))
+    value = min(0.85,max(0,score)) if capped else max(0,score)
+    return int(math.floor(value * 100 + 0.5))
 
 
 def order_business_parts_by_regions(rows: Any) -> List[Dict[str, Any]]:
@@ -4810,7 +4820,8 @@ def auto_bind_business_candidates(doc: Any) -> Dict[str, Any]:
         if not candidates:
             continue
         ranked = sorted(enumerate(candidates), key=lambda pair: (
-            -candidate_confidence_percent(pair[1]),
+            -candidate_confidence_percent(pair[1],capped=False),
+            -int(pair[1].get('geometry_status') == 'supported'),
             _text(pair[1].get("id") or pair[1].get("candidate_id")), pair[0]))
         proposals.append((len(proposals), code, [pair[1] for pair in ranked]))
     # 按图纸阅读顺序处理归属；证据分只决定同一件内部的候选排序。
@@ -4822,8 +4833,13 @@ def auto_bind_business_candidates(doc: Any) -> Dict[str, Any]:
         score = candidate_confidence_percent(best)
         reason = "highest_candidate_has_no_cad_evidence" if score <= 0 else ""
         accepted = False
+        blocked_full = []
         if not reason:
           for best in choices:
+            members = set(best.get('entity_ids') or [])
+            if members and any(members < blocked for blocked in blocked_full):
+                reason = 'complete_candidate_claim_conflict'
+                continue
             candidate_id = _text(best.get("id") or best.get("candidate_id"))
             score = candidate_confidence_percent(best)
             if score <= 0:
@@ -4836,6 +4852,8 @@ def auto_bind_business_candidates(doc: Any) -> Dict[str, Any]:
                 # 候选已被别的件按图纸顺序认下 → 按证据分往后找下一个候选
                 # （Spec `packaging-drawing-order-circles-and-dimension-scene.md` §4）。
                 reason = str(exc)
+                if 'already_assigned' in reason:
+                    blocked_full.append(members)
                 continue
             proposed_row = next((row for row in (proposed.get("business_parts") or [])
                                  if isinstance(row, dict) and _text(row.get("business_part_code")) == code), {})
@@ -4902,8 +4920,22 @@ def confirm_business_part_size(doc: Any, code: Any, length_mm: Any, width_mm: An
     return record
 
 
+def _automatic_selected_size(value, entity_ids):
+    size=dict(value.get('estimated_size') or {})
+    size.update({k:value[k] for k in ('length_mm','width_mm') if value.get(k) is not None})
+    length,width=_num(size.get('length_mm')),_num(size.get('width_mm'))
+    box=value.get('bbox')
+    if (not length or not width) and isinstance(box,(list,tuple)) and len(box)==4:
+        try: length,width=float(box[2])-float(box[0]),float(box[3])-float(box[1])
+        except (TypeError,ValueError): return {}
+    if not entity_ids or not all(isinstance(n,(int,float)) and math.isfinite(n) and n>0 for n in (length,width)):
+        return {}
+    return {'length_mm':length,'width_mm':width,'source':'auto_selected_cad_geometry',
+            'entity_ids':list(entity_ids),'note':'按已选CAD几何自动采用，尺寸为估算，不是人工确认或标注实测'}
+
+
 def verified_business_part_input_row(row: Any, doc: Any) -> Dict[str, Any]:
-    """单件输入只用人工核对或空间关联 CAD 标注；自动候选/bbox 仍不得放行。"""
+    """已核对尺寸优先；默认自动采用已选CAD几何，保留估算来源而非伪造人工确认。"""
     result = copy.deepcopy(row) if isinstance(row, dict) else {}
     if isinstance(doc, dict) and doc.get('poc_demo') is True and (result.get('poc_inputs') or {}).get('mock') is True:
         result[REFERENCE_BLOCK_KEY] = {**business_part_reference_block(result), **result['poc_inputs'], 'size_quality':'poc_reference'}
@@ -4917,6 +4949,10 @@ def verified_business_part_input_row(row: Any, doc: Any) -> Dict[str, Any]:
         result = packaging_sections.hydrate_part(result,(doc.get('geometry_evidence') or {}).get('components') or [])
     if len(result.get('sections') or []) > 1 or result.get('sections_source') == 'manual':
         from . import packaging_sections
+        if doc.get('auto_geometry_inputs') is not False and (result.get('geometry_binding') or {}).get('status')=='bound':
+            for section in result.get('sections') or []:
+                if not section.get('confirmed_size'):
+                    section['automatic_size']=_automatic_selected_size(section,section.get('entity_ids') or [])
         result['sections'] = packaging_sections.verified_sections(result)
         reference = dict(business_part_reference_block(result))
         for key in ('length_mm', 'width_mm', 'product_size_text'):
@@ -4956,6 +4992,15 @@ def verified_business_part_input_row(row: Any, doc: Any) -> Dict[str, Any]:
             or binding.get("size_confirmed") is not True or not binding.get("component_ids")
             or (_num(confirmed.get("length_mm")) or 0) <= 0
             or (_num(confirmed.get("width_mm")) or 0) <= 0):
+        automatic=_automatic_selected_size(binding,binding.get('entity_ids') or [])
+        if (doc.get('auto_geometry_inputs') is not False and binding.get('status')=='bound'
+                and binding.get('component_ids') and automatic):
+            reference=dict(business_part_reference_block(result))
+            reference.update(length_mm=automatic['length_mm'],width_mm=automatic['width_mm'],
+                size_source='auto_selected_cad_geometry',size_quality='auto_geometry_reference')
+            result[REFERENCE_BLOCK_KEY],result[LEGACY_REFERENCE_BLOCK_KEY]=reference,dict(reference)
+            result['automatic_size']=automatic
+            return result
         raise ValueError("drawing_part_size_not_confirmed")
     reference = dict(business_part_reference_block(result))
     reference["length_mm"] = _num(confirmed["length_mm"])
@@ -5087,6 +5132,8 @@ def business_size_unconfirmed_reason(row: Any) -> str:
     reference = business_part_reference_block(record)
     quality = _text(reference.get("size_quality"))
     if quality == 'poc_reference' and (record.get('poc_inputs') or {}).get('mock') is True:
+        return ''
+    if quality == 'auto_geometry_reference' and (record.get('automatic_size') or {}).get('source')=='auto_selected_cad_geometry':
         return ''
     if not quality or quality in BUSINESS_SIZE_CONFIRMED_QUALITIES:
         return ""

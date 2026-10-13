@@ -1,5 +1,8 @@
 # 圆盘盒双方案、排版排模与多片部件（2026-09-30）
 
+2026-10-12 口径更新：整图多方案拒绝及必须手动拆 DWG 的要求由
+`packaging-multi-scheme-parse-and-process-entry.md` 取代。整图可解析，方案隔离、排模非零件、禁止混算保留；旧分图工具仅作可选工具。
+
 状态：Spec + 红测（已实现）；不代表已上线、已取得权威成本或正式报价。
 红测：`tests/test_packaging_round_box_schemes_layout_red.py`
 

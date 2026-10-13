@@ -7489,6 +7489,7 @@ def _business_parts_body(pid: str, doc: Any = None) -> dict:
     # 文档级「对照资料」块（Spec `packaging-customer-workbook-is-a-reference-not-an-input.md` §2.4）：
     # 新键 `reference`；旧键仍照原样透传（老前端还认它）。名字本身按 §2.3 用拼接写出来。
     disclosure = packaging_parts.business_part_reference_block(record)
+    from .services import packaging_layout
     rows = list(record.get('business_parts') or [])
     if record.get('derived_from_drawing'):
         from .services import packaging_sections
@@ -7499,8 +7500,9 @@ def _business_parts_body(pid: str, doc: Any = None) -> dict:
             "business_parts_id": record.get("business_parts_id") or "",
             "business_parts_hash": record.get("business_parts_hash") or "",
             "business_parts": rows,
-            "layout_rows": list(record.get("layout_rows") or []),
+            "layout_rows": packaging_layout.auto_assign_layout_rows(record.get('layout_rows') or [],rows),
             "scheme_labels": list(record.get("scheme_labels") or []),
+            **{key:record.get(key) for key in ('schemes','scheme_mode','selected_scheme_id','scheme_notice','unscoped_evidence')},
             "unassigned_candidates": [dict(item) for item in (record.get("unassigned_candidates") or [])
                                       if isinstance(item, dict)],
             "layout_frame_total": int(record.get("layout_frame_total") or 0),
@@ -7692,6 +7694,28 @@ def read_packaging_business_parts(pid: str, user: dict = Depends(current_user)):
     return _business_parts_body(pid)
 
 
+class PackagingSchemeSelection(BaseModel):
+    scheme_id: str
+    business_parts_hash: str
+
+
+@app.post(PACKAGING_BUSINESS_PARTS_READ_PATH + '/scheme')
+def select_packaging_scheme(pid: str, body: PackagingSchemeSelection,
+                            user: dict = Depends(current_user)):
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, '需要工艺经理、总监或管理员权限')
+    _workflow_project(pid)
+    from .services import packaging_layout
+    doc = packaging_parts.load_business_parts(pid)
+    if not doc or body.business_parts_hash != doc.get('business_parts_hash'):
+        raise HTTPException(409, '业务零件清单已变化，请刷新后重新选择方案')
+    try:
+        updated = packaging_layout.select_scheme(doc, body.scheme_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    updated['scheme_selection_source'] = {'actor':user.get('username'), 'at':now_cst_str()}
+    return _business_parts_body(pid, packaging_parts.save_business_parts(pid, updated))
+
+
 #: 采纳 2.1 解析出的「待确认」字段候选（Spec
 #: `packaging-2-1-candidate-fields-into-downstream.md` §2.4）。路径写成具名常量。
 PACKAGING_FIELD_CANDIDATE_ADOPT_PATH = (
@@ -7718,6 +7742,22 @@ def adopt_packaging_field_candidates(pid: str, body: PackagingFieldCandidateAdop
         pid, body.fields, actor=str(user.get("username") or "system"), note=body.note)
 
 
+@app.get('/api/projects/{pid}/requirement/packaging-layout/{entity_id}/dimension-preview')
+def packaging_layout_dimension_preview(pid: str, entity_id: str, index: int = 0,
+                                       user: dict = Depends(current_user)):
+    _workflow_project(pid)
+    from .services import packaging_layout
+    doc = packaging_parts.load_business_parts(pid) or {}
+    row = next((r for r in doc.get('layout_rows') or [] if r.get('entity_id')==entity_id),{})
+    candidates=row.get('cut_dimension_candidates') or []
+    if index<0 or index>=len(candidates): raise HTTPException(404,'尺寸标注候选不存在')
+    try:
+        content=packaging_layout.cut_dimension_svg(cad_ir.load_ir(pid) or {},candidates[index])
+    except ValueError as exc:
+        raise HTTPException(409,str(exc)) from exc
+    return Response(content=content,media_type='image/svg+xml')
+
+
 @app.put(PACKAGING_LAYOUT_CONFIRM_PATH)
 def confirm_packaging_layout(pid: str, entity_id: str, body: dict = Body(...),
                              user: dict = Depends(current_user)):
@@ -7732,6 +7772,10 @@ def confirm_packaging_layout(pid: str, entity_id: str, body: dict = Body(...),
         raise HTTPException(409, "packaging_business_parts_missing")
     from .services import packaging_layout
     try:
+        if 'cut_inputs' in body:
+            if body.get('business_parts_hash') != doc.get('business_parts_hash'):
+                raise HTTPException(409,'业务清单已变化，请刷新后重试')
+            doc = packaging_layout.set_cut_inputs(doc,entity_id,body['cut_inputs'],str(user.get('username') or ''))
         if "part_codes" in body:
             if not isinstance(body["part_codes"], list) or any(
                     not isinstance(code, str) for code in body["part_codes"]):
@@ -9376,7 +9420,7 @@ def _packaging_business_part_authority_cost(pid: str, code: str, quantity: int,
         row = packaging_parts.verified_business_part_input_row(loaded["row"], doc)
     except ValueError as exc:
         raise HTTPException(409, {"code": str(exc),
-                                  "message": "图纸推导件尚未人工确认几何归属与尺寸，不能按候选尺寸算成本。"}) from exc
+                                  "message": "当前CAD归属或有效尺寸缺失，请重新解析或选择完整候选后算成本。"}) from exc
     requirement = store.load_requirement(pid) or {}
     qty = max(1, int(quantity or 1))
     inputs = packaging_parts.business_cost_inputs(row, requirement=requirement, quantity=qty)
@@ -9466,7 +9510,12 @@ def get_packaging_business_part_cost(pid: str, code: str,
     _workflow_project(pid)
     _packaging_business_part_row(pid, code)
     from .services import packaging_cost_ledger
-    return packaging_cost_ledger.part_view(pid, code)
+    try:
+        return packaging_cost_ledger.part_view(pid, code)
+    except packaging_cost.CostError as exc:
+        raise HTTPException(exc.status_code, _packaging_error_detail(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(404, {'code':str(exc),'message':'当前成本账没有此业务零件'}) from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -9511,7 +9560,7 @@ async def packaging_business_part_process(
         row = packaging_parts.verified_business_part_input_row(loaded["row"], doc)
     except ValueError as exc:
         raise HTTPException(409, {"code": str(exc),
-                                  "message": "图纸推导件尚未人工确认几何归属与尺寸，不能按候选尺寸排工艺。"}) from exc
+                                  "message": "当前CAD归属或有效尺寸缺失，请重新解析或选择完整候选后排工艺。"}) from exc
     inputs = packaging_parts.business_process_inputs(row)
     if not inputs["ok"]:
         raise _packaging_business_part_reject(inputs)
