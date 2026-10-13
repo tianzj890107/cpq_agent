@@ -79,9 +79,8 @@
   };
   // 仅包装行业改变第三阶段的业务显示；view key / 后端 stage id 保持不变。
   const PACKAGING_PROCESS_TABS = [
-    { key: 'drawings', label: '方案与部件', no: '3.1', stage: 'process', view: 'drawings' },
-    { key: 'params', label: '排版排模', no: '3.2', stage: 'process', view: 'params' }, // 3.2 排版排模
-    { key: 'process', label: '后道加工与组装工艺', no: '3.3', stage: 'process', view: 'process' }, // 3.3 后道加工与组装工艺
+    { key: 'params', label: '排版排模', no: '3.1', stage: 'process', view: 'params' },
+    { key: 'process', label: '组装工艺', no: '3.2', stage: 'process', view: 'process' },
   ];
   const PACKAGING_COST_TABS = CHILD_TAB_PROXY.cost.tabs.map(tab =>
     tab.key === 'assembly' ? {...tab, label:'整单成本'} : tab);
@@ -343,7 +342,7 @@
       : state.industry === 'packaging' && state.stage === 'cost'
         ? { tabs: PACKAGING_COST_TABS } : originalProxy;
     const canNav = Boolean(state.project || state.stage === 'requirement-create');
-    if (title) title.textContent = major.title || major.label;
+    if (title) title.textContent = state.industry==='packaging' && major.no==='3' ? '排模与组装' : major.title || major.label;
     if (header) header.hidden = false;
     if (!substeps.length && !proxy) {
       bar.hidden = true;
@@ -452,6 +451,7 @@
     state.industry = String((requirement.data && requirement.data.industry)
       || (data.meta && data.meta.industry) || '');
     entry.industry = state.industry;
+    syncAgentStageContext();
     renderContextSubsteps();
     const projectName = String(
       (data.meta && data.meta.project_name)
@@ -794,7 +794,10 @@
   /* 阶段上下文只写进父页唯一的 #techChatPane：不克隆子页面 DOM、不清空历史会话、
      草稿或项目绑定；接口缺失、iframe 未加载或抛错时安全退出，流程切换照常。 */
   function stageAgentContext() {
-    const context = STAGE_AGENT_CONTEXT[state.stage];
+    const baseContext = STAGE_AGENT_CONTEXT[state.stage];
+    const context = state.industry==='packaging' && state.stage==='process'
+      ? {label:'排模与组装',pageContext:'3 排模与组装',hint:'3.1处理排模、开料和用量；3.2只生成零件之间新增的组装工序并绑定零件，不重复制造工艺。成本在第4阶段计算。'}
+      : baseContext;
     if (!context) return null;
     // 只返回模型请求需要的语义上下文（stage / project / pageContext 等），
     // 不再构造任何供可见卡片渲染的动作；用户操作走统一操作栏与看板桥。

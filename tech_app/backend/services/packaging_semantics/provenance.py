@@ -89,6 +89,22 @@ def _is_user_confirmed(previous: Any, source: Any, value: Any = None) -> bool:
     return _is_manual_source(previous, source) and _has_value(value)
 
 
+def engineering_inputs(project_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Read current CAD-confirmed engineering fields only into missing downstream inputs."""
+    if data.get('industry') != 'packaging':return dict(data)
+    backend=requirement_service.store._meta()
+    record=backend.get_doc(project_id,'packaging_engineering_fields') or {}
+    if not record or record.get('requirement_revision') != data.get('revision'):return dict(data)
+    anchor=backend.get_doc(project_id,'packaging_flow_anchor') or {}
+    if not record.get('ir_hash') or record.get('ir_hash') != anchor.get('ir_hash'):return dict(data)
+    out=dict(data);sources=dict(data.get('field_sources') or {});evidence=dict(data.get('field_provenance') or {})
+    for key,row in (record.get('fields') or {}).items():
+        if isinstance(row,dict) and row.get('status')=='confirmed' and row.get('value') not in (None,'') and out.get(key) in (None,''):
+            out[key]=row['value'];sources[key]='cad_engineering_evidence';evidence[key]=dict(row)
+    out['field_sources']=sources;out['field_provenance']=evidence
+    return out
+
+
 def apply_to_requirement(project_id: str, semantics: Dict[str, Any], *,
                          accept: Iterable[str] = (), author: str = "system") -> Dict[str, Any]:
     """把语义文档里的字段候选增量写入需求看板，并返回本次写入的报告。"""

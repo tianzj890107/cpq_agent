@@ -4,6 +4,17 @@ import json
 
 from .packaging_part_route_match import is_external_part
 
+BUSINESS_PART_PROCESS_SCOPE = 'business_part/1'
+
+
+def is_whole_part_process(record):
+    """Legacy unsplit plans remain reusable; portion plans are not whole-part processes."""
+    scope = record.get('process_scope')
+    return (scope in (None, '', BUSINESS_PART_PROCESS_SCOPE)
+            and not record.get('sections')
+            and not any(s.get('section_id') or s.get('section_name')
+                        for s in (record.get('plan') or {}).get('steps') or []))
+
 ALIASES = {
     'UV印刷':'PKG-C-PRINT-UV',
     '覆膜':'PKG-C-LAMINATION','覆哑膜':'PKG-C-LAMINATION',
@@ -32,9 +43,10 @@ def fingerprint(records):
 def expand(records):
     steps=[]
     for record in records:
-        sections=record.get('sections') or []
-        groups=sections or [{'plan':record.get('plan') or {},'section_id':'',
-                             'section_name':'','quantity':record.get('usage_qty',1)}]
+        if not is_whole_part_process(record):
+            raise ValueError('process_scope_changed')
+        groups=[{'plan':record.get('plan') or {},'section_id':'',
+                 'section_name':'','quantity':record.get('usage_qty',1)}]
         for group in groups:
             for source in (group.get('plan') or {}).get('steps') or []:
                 name=str(source.get('name') or source.get('step_name') or '')
@@ -82,6 +94,9 @@ def collect(project_id):
         record=packaging_parts.load_part_process(project_id,code) or {}
         has_saved_result |= bool(record.get('plan'))
         if not (record.get('plan') or {}).get('steps'):
+            missing.append(code)
+            continue
+        if not is_whole_part_process(record):
             missing.append(code)
             continue
         # Retain historical results, but do not use the old mechanical fallback for packaging billing.

@@ -1068,6 +1068,11 @@ def confirm_process(project_id: str, user: Optional[dict] = None) -> Integration
     plan = load_plan(project_id)
     if plan.process is None:
         raise IntegrationFlowError("还没有组装工艺结果，无法确认")
+    if ((store.load_requirement(project_id) or {}).get('data') or {}).get('industry')=='packaging':
+        from . import packaging_assembly
+        doc,records=packaging_assembly.active_inputs(project_id)
+        if not packaging_assembly.valid(plan,doc,records):
+            raise IntegrationFlowError('请先生成当前方案绑定零件的新增组装工艺')
     plan.process_confirmed = True
     plan.process_confirmed_by = display
     plan.process_confirmed_at = now_cst_str()

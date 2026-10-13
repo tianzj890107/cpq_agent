@@ -2081,6 +2081,7 @@ function packagingCadLayerColour(layer, role, aciColor, layerAciColor) {
 
 let currentPackagingCadPlan = null;
 let currentPackagingCadPlanBox = null;
+let packagingCadPlanReadSequence = 0;
 let currentPackagingBusinessPartCode = "";
 let currentPackagingUnassignedCandidateId = "";
 // 点在证据之前的这一件（Spec `packaging-2-1-result-parts-and-shape-only-pane.md` §2.2）：
@@ -2815,6 +2816,12 @@ function notePackagingPartPanel(message) {
 async function loadPackagingCadPlan() {
   if (!packagingCadPlanApplies()) return null;
   const loadingProject = currentProject;
+  const readSequence = ++packagingCadPlanReadSequence;
+  const isCurrentRead = () => currentProject === loadingProject
+    && readSequence === packagingCadPlanReadSequence && packagingCadPlanApplies();
+  // 新解析不能继续拿上一份空场景或旧坐标画零件；选中件保留，坐标返回后就地重画。
+  currentPackagingCadPlan = null;
+  currentPackagingCadPlanBox = null;
   const host = packagingCadPlanViewer();
   if (host) host.innerHTML = `<div class="view-3d-placeholder">正在读取 CAD 平面图…</div>`;
   const problemDoc = (status) => ({
@@ -2826,14 +2833,16 @@ async function loadPackagingCadPlan() {
   try {
     res = await fetch(packagingCadSceneEndpoint());
   } catch (error) {
+    if (!isCurrentRead()) return null;
     return renderPackagingCadPlan(problemDoc(0));
   }
+  if (!isCurrentRead()) return null;
   if (Number(res.status) === 404) {
     return renderPackagingCadPlan({geometry_evidence: {components: []}, business_parts: [],
                                    business_parts_gap: {}, built: false});
   }
   const payload = await res.json().catch(() => ({}));
-  if(currentProject !== loadingProject) return null;
+  if (!isCurrentRead()) return null;
   if (!res.ok) return renderPackagingCadPlan(problemDoc(res.status));
   return renderPackagingCadPlan(payload);
 }
@@ -3027,6 +3036,9 @@ function packagingPartDetailReadProblemText(problem) {
 // 纯函数：无 DOM、无 `fetch(`、无 `localStorage`，可被 node 直接执行。
 function packagingPartBusinessIdentityNote(payload) {
   const data = (payload && typeof payload === "object") ? payload : {};
+  if (data.process_scope_changed === true) {
+    return {text: "旧工艺按组成分别生成，请重新生成整件工艺；历史结果保留。", level: "stale"};
+  }
   const version = String(data.business_parts_id == null ? "" : data.business_parts_id).trim();
   if (!version) return {text: "", level: ""};
   if (data.business_stale === true) {
@@ -3071,6 +3083,17 @@ let currentDrawingFlowState = null;
 let packagingPartsPage = { offset: 0, limit: 64, kind: "", role: "",
                            outline_status: "", min_area_mm2: "" };
 let packagingPartsShown = [];
+let packagingPartsReadSequence = 0;
+
+// 同一项目的进入页读取与解析后读取可能重叠；只允许最新序号提交到页面状态。
+function beginPackagingPartsRead(projectId) {
+  return { project_id: String(projectId || ""), sequence: ++packagingPartsReadSequence };
+}
+
+function packagingPartsReadIsCurrent(ticket) {
+  return Boolean(ticket && ticket.sequence === packagingPartsReadSequence
+    && ticket.project_id === String(currentProject || ""));
+}
 
 // 当前页的行（`items`）：老后端只给 `parts` 时退回它，但绝不许把整份文档当页用。
 // 业务部件行（Spec `packaging-business-parts-and-cad-plan-view.md` §2 第 1/4/6 条）：
@@ -4454,9 +4477,11 @@ async function loadPackagingBusinessProcessSummary(wanted) {
     if (project !== currentProject || $('packagingSavedProcess') !== host) return;
     const steps = (data.plan || {}).steps || [];
     if (data.business_stale || data.stale) {
-      host.innerHTML = '<div>已保存工艺与当前零件输入不一致，待重算；旧结果保留。</div>'
+      host.innerHTML = '<div>' + (data.process_scope_changed
+          ? '旧工艺按组成分别生成，待重新生成整件工艺；历史结果保留。'
+          : '已保存工艺与当前零件输入不一致，待重算；旧结果保留。') + '</div>'
         + '<details><summary>查看旧版工艺（仅供参考）</summary>'
-        + steps.map(step => '<div>' + esc(String(step.name || '未命名工序')) + '</div>').join('')
+        + (data.historical_plan?.steps || steps).map(step => '<div>' + esc(String(step.name || '未命名工序')) + '</div>').join('')
         + '</details><button type="button" class="part-row-action" id="packagingSavedProcessOpen">打开工艺面板并重算</button>';
       $('packagingSavedProcessOpen').addEventListener('click', () => packagingBusinessPartProcessByAuthority(wanted));
     } else if (!steps.length) {
@@ -4852,9 +4877,11 @@ function packagingPartsQueryString(page, offset) {
   return query.toString();
 }
 
-async function fetchPackagingParts() {
+async function fetchPackagingParts(readTicket) {
   if (!currentProject) return null;
   const loadingProject = currentProject;
+  const ticket = readTicket || beginPackagingPartsRead(loadingProject);
+  if (!packagingPartsReadIsCurrent(ticket)) return null;
   // 读失败（非 404）时的空文档形状（Spec `packaging-parts-read-failure-empty-state.md` §2.1）：
   // 左栏空态据此说"读不到"而不是"还没生成，请先跑一键解析"。`status` 取 HTTP 状态码，
   // 网络异常（拿不到状态码）给 `0`。
@@ -4868,19 +4895,22 @@ async function fetchPackagingParts() {
   try {
     res = await fetch(url);
   } catch (error) {
+    if (!packagingPartsReadIsCurrent(ticket)) return null;
     // 网络异常：没有状态码（给 0），与 404 / 5xx 都不同形。
     packagingPartsShown = [];
     return readProblemDoc(0);
   }
+  if (!packagingPartsReadIsCurrent(ticket)) return null;
   // 404 = 端点未上线（那条既有路径逐字不变：仍返回 null，走空态文案，不谎报"解析失败"）。
   if (Number(res.status) === 404) return null;
   if (!res.ok) {
+    if (!packagingPartsReadIsCurrent(ticket)) return null;
     // 其余非 2xx（含 5xx）= 这一趟读不到：说清状态码，别让用户以为"还没生成"。
     packagingPartsShown = [];
     return readProblemDoc(res.status);
   }
   const doc = await res.json().catch(() => null);
-  if(currentProject !== loadingProject) return null;
+  if (!packagingPartsReadIsCurrent(ticket) || currentProject !== loadingProject) return null;
   packagingPartsShown = packagingPartsItems(doc);   // 换页一律从第一页重新累加
   return doc;
 }
@@ -4889,12 +4919,15 @@ async function fetchPackagingParts() {
 async function loadMorePackagingParts() {
   const doc = currentPackagingParts || {};
   if (!currentProject || !doc.has_more) return null;
+  const loadingProject = currentProject;
+  const readTicket = beginPackagingPartsRead(loadingProject);
   const offset = packagingPartsShown.length;
   // 这一页读不出来时交给渲染的位置（Spec `packaging-parts-pagination-read-failure.md` §2.2）：
   // 老路子三条失败都折成 `return null`，调用点又丢掉返回值 → 点一下什么都没发生。现在把
   // `page_problem` 写进文档并重画左栏；已列出的零件一件不动（`packagingPartsShown` 不碰），
   // 返回值契约不变（仍是 `null`）。文案一律由纯函数给，分页里不另写一套。
   const failPage = (status) => {
+    if (!packagingPartsReadIsCurrent(readTicket)) return null;
     const problem = {code: "parts_page_unavailable", status: Number(status) || 0, message: ""};
     problem.message = packagingPartsPageReadProblemText(problem);
     currentPackagingParts = Object.assign({}, doc, {page_problem: problem});
@@ -4905,8 +4938,10 @@ async function loadMorePackagingParts() {
     const url = `${API}/api/projects/${currentProject}/requirement/packaging-parts`
       + `?${packagingPartsQueryString(packagingPartsPage, offset)}`;
     const res = await fetch(url);
+    if (!packagingPartsReadIsCurrent(readTicket)) return null;
     if (!res.ok) return failPage(res.status);
     const page = await res.json().catch(() => null);
+    if (!packagingPartsReadIsCurrent(readTicket)) return null;
     if (!page) return failPage(res.status);
     const seen = {};
     packagingPartsShown.forEach(row => { seen[String(row.part_code || "")] = true; });
@@ -4923,8 +4958,10 @@ async function loadMorePackagingParts() {
     return page;
   } catch (error) { return failPage(0); }
 }
-async function fetchPackagingBusinessParts() {
+async function fetchPackagingBusinessParts(readTicket) {
   if (!currentProject) return null;
+  const ticket = readTicket || beginPackagingPartsRead(currentProject);
+  if (!packagingPartsReadIsCurrent(ticket)) return null;
   // 读失败（非 404）时的空文档形状（Spec `packaging-business-parts-read-failure-note.md` §2.1）：
   // 面板提示据此说"读不到"而不是"已识别的几何区域还不是业务部件清单"。`status` 取 HTTP 状态码，
   // 网络异常（拿不到状态码）给 `0`。
@@ -4934,11 +4971,14 @@ async function fetchPackagingBusinessParts() {
   try {
     const res = await fetch(`${API}/api/projects/${currentProject}/requirement/`
       + `packaging-business-parts`);
+    if (!packagingPartsReadIsCurrent(ticket)) return null;
     // 404 = 端点未上线（那条既有路径逐字不变：仍返回 null，退回几何分量并说明原因）。
     if (Number(res.status) === 404) return null;
     if (!res.ok) return readProblemDoc(res.status);
-    return await res.json().catch(() => null);
+    const doc = await res.json().catch(() => null);
+    return packagingPartsReadIsCurrent(ticket) ? doc : null;
   } catch (error) {
+    if (!packagingPartsReadIsCurrent(ticket)) return null;
     // 网络异常：没有状态码（给 0）。
     return readProblemDoc(0);
   }
@@ -4949,9 +4989,11 @@ async function fetchPackagingBusinessParts() {
 // 附件 / 知识库 / 金标当输入（这件事只由服务端做，端点只吃 DWG 证据，且同一份图纸幂等）。
 // 缺零件文档时**不**补（那属于"还没有零件"，不是"缺业务部件清单"）；拿不到就回 null，
 // 左栏照旧走 `unavailable` 那条空态，不谎报。
-async function ensurePackagingBusinessParts() {
+async function ensurePackagingBusinessParts(readTicket) {
   if (!currentProject) return null;
   const loadingProject = currentProject;
+  const ticket = readTicket || beginPackagingPartsRead(loadingProject);
+  if (!packagingPartsReadIsCurrent(ticket)) return null;
   if (packagingBusinessPartRows(currentPackagingBusinessParts).length) return null;
   const partsDoc = currentPackagingParts || {};
   const partTotal = Number((partsDoc.stats || {}).part_total)
@@ -4963,9 +5005,10 @@ async function ensurePackagingBusinessParts() {
       headers: { "Content-Type": "application/json" },
       body: "{}",
     });
+    if (!packagingPartsReadIsCurrent(ticket)) return null;
     if (!res.ok) return null;
     const payload = await res.json().catch(() => null);
-    if (!payload || currentProject !== loadingProject) return null;
+    if (!payload || !packagingPartsReadIsCurrent(ticket) || currentProject !== loadingProject) return null;
     if (packagingBusinessPartRows(payload).length) {
       currentPackagingBusinessParts = payload;
       await loadPackagingCadPlan().catch(() => null);
@@ -4976,9 +5019,11 @@ async function ensurePackagingBusinessParts() {
 
 async function refreshPackagingParts() {
   const loadingProject = currentProject;
+  const readTicket = beginPackagingPartsRead(loadingProject);
+  const isCurrentRead = () => packagingPartsReadIsCurrent(readTicket);
   // 阶段钩子是纯展示：读回本身不许因为画不出阶段标记而失败（Spec C5）。
   const stage = (name, state) => {
-    if(currentProject !== loadingProject) return;
+    if (!isCurrentRead() || currentProject !== loadingProject) return;
     try { setLoadStage(name, state); } catch (error) { /* 纯展示 */ }
   };
   stage("geometry_parts", "loading");
@@ -4986,19 +5031,19 @@ async function refreshPackagingParts() {
   // 几何零件文档与业务部件清单**并发**开始读（Spec C5）：一段慢不许拖住另一段先出来；
   // 读不到只把自己那一段记成 failed（左栏退回几何分量并说明原因，不假装有对照表）。
   const [parts, business] = await Promise.all([
-    fetchPackagingParts().then(
-      value => { if(currentProject===loadingProject){currentPackagingParts=value;stage("geometry_parts", "ready");renderTree(currentIR || {});} return value; },
-      error => { stage("geometry_parts", "failed"); return null; }),
-    fetchPackagingBusinessParts().then(
-      value => { if(currentProject===loadingProject){currentPackagingBusinessParts=value;stage("business_parts", "ready");renderTree(currentIR || {});} return value; },
-      error => { stage("business_parts", "failed"); return null; }),
+    fetchPackagingParts(readTicket).then(
+      value => { if(isCurrentRead() && currentProject===loadingProject){currentPackagingParts=value;stage("geometry_parts", "ready");renderTree(currentIR || {});} return value; },
+      error => { if(isCurrentRead())stage("geometry_parts", "failed"); return null; }),
+    fetchPackagingBusinessParts(readTicket).then(
+      value => { if(isCurrentRead() && currentProject===loadingProject){currentPackagingBusinessParts=value;stage("business_parts", "ready");renderTree(currentIR || {});} return value; },
+      error => { if(isCurrentRead())stage("business_parts", "failed"); return null; }),
   ]);
-  if (currentProject !== loadingProject) return null;
+  if (!isCurrentRead() || currentProject !== loadingProject) return null;
   currentPackagingParts = parts;
   currentPackagingBusinessParts = business;
   renderTree(currentIR || {});
   const supplement = async () => {
-  if (currentProject !== loadingProject) return;
+  if (!isCurrentRead() || currentProject !== loadingProject) return;
   // 旧图纸项目曾只保存候选列表：有写权限时显式 POST 一次幂等补归属，GET 保持纯读。
   const autoRows = packagingBusinessPartRows(currentPackagingBusinessParts);
   const autoAllowed = !authEnabled || ["process_manager", "process_director", "admin"]
@@ -5014,19 +5059,19 @@ async function refreshPackagingParts() {
       const res = await fetch(packagingAutoBindCandidatesUrl(), {method: "POST"});
       if (res.ok) {
         const updated = await res.json();
-        if(currentProject !== loadingProject) return;
+        if(!isCurrentRead() || currentProject !== loadingProject) return;
         currentPackagingBusinessParts = updated;
         packagingAutoBindAttempted.add(`${currentProject || ""}:${String(currentPackagingBusinessParts.business_parts_id || "")}`);
       } else packagingAutoBindAttempted.delete(autoKey);
     } catch (error) { packagingAutoBindAttempted.delete(autoKey); }
   }
-  if(currentProject !== loadingProject) return;
+  if(!isCurrentRead() || currentProject !== loadingProject) return;
   // 有零件、没有业务部件清单 → 先按图纸补推一次（Spec §2.4b C6）：老项目打开 2.1 看到的是那
   // 二十多件真件名，而不是几百行几何占位名。补不出来时左栏照旧走 `unavailable` 空态。
   if (!packagingBusinessPartRows(currentPackagingBusinessParts).length) {
-    await ensurePackagingBusinessParts().catch(() => null);
+    await ensurePackagingBusinessParts(readTicket).catch(() => null);
   }
-  if(currentProject !== loadingProject) return;
+  if(!isCurrentRead() || currentProject !== loadingProject) return;
   renderTree(currentIR || {});
   // BOM 业务角色的人工映射入口（Spec packaging-part-role-manual-mapping.md §4.5）：
   // 零件文档出来了就把「角色未映射 n 行」一并读出来 —— 不读，用户看不到还有几行没映射。
@@ -5035,14 +5080,20 @@ async function refreshPackagingParts() {
   // BOM 体上的 `role_unbound_templates_unavailable` 与角色映射面板的 `templates_unavailable`
   // 说的是同一件事，两处都要说，不能一个是空白下拉、另一个才解释。
   await refreshPackagingBomRoleUnboundNote().catch(() => null);
+  if(!isCurrentRead() || currentProject !== loadingProject) return;
   await roles;
   };
   // 已保存零件先返回并上屏；旧项目兼容补算不属于页面就绪的条件。
   const pendingSupplements = refreshPackagingParts.pendingSupplements || (refreshPackagingParts.pendingSupplements = new Map());
-  if(!pendingSupplements.has(loadingProject)) {
-    const pending = supplement().catch(error => { if(currentProject===loadingProject) status('零件已读取；后台补充失败：'+error.message,false); })
-      .finally(()=>pendingSupplements.delete(loadingProject));
-    pendingSupplements.set(loadingProject,pending);
+  const previous = pendingSupplements.get(loadingProject);
+  if (!previous || previous.sequence !== readTicket.sequence) {
+    const entry = {sequence: readTicket.sequence, promise: null};
+    entry.promise = Promise.resolve(previous && previous.promise)
+      .catch(() => null)
+      .then(() => isCurrentRead() ? supplement() : null)
+      .catch(error => { if(isCurrentRead()) status('零件已读取；后台补充失败：'+error.message,false); })
+      .finally(() => { if (pendingSupplements.get(loadingProject) === entry) pendingSupplements.delete(loadingProject); });
+    pendingSupplements.set(loadingProject, entry);
   }
   return currentPackagingParts;
 }
@@ -5276,8 +5327,26 @@ function packagingPartsRefreshLine(geometryDoc, businessDoc) {
 }
 
 async function refreshPackagingPartsAfterDrawingFlow(flowState) {
+  const loadingProject = currentProject;
   if (flowState) currentDrawingFlowState = flowState;
-  const doc = await refreshPackagingParts().catch(() => null);
+  let businessPartsAtSceneRead = null;
+  // 清单与画图坐标是两份独立文档。已有业务件时不会走补推导，仍须刷新解析后的 CAD 场景。
+  const [doc] = await Promise.all([
+    refreshPackagingParts().catch(() => null),
+    loadPackagingCadPlan().catch(() => null).then(value => {
+      businessPartsAtSceneRead = currentPackagingBusinessParts;
+      return value;
+    }),
+  ]);
+  if (currentProject !== loadingProject) return null;
+  // 场景可能先于新业务件返回；两份都读回后，用当前件的最新归属再画一次。
+  // 读失败/空场景保留其原因文案，不用“正在读取”覆盖已返回的失败状态。
+  if (businessPartsAtSceneRead !== currentPackagingBusinessParts
+      && currentPackagingCadPlan && !currentPackagingCadPlan.read_problem
+      && ((currentPackagingCadPlan.cad_scene?.entities || []).length
+        || (currentPackagingCadPlan.geometry_evidence?.components || []).length)) {
+    repaintSelectedPackagingShape(pendingPackagingShapePartCode || currentPackagingBusinessPartCode);
+  }
   // 业务部件文档在这一步是新鲜的（`## 480` 的就地补推导保证），所以这一句按**业务账**报数；
   // 业务账读不到时退到几何口径并说清"还没推导出业务部件"，不许硬编一个数字（Spec §2.2）。
   const line = packagingPartsRefreshLine(doc, currentPackagingBusinessParts);
@@ -5982,7 +6051,11 @@ async function openProject(pid) {
       // 两段各自的阶段状态跟着走（Spec C5）：单段读失败只让自己那一段 failed。
       loadDrawingFlowPanel().then(() => { if(currentProject===pid) markStage("flow", "ready"); })
         .catch(() => { if(currentProject===pid) markStage("flow", "failed"); });
-      refreshPackagingParts().catch(() => null);
+      refreshPackagingParts().then(async()=>{
+        if(currentProject!==pid)return;
+        const code=sessionStorage.getItem('cpq:packaging-focus:'+pid);
+        if(code){sessionStorage.removeItem('cpq:packaging-focus:'+pid);await selectPackagingPart(code);}
+      }).catch(() => null);
     } else {
       // 非图纸项目没有这三段要读（视觉链路 / 3D 导入）：如实记成就绪，不许挂着"读取中"。
       ["flow", "geometry_parts", "business_parts"].forEach(name => { markStage(name, "ready"); });

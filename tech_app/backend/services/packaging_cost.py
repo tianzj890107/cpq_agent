@@ -855,7 +855,14 @@ def _industry_of(data: dict) -> str:
 def _requirement_data(project_id: str) -> dict:
     doc = store.load_requirement(project_id) or {}
     data = doc.get("data")
-    return dict(data) if isinstance(data, dict) else {}
+    data=dict(data) if isinstance(data,dict) else {}
+    if data.get('industry')=='packaging':
+        from . import integration, packaging_workspace, requirement_service
+        data=requirement_service.resolved_packaging_order_data(data)
+        from .packaging_semantics.provenance import engineering_inputs
+        data=engineering_inputs(project_id,data)
+        data=packaging_workspace.cut_data(data,integration.load_plan(project_id))
+    return data
 
 
 def _resolve_requirement_no(project_id: str, requirement_no: str) -> str:
@@ -1822,7 +1829,7 @@ def _item(seq: int, category: str, *, part_code: Optional[str] = None,
 def _line_to_item(seq: int, line: dict, *, source_ref: str, source: str = "formula",
                   expression: str = "") -> dict:
     inputs = dict(line.get("inputs") or {})
-    for key in ('section_id','usage_qty','parameter_source'):
+    for key in ('section_id','usage_qty','parameter_source','scope','part_codes'):
         if key in line and (key == 'parameter_source' or line.get('part_code')):
             inputs[key] = line[key]
     item = _item(seq, line.get("cost_category") or "", part_code=line.get("part_code"),
@@ -2230,6 +2237,9 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     if not route or _text(route.get("status")) != "confirmed":
         raise _fatal("route_not_confirmed", "工艺路线尚未确认，人工费无从取工时（Spec §2.13）")
     steps = [dict(row) for row in da_repo.load_packaging_route_steps(project_id, req_no)]
+    from . import packaging_assembly
+    assembly_drift=packaging_assembly.route_drift(project_id,steps)
+    if assembly_drift:raise _fatal(assembly_drift,'新增组装工序或关联零件已变化，请重算路线后再测算')
     from . import packaging_process_instances
     try:
         route_sources = json.loads(route.get('source_versions_json') or '{}')
@@ -2498,6 +2508,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                 "min_charge_applied": bool(result.get("min_charge_applied")),
                 "source": "formula"}
         line.update({'part_code':step.get('part_code'), 'section_id':step.get('section_id'),
+                     'scope':step.get('scope'),'part_codes':step.get('part_codes') or [],
                      'source_ref':'route_step:%s' % step.get('step_no'),
                      'parameter_source':inputs_source, 'usage_qty':usage})
         if line['amount'] is not None:
@@ -2572,6 +2583,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                 "source_ref": "step:%s" % step_no, "quantity_basis": "按工时"}
         usage = _num(step.get('usage_qty')) if step.get('usage_qty') is not None else 1.0
         line.update({'part_code':step.get('part_code'), 'section_id':step.get('section_id'),
+                     'scope':step.get('scope'),'part_codes':step.get('part_codes') or [],
                      'usage_qty':usage, 'parameter_source':step.get('time_source') or 'legacy_standard_time'})
         if usage is None or usage <= 0:
             line['amount'] = None
@@ -2729,6 +2741,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         # 路线版本 / BOM 指纹 / BOM 行数一起落库。字段名说的是"照着哪一版算的"，
         # 就必须在读接口那一刻**不再重取**（读侧的比对见 `load_cost()`）。
         "source_versions": {
+            "expense_policy":"part_material_processing_project_labor_packaging/1",
             "sheet_cost_rule_version":packaging_sheet_cost.RULE_VERSION,
             "cut_allowance_fingerprint":packaging_sheet_cost.allowance_fingerprint(data),
             "route_version": _upstream_route_version(project_id, req_no),
@@ -2992,6 +3005,11 @@ def load_cost(project_id: str, requirement_no: str = "", *,
         result["stale_reasons"] = list(result["stale_reasons"]) + [business_reason]
     result["stale"] = bool(result["stale"] or business_reason)
     result["business_parts_unavailable"] = dict(business_unavailable)
+    from . import packaging_assembly
+    assembly_drift=packaging_assembly.route_drift(project_id,da_repo.load_packaging_route_steps(project_id,req_no))
+    if assembly_drift:
+        result['stale']=True
+        result['stale_reasons']=list(dict.fromkeys(result['stale_reasons']+[assembly_drift]))
     from . import packaging_sheet_cost
     allowance_now=packaging_sheet_cost.allowance_fingerprint(_requirement_data(project_id))
     if stored.get('cut_allowance_fingerprint') and stored['cut_allowance_fingerprint'] != allowance_now:

@@ -147,6 +147,8 @@ def handoff_package(project_id: str, requirement_no: str = "", *,
                            400, "not_packaging")
     data = doc.get("data") if isinstance(doc.get("data"), dict) else {}
     req_no = _resolve_requirement_no(pid, requirement_no)
+    from . import requirement_service
+    data=requirement_service.resolved_packaging_order_data(data)
     scenario_code = _text(scenario) or _SCENARIO_DEFAULT
 
     cost = packaging_cost.load_cost(pid, req_no, scenario=(scenario or None))

@@ -19,7 +19,7 @@ class PackagingCostQuantityScopeTest(unittest.TestCase):
         with patch.object(cost_review.store, 'load_requirement', return_value=req), \
              patch.object(cost_review, 'summarize', return_value={
                  'packaging_cost': {'built': True, 'quote_quantity': 1000}}), \
-             patch.object(cost_review, 'confirm_gaps', return_value=[]):
+             patch.object(cost_review, 'confirm_gaps', return_value={'codes':[]}):
             result = cost_review.payload('p1', None, IntegrationPlan(quantity=1), CostReview())
         self.assertEqual(1000, result['quote_quantity'])
         self.assertEqual(1000, result['quantity'])
@@ -31,7 +31,7 @@ class PackagingCostQuantityScopeTest(unittest.TestCase):
         with patch.object(cost_review.store, 'load_requirement', return_value=req), \
              patch.object(cost_review, 'summarize', return_value={
                  'packaging_cost': {'built': True, 'quote_quantity': 500}}), \
-             patch.object(cost_review, 'confirm_gaps', return_value=[]):
+             patch.object(cost_review, 'confirm_gaps', return_value={'codes':[]}):
             result = cost_review.payload('p1', None, IntegrationPlan(), CostReview())
         self.assertTrue(result['quantity_mismatch'])
         self.assertEqual(500, result['cost_quote_quantity'])

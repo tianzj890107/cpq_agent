@@ -28,6 +28,7 @@ import datetime
 import decimal
 import hashlib
 import json
+import math
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -47,7 +48,11 @@ RATE_FIELDS = {"gross_margin": "gross_margin_rate", "markup": "markup_rate"}
 
 ADDON_CATEGORIES = (("tech_premium", "技术溢价"),
                     ("market_adjustment", "市场调节"),
-                    ("other_addon", "其他加价"))
+                    ("other_addon", "其他加价"),
+                    ("freight", "运输配送"), ("financing", "资金占用"),
+                    ("insurance", "保险"), ("commission", "销售佣金"),
+                    ("business_service", "商务服务"), ("rush", "加急交付"),
+                    ("special_testing", "专项检测认证"))
 DEDUCTION_CATEGORIES = (("discount", "折扣"),)
 DEFAULT_TAX_RATE = 0.13
 
@@ -201,7 +206,9 @@ def _addons_of(addons: Any) -> Tuple[List[dict], float]:
         key = _text(code)
         if key not in _ADDON_LABELS:
             raise PricingError(f"加价类别「{key}」不在闭集内", 400, "unknown_addon")
-        value = _num(amount) or 0.0
+        value = _num(amount)
+        if value is None or not math.isfinite(value) or (key in ('freight','financing','insurance','commission','business_service','rush','special_testing') and value < 0):
+            raise PricingError('加价金额必须是有效数值，订单费用不能为负数',400,'invalid_addon_amount')
         total += value
         items.append({"code": key, "label": _ADDON_LABELS[key], "amount": value})
     return items, total
@@ -297,13 +304,28 @@ def price(package: dict, *, gross_margin_rate=None, markup_rate=None,
                            400, "invalid_pricing_mode")
     rate = gross_margin_rate if mode == "gross_margin" else markup_rate
     total_cost = _num(cost.get("total_cost")) or 0.0
+    source_total_cost = total_cost
+    if addons and not isinstance(addons,dict):
+        raise PricingError('加价项必须是 {类别: 单件金额} 形式',400,'unknown_addon')
+    separated_freight = (((cost.get('source_versions') or {}).get('expense_policy') ==
+                         'part_material_processing_project_labor_packaging/1') or
+                        isinstance(addons,dict) and 'freight' in addons)
+    pricing_addons = copy.deepcopy(addons or {})
+    if separated_freight:
+        freight_cost = _num(cost.get('freight_total')) or 0.0
+        if freight_cost < 0 or freight_cost > total_cost:
+            raise PricingError('运输费用与成本总额不一致，不能重复或负数分摊',409,'freight_cost_invalid')
+        total_cost -= freight_cost
+        # Explicit quote freight replaces the estimated delivery cost, never adds to it twice.
+        if 'freight' not in pricing_addons and freight_cost:
+            pricing_addons['freight'] = freight_cost
     margin_price = untaxed_unit_price(total_cost, rate, pricing_mode=mode)
 
     tax = _num(tax_rate)
     if tax is None or tax < 0 or tax > 1:
         raise PricingError("税率必须在 0–1 之间", 400, "invalid_tax_rate")
     quantity = _quantity_of(pkg, quote_quantity)
-    addon_items, addon_total = _addons_of(addons)
+    addon_items, addon_total = _addons_of(pricing_addons)
     discount_item, discount_rate = _discount_of(discount)
     numbers = _numbers(margin_price, addon_total, discount_rate, tax)
 
@@ -328,6 +350,8 @@ def price(package: dict, *, gross_margin_rate=None, markup_rate=None,
         "tax_rate": tax,
         "quote_quantity": quantity,
         "cost_total": total_cost,
+        "source_total_cost":source_total_cost,
+        "freight_in_addons":separated_freight,
         "margin_price": margin_price,
         "addon_total": numbers["addon_total"],
         "subtotal_unit": numbers["subtotal_unit"],
@@ -615,7 +639,7 @@ def _doc_sections(quote: dict) -> List[dict]:
             _row("人工", _money(cost.get("labor_total")), source="包装成本引擎"),
             _row("工装", _money(cost.get("tooling_total")), source="包装成本引擎"),
             _row("包装", _money(cost.get("packaging_total")), source="包装成本引擎"),
-            _row("运输", _money(cost.get("freight_total")), source="包装成本引擎"),
+            _row("运输", _money(cost.get("freight_total")), source=("仅在报价其他加价计费，未重复进入利润基数" if q.get('freight_in_addons') else "包装成本引擎")),
             _row("损耗", _money(cost.get("loss_amount")), source="包装成本引擎"),
             _row("小计", _money(cost.get("subtotal")), source="包装成本引擎"),
             _row("成本总额", money.get("cost_total"), source="第 7 批 total_cost"),

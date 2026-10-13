@@ -5325,18 +5325,23 @@ def business_process_inputs(row: Any) -> Dict[str, Any]:
         except ValueError as exc:
             return {'ok':False,'code':str(exc),'message':'组成尺寸尚未核对：'+str(exc),
                     'missing_variables':['section_dimensions'],'part_code':record.get('business_part_code')}
-        sections = []
-        parent_usage = packaging_sections.positive(business_part_reference_block(record).get('quantity')) or 1
+        composition = []
         for child in children:
             value = business_process_inputs(child)
             if not value['ok']:
                 return dict(value,part_code=record.get('business_part_code'),message=child['name']+'：'+value['message'])
-            sections.append({**value,'section_id':child['section_id'],'name':child['name'],
-                             'row':child,'quantity':child['quantity']*parent_usage,'entity_ids':child['entity_ids']})
+            composition.append({**value,'section_id':child['section_id'],'name':child['name'],
+                                'quantity':child['quantity'],'entity_ids':child['entity_ids']})
+        reference = business_part_reference_block(record)
+        scope_note = '以完整业务零件「%s」为工艺分析单位。各组成仅为尺寸、材料和用量依据；编制一套整件工序，不按组成分别推荐或串接工序。' % record.get('name')
         return {'ok':True,'part_code':record['business_part_code'],'name':record.get('name'),
-                'sections':sections,'size_source':'section_dimensions','size_source_ref':'CAD sections',
-                'size_text':'；'.join(s['name']+' '+_mm_text(s['size_length'])+'×'+_mm_text(s['size_width'])+' mm' for s in sections),
-                'grounding':'\n'.join(s['name']+'（用量 '+str(s['quantity'])+'）：'+s['grounding'] for s in sections),
+                'composition':composition,'process_scope':'business_part/1',
+                'material_text':_text(reference.get('material_text')) or _text(record.get('material')),
+                'process_text':_text(reference.get('process_text')),
+                'size_source':'section_dimensions','size_source_ref':'CAD sections',
+                'size_text':'；'.join(s['name']+' '+_mm_text(s['size_length'])+'×'+_mm_text(s['size_width'])+' mm' for s in composition),
+                'grounding':scope_note+'\n'+_business_process_grounding(reference,reference.get('material_text'))+'\n'
+                    +'\n'.join(s['name']+'（每件组成用量 '+str(s['quantity'])+'）：'+s['grounding'] for s in composition),
                 'size_length':None,'size_width':None,'missing_variables':[]}
     reference = business_part_reference_block(record)
     code = _text(record.get("business_part_code"))
@@ -5408,9 +5413,12 @@ def business_process_assumption(inputs: Any, *, geometry_part_code: Any = "") ->
     payload = inputs if isinstance(inputs, dict) else {}
     if not payload.get("ok"):
         return ""
-    text = "按对照表的尺寸（%s×%s mm）与材料原文编制工序，未与 CAD 几何核过：" \
-           "没有展开轮廓、没有排样，料厚未知" % (_mm_text(payload.get("size_length")),
-                                                _mm_text(payload.get("size_width")))
+    if payload.get('composition'):
+        text = '以完整业务零件为单位，依据各组成尺寸、材料和用量推荐一套工艺；多组成尺寸不合并成整体展开尺寸。'
+    else:
+        text = "按对照表的尺寸（%s×%s mm）与材料原文编制工序，未与 CAD 几何核过：" \
+               "没有展开轮廓、没有排样，料厚未知" % (_mm_text(payload.get("size_length")),
+                                                    _mm_text(payload.get("size_width")))
     code = _text(geometry_part_code)
     if code:
         text += "；这一件另有闭合几何件（%s），本结论有意按对照表编制" % code

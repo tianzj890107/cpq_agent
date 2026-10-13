@@ -426,6 +426,14 @@ def set_layout_assignment(doc: Any, entity_id: str, part_codes: list, *, actor: 
     record = copy.deepcopy(doc) if isinstance(doc, dict) else {}
     known = {row.get("business_part_code") for row in record.get("business_parts") or []
              if isinstance(row, dict)}
+    child_schemes={}
+    for parent in record.get('business_parts') or []:
+        sections=parent.get('sections') or []
+        if len(sections)>1 or parent.get('sections_source')=='manual':
+            for section in sections:
+                if section.get('section_id'):
+                    child=str(parent.get('business_part_code'))+'::'+str(section['section_id'])
+                    known.add(child);child_schemes[child]=parent.get('scheme_id')
     codes = list(dict.fromkeys(part_codes))
     if not actor or any(code not in known for code in codes):
         raise ValueError("layout_assignment_invalid")
@@ -436,6 +444,8 @@ def set_layout_assignment(doc: Any, entity_id: str, part_codes: list, *, actor: 
     if target.get('scheme_id') and any(
             row.get('business_part_code') in codes and row.get('scheme_id') not in (target['scheme_id'],'common')
             for row in record.get('business_parts') or []):
+        raise ValueError('layout_assignment_scheme_conflict')
+    if target.get('scheme_id') and any(code in child_schemes and child_schemes[code] not in (target['scheme_id'],'common') for code in codes):
         raise ValueError('layout_assignment_scheme_conflict')
     target["part_codes"] = codes
     target["assignment_actor"] = actor

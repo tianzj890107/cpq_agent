@@ -66,6 +66,17 @@ STAGES = tuple(
 )
 
 # 阶段 → 阶段标题（按阶段号查）。查不到返回空串，不退回任何默认阶段。
+def for_industry(industry: str) -> tuple:
+    if industry != 'packaging':return STAGES
+    out=[]
+    for row in STAGES:
+        if row['phase']!='3':out.append(row);continue
+        if row['view']=='drawings':continue
+        sub,title=('3.1','排版排模') if row['view']=='params' else ('3.2','组装工艺')
+        out.append({**row,'sub':sub,'sub_title':title,'title':title,'phase_title':'排模与组装'})
+    return tuple(out)
+
+
 _PHASE_TITLE = {row["no"]: row["title"] for row in PHASES}
 
 

@@ -141,6 +141,10 @@ class ProcessStep(BaseModel):
     time_source: Optional[str] = None
     source_ref: Optional[str] = None
     recommendation: Optional[dict] = None  # 包装展示来源；不是审批或成本依据
+    part_codes: List[str] = Field(default_factory=list, description="项目新增工序关联的完整业务零件")
+    scope: Optional[str] = None
+    formula_code: Optional[str] = None
+    cost_parameters: dict = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod

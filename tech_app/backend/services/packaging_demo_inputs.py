@@ -266,41 +266,81 @@ def demo_process_plan(part, lookup, inputs, *, run=None, allow_fallback=False, n
     return payload,coverage
 
 
+def _usable_demo_plan(plan):
+    return bool((plan or {}).get('steps')) and plan.get('part_class') not in ('machining','sheet_metal','welded')
+
+
+def _section_process_input(row, section):
+    """Only generation inputs; never reuse solely by the section's display name."""
+    return {'section':section, 'parent_reference':row.get('reference') or {}, 'parent_name':row.get('name'),
+            'parent_inputs':row.get('poc_inputs') or {},
+            'parent_requirement':row.get('process_requirements') or {}}
+
+
+def _merge_demo_sections(part, children):
+    steps, reused, missing = [], 0, 0
+    for child in children:
+        source_steps=(child.get('plan') or {}).get('steps') or []
+        numbers={s['step_no']:10*(len(steps)+i+1) for i,s in enumerate(source_steps)}
+        for source in source_steps:
+            step=copy.deepcopy(source)
+            step['original_step_no']=source['step_no']
+            step['step_no']=numbers[source['step_no']]
+            step['depends_on']=[numbers.get(n,n) for n in source.get('depends_on') or []]
+            step['section_id']=child['section_id'];step['section_name']=child['section_name']
+            step['name']=child['section_name']+' · '+str(source.get('name') or '')
+            if isinstance(step.get('duration_min'),(int,float)):
+                step['original_duration_min']=step['duration_min']
+                step['duration_min']*=child['quantity']
+            steps.append(step)
+        summary=(child.get('coverage') or {}).get('summary') or {}
+        reused+=summary.get('reused') or 0;missing+=summary.get('missing') or 0
+    return ({'part_id':part.part_id,'part_name':part.name,'part_class':'packaging',
+        'steps':steps,'overall_note':'汇总各组成工艺，不额外生成父件工艺',
+        'open_questions':[q for c in children for q in (c.get('plan') or {}).get('open_questions') or []]},
+        {'summary':{'total':len(steps),'reused':reused,'missing':missing},
+         'sections':[c.get('coverage') or {} for c in children]})
+
+
 def prepare_processes(project_id, *, actor='', run=None):
     """显式演示准备：原生路线优先，未知件走现有相似检索+LLM，失败不伪报完成。"""
-    from . import packaging_parts, packaging_layout, da_process_routing
+    from . import packaging_parts, packaging_layout, da_process_routing, packaging_process_instances, tasks
     from .packaging_part_route_match import is_external_part
     doc=packaging_parts.load_business_parts(project_id) or {}
     if doc.get('poc_demo') is not True:
         raise ValueError('demo_project_required')
     doc=packaging_layout.active_business_document(doc)
+    collected=packaging_process_instances.collect(project_id)
+    valid={r['part_code'] for r in collected['records']}
     results,failures=[],[]
     for row in doc.get('business_parts') or []:
         if is_external_part(row): continue
         code=row.get('business_part_code')
+        if code in valid:
+            tasks.report_progress(f'复用已有工艺：{code} · {row.get("name") or ""}')
+            results.append({'part_code':code,'reused':True})
+            continue
         try:
+            tasks.report_progress(f'补齐缺失或失效工艺：{code} · {row.get("name") or ""}')
             effective=packaging_parts.verified_business_part_input_row(row,doc)
-            lookup=da_process_routing.for_row(effective)
             part=packaging_parts.business_as_ir_part(effective)
-            plan,coverage=demo_process_plan(part,lookup,row.get('poc_inputs') or {},run=run,allow_fallback=True)
-            # 多组成分别保留；不会把多个组成缩成一个父件工时。
-            children=[]
-            for section in row.get('sections') or []:
-                child=copy.deepcopy(effective)
-                child['name']=section.get('name') or row.get('name')
-                child['sections']=[]
-                child['reference']={**(child.get('reference') or {}),
-                    'material_text':section.get('material_text') or (child.get('reference') or {}).get('material_text')}
-                child_inputs={**(section.get('poc_inputs') or row.get('poc_inputs') or {}),
-                    **{k:v for k,v in (section.get('confirmed_size') or {}).items() if k in ('length_mm','width_mm')}}
-                child_plan,child_coverage=demo_process_plan(packaging_parts.business_as_ir_part(child),
-                    da_process_routing.for_row(child),child_inputs,run=run,allow_fallback=True)
-                children.append({'section_id':section.get('section_id'),
-                    'section_name':section.get('name'),'quantity':section.get('quantity') or 1,
-                    'plan':child_plan,'coverage':child_coverage,
-                    'cost_parameters':{'mock':True,'source':'demo_process_parameters'}})
+            lookup=da_process_routing.for_row(effective)
+            context=packaging_parts.business_process_inputs(effective)
+            # Whole-part matching/model generation; portions are evidence, not extra operation instances.
+            scope_note='以完整业务零件为工艺分析单位；各组成仅为材料、尺寸、用量依据，不按组成分别推荐或串接工序。'
+            composition=[]
+            for section in effective.get('sections') or []:
+                size=section.get('confirmed_size') or section.get('automatic_size') or section.get('poc_inputs') or section.get('estimated_size') or {}
+                composition.append({'name':section.get('name'),'material':section.get('material_text'),
+                    'quantity':section.get('quantity'),'size':{k:size.get(k) for k in ('length_mm','width_mm','source','size_source')}})
+            grounding=context.get('grounding') or json.dumps({'name':effective.get('name'),
+                'reference':effective.get('reference'),'composition':composition},ensure_ascii=False)
+            inputs=row.get('poc_inputs') or {}
+            plan,coverage=demo_process_plan(part,lookup,inputs,run=run,allow_fallback=True,
+                note=scope_note+'\n'+grounding)
             packaging_parts.save_part_process(project_id,{
-                'part_code':code,'plan':plan,'coverage':coverage,'sections':children,
+                'part_code':code,'plan':plan,'coverage':coverage,'sections':[],
+                'process_scope':packaging_process_instances.BUSINESS_PART_PROCESS_SCOPE,
                 'business_parts_hash':doc.get('business_parts_hash'),
                 'business_parts_id':doc.get('business_parts_id'),
                 'process_origin':coverage.get('process_origin'),
@@ -310,6 +350,7 @@ def prepare_processes(project_id, *, actor='', run=None):
                             'process_origin':coverage.get('process_origin')})
         except Exception as exc:
             failures.append({'part_code':code,'error':str(exc)})
+    tasks.report_progress(f'零件工艺准备完成：复用 {sum(bool(r.get("reused")) for r in results)} 件，补齐 {sum(not r.get("reused") for r in results)} 件，失败 {len(failures)} 件')
     return {'mock':True,'results':results,'failures':failures,'ready':not failures}
 
 

@@ -77,7 +77,8 @@ if (mode === "emptytxt") {
   process.exit(0);
 }
 
-const fns = ["refreshPackagingParts", "fetchPackagingParts", "packagingPartsItems",
+const fns = ["beginPackagingPartsRead", "packagingPartsReadIsCurrent",
+             "refreshPackagingParts", "fetchPackagingParts", "packagingPartsItems",
              "packagingPartsQueryString", "fetchPackagingBusinessParts"]
              .map(function (name) { return extract(name); });
 if (fns.some(function (body) { return body === null; })) {
@@ -101,7 +102,7 @@ const box = function () {
 };
 const sandbox = new Proxy({
   console: console, Promise: Promise, JSON: JSON, Object: Object, Array: Array,
-  Number: Number, String: String, Math: Math, RegExp: RegExp, Date: Date, Set: Set,
+  Number: Number, String: String, Boolean: Boolean, Math: Math, RegExp: RegExp, Date: Date, Set: Set,
   Map: Map, Error: Error, setTimeout: setTimeout, clearTimeout: clearTimeout,
   setImmediate: setImmediate, URLSearchParams: URLSearchParams, API: "",
   fetch: async function (url) {
@@ -140,6 +141,7 @@ vm.runInContext("var currentProject='';var currentIR=null;var currentGeometry=nu
                 + "var currentDrawings=null;var artifact_status=null;var currentSelectedId=null;"
                 + "var diffPick=[];var currentDrawingEntry='';var currentDrawingIsImg=false;"
                 + "var currentPackagingParts=null;var currentPackagingBusinessParts=null;"
+                + "var packagingPartsReadSequence=0;"
                 + "var packagingPartsPage={offset:0,limit:64,kind:'',role:'',outline_status:'',"
                 + "min_area_mm2:''};var packagingPartsShown=[];", ctx);
 fns.forEach(function (body) { vm.runInContext(body, ctx); });

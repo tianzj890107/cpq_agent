@@ -82,9 +82,10 @@ class RoundBoxLayoutRed(unittest.TestCase):
     def test_packaging_stage_has_distinct_layout_view(self):
         parent = (ROOT / "tech_app/frontend/tech-workbench.js").read_text()
         board = (ROOT / "tech_app/frontend/assembly-integration.js").read_text()
-        self.assertIn("3.2 排版排模", parent)
+        self.assertIn("label: '排版排模', no: '3.1'", parent)
         self.assertIn("packaging-layout", board)
-        self.assertIn("3.3 后道加工与组装工艺", parent)
+        # 两页签 Spec：组装只展示新增跨零件工序。
+        self.assertIn("label: '组装工艺', no: '3.2'", parent)
 
 
 if __name__ == "__main__":

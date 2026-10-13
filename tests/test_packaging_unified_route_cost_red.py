@@ -20,13 +20,14 @@ class UnifiedTests(unittest.TestCase):
             result=m.collect('isolated')
         self.assertTrue(result['active'])
         self.assertEqual(result['missing'],['A'])
-    def test_sections_keep_each_quantity_and_billing_identity(self):
+    def test_legacy_section_processes_require_whole_part_regeneration(self):
         from tech_app.backend.services import packaging_process_instances as m
-        steps=m.expand([{'part_code':'A','usage_qty':99,'sections':[
+        records=[{'part_code':'A','usage_qty':99,'sections':[
             {'section_id':'outer','quantity':2,'plan':{'steps':[{'name':'模切'}]}},
-            {'section_id':'inner','quantity':3,'plan':{'steps':[{'name':'模切'}]}}]}])
-        self.assertEqual([s['section_id'] for s in steps],['outer','inner'])
-        self.assertEqual([s['usage_qty'] for s in steps],[2,3])
+            {'section_id':'inner','quantity':3,'plan':{'steps':[{'name':'模切'}]}}]}]
+        # Whole-part Spec: retain history, never bill portion-generated operations as current.
+        with self.assertRaisesRegex(ValueError,'process_scope_changed'):
+            m.expand(records)
     def test_same_name_instances_retained(self):
         from tech_app.backend.services import packaging_process_instances as m
         rows=[{'part_code':'A','usage_qty':2,'plan':{'steps':[{'step_no':1,'name':'模切'}, {'step_no':2,'name':'模切'}]}},

@@ -1,5 +1,7 @@
 # 规格：需求不可编辑时的 drawing-flow 前置条件与稳定码（第 5 批补充）
 
+> 2026-10-13包装后续口径：按 `packaging-sequential-requirement-cost-waiver-fast-read.md`，已提交包装需求可解析，结果另存工程证据，不直接写回冻结客户字段。非包装和直接编辑需求的原护栏保留。
+
 > 前置：`docs/specs/drawing-flow-error-taxonomy.md`（错误分类 / 前置条件 / 不得判死整条链路）。
 > 红测：`tests/test_drawing_flow_requirement_state_red.py`。
 > 本批只修「需求单已提交（不可编辑）」这一条链路上的**分类与可预见性**，

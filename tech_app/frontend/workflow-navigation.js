@@ -16,6 +16,8 @@
     4: ['4.1 零件成本', '4.2 组装成本', '4.3 汇总'],
     5: ['5.1 汇总结果', '5.2 结果审核', '5.3 发布并回传报价'],
   };
+  let packagingStepStatus = null;
+  let packagingIndustry = false;
   const stepKey = {
     '1.1':'create', '1.2':'confirm', '1.3':'review', '2.1':'drawing',
     // 3.x 组装与整合：工艺经理的步骤；4.x 成本测算：财务经理的步骤（工艺经理在 3.x 末尾交过来）
@@ -212,6 +214,7 @@
   // 3 组装与整合：参数与组装工艺都有产出才算做完。
   // **不再要求成本** —— 成本从组装阶段拆出去了，归财务经理在 4 成本测算做。
   function integrationDone(progress) {
+    if(packagingStepStatus)return ['3.1','3.2'].every(k=>packagingStepStatus[k]?.completed);
     const doc = progress?.aggregate?.steps?.integration;
     if (!doc || typeof doc !== 'object') return false;
     return Boolean(doc.params?.params?.length) && Boolean(doc.process?.steps?.length);
@@ -267,6 +270,9 @@
     if (integrationDoneNow) doneCodes.add('3.1');
     if (integration?.params?.params?.length || integration?.params?.confirmed) doneCodes.add('3.2');
     if (integration?.process?.steps?.length || integration?.process?.confirmed) doneCodes.add('3.3');
+    if(packagingStepStatus) ['3.1','3.2'].forEach(code=>{
+      doneCodes.delete(code);if(packagingStepStatus[code]?.completed)doneCodes.add(code);
+    });
     // 4.x 以"财务确认过成本"为完成 —— 算过但没确认不算，那是还在核的状态。
     if (costConfirmed) ['4.1', '4.2', '4.3'].forEach((code) => doneCodes.add(code));
     if (['in_review', 'approved', 'published'].includes(report.status)) doneCodes.add('5.1');
@@ -299,7 +305,7 @@
     // 3.x 组装与整合的前置 = 2.1 已经拆出零件（光有需求审批不够）。
     const partsReady = Boolean(progress?.aggregate?.ir?.parts?.length);
     // 4.x 成本测算的前置 = 3 组装与整合的工艺与整机参数已定稿。
-    const assemblyReady = Boolean(progress?.aggregate?.steps?.integration?.process?.steps?.length);
+    const assemblyReady = packagingStepStatus?Boolean(packagingStepStatus['3.2']?.completed):Boolean(progress?.aggregate?.steps?.integration?.process?.steps?.length);
     // 【CPQ 定制】5.1 的前置从「2.6 产能评估」改成「2.1 图纸解析已出结果」。
     const readySummary = Boolean(progress?.aggregate?.ir?.parts?.length)
       || Boolean(summary?.confirmed_at) || Boolean(report?.id || report?.status);
@@ -321,6 +327,7 @@
       '5.2': [readyReview, '请先在 5.1 汇总结果中保存并提交评估报告。'],
       '5.3': [readyPublish, '请先完成 5.2 结果审核并获得通过。'],
     };
+    if(packagingIndustry && code==='3.2')return [Boolean(packagingStepStatus?.['3.1']?.completed),'请先完成排版排模与开料输入。'];
     return checks[code] || [false, '该流程步骤暂不可进入。'];
   }
   function urlFor(code, id) {
@@ -336,8 +343,10 @@
   }
   async function navigate(code) {
     code = legacyCode[code] || code;
+    if(packagingIndustry && code==='3.3')code='3.2';
     if (!code) return;
     const id = projectId();
+    if(packagingIndustry && id && (code==='3.1'||code==='3.2'))sessionStorage.setItem('cpq:packaging-view:'+id,code==='3.1'?'params':'process');
     if (!id && code !== '1.1') { notify('请先在 1.1 创建并保存一个工艺评估需求。', true); return; }
     const progress = await loadProject();
     const [allowed, message] = gate(code, progress);
@@ -358,7 +367,24 @@
     }
     location.href = urlFor(code, id);
   }
-  window.CadWorkflowNavigation = { navigate, refresh: () => { cachedProject = null; findRoots(); } };
+  window.CadWorkflowNavigation = { navigate, refresh: () => { cachedProject = null; findRoots(); },
+    setIndustry: industry => {
+      if(industry!=='packaging')return;
+      packagingIndustry=true;
+      stages[3]=['3.1 排版排模','3.2 组装工艺'];
+      document.querySelectorAll('.workflow-nav-link,.sub-label,.tp-flow-substep').forEach(node=>{
+        const code=labelCode(node.textContent);const title=stages[3].find(text=>labelCode(text)===code);
+        if(code==='3.3'){const prev=node.previousElementSibling;if(prev?.textContent?.trim()==='→')prev.remove();node.remove();return;}
+        if(title)node.textContent=title;
+      });
+    },
+    setPackagingStatus: status => {
+      packagingStepStatus=status;
+      document.querySelectorAll('.workflow-nav-link,.sub-label,.tp-flow-substep').forEach(node=>{
+        const code=labelCode(node.textContent);
+        if(status?.[code])setState(node,status[code].completed?'done':node.classList.contains('active')?'active':'pending');
+      });
+    } };
   const observer = new MutationObserver(() => findRoots());
   const start = () => { findRoots(); observer.observe(document.body, { childList: true, subtree: true }); };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();

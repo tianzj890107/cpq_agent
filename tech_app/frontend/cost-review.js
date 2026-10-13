@@ -480,6 +480,11 @@ function crPackagingBreakdown(breakdown) {
       `<span class="cr-part"><i>${label}</i>${crMoney(breakdown[key])}</span>`).join('') + '</details>';
 }
 
+function crPackagingPartBreakdown(breakdown) {
+  return [['material','材料'],['processing','实际加工费']].map(([key,label]) =>
+    `<span class="cr-part"><i>${label}</i>${crMoney(breakdown?.[key])}</span>`).join('');
+}
+
 function crRenderParts() {
   const rows = crData?.parts || [];
   if (!rows.length) {
@@ -509,7 +514,7 @@ function crRenderParts() {
       + (row.cost_scope === 'material_only' ? '<small class="ai-hint">仅材料开料费，非完整零件成本</small>' : '')
       + (row.open_questions ? `<small class="ai-hint">${row.open_questions} 项待确认</small>` : '')
       + `</td><td>×${row.quantity}</td>`
-      + `<td class="cr-breakdown">${crBreakdownRow(row.breakdown)}</td>`
+      + `<td class="cr-breakdown">${crData?.packaging_cost ? crPackagingPartBreakdown(row.breakdown) : crBreakdownRow(row.breakdown)}</td>`
       + `<td><span class="number">${row.has_cost ? crMoney(row.unit_cost) : (row.cost_stale ? '待重算' : '待测算')}</span></td>`
       + `<td><span class="number">${row.has_cost ? crMoney(row.subtotal) : '—'}</span></td>`
       + `<td><button type="button" class="inline-action" data-cr-part="${crAttr(row.id)}"`
@@ -524,7 +529,7 @@ function crRenderAssembly() {
   if (!row) return `<div class="inline-empty">还没有整机方案。</div>`;
   let html = `<section class="inline-card"><div class="inline-card-title">${crData?.packaging_cost ? '整单成本' : '组装成本'} · ${esc(row.name)}</div>`
     + `<div class="inline-hint">${crData?.packaging_cost
-      ? '单件与整单来自同一份公式成本明细；整单包含零件费用及项目级费用，不再叠加单件合计。'
+      ? '单件与整单来自同一份公式成本明细；零件仅材料与实际加工，独立人工、组装和出货包材在整件归集，已含人工的加工费不重复加人工。'
       : '整机成本已包含零件成本，再加组装人工与费用，不与零件合计重复相加。'}</div>`;
   if (!row.has_cost) {
     html += `<div class="inline-warn">⚠ ${crData?.packaging_cost ? '整单成本待测算或已过期，请刷新同一份公式成本账。' : '还没算过整机成本，请先算零件再算整机。'}</div>`;
@@ -532,7 +537,8 @@ function crRenderAssembly() {
     html += `<div class="inline-warn">⚠ 整机成本算出来是 0 元，多半是模型没给出材料明细，请重算。</div>`;
   }
   html += `<div class="inline-totals">${crBreakdownRow(row.breakdown)}`
-    + `<span class="total">合计 <strong>${crMoney(row.unit_cost)}</strong> 元/台</span></div>`;
+    + `<span class="total">合计 <strong>${crMoney(row.unit_cost)}</strong> ${crData?.packaging_cost ? '元/只' : '元/台'}</span></div>`;
+  if (crData?.packaging_cost) html += `<div class="inline-totals"><span>报价批量 ${esc(crData.quote_quantity ?? crData.packaging_cost.quote_quantity ?? '—')} 只</span><span>订单成本合计 <strong>${crMoney(crData.order_total_cost)}</strong> 元</span></div>`;
   if (row.summary) html += `<div class="inline-row"><b>成本构成</b>${esc(row.summary)}</div>`;
   if (row.open_questions) {
     html += `<div class="inline-row"><b>待确认</b>${row.open_questions} 项（库内缺价，需询价）</div>`;
@@ -565,8 +571,16 @@ function crRenderTotal() {
     + `</tr></tbody></table></div>`;
   if (packaging) {
     html += `<div class="inline-hint">成本版本：${esc(crData.estimate_id || '未测算')} · 报价批量 ${esc(packaging.quote_quantity || '—')}</div>`
+      + `<div class="inline-totals"><span>整件单只成本 <strong>${crMoney(crData.unit_cost)}</strong> 元/只</span><span>订单成本合计 <strong>${crMoney(crData.order_total_cost)}</strong> 元</span></div>`
       + `<div class="inline-row"><b>项目级费用（未归集至零件）</b>${crPackagingBreakdown(crData.project_expenses || {})}</div>`
       + `<div class="inline-row"><b>整单其他费用明细</b>${crPackagingBreakdown(final)}</div>`;
+    if (crData.quantity_mismatch) html += `<div class="inline-warn">成本按 ${esc(crData.cost_quote_quantity)} 只测算，当前需求为 ${esc(crData.quote_quantity)} 只；请按需求批量重算，不能把每盒用量当成订单数量。</div>`;
+    const audit=crData.cost_audit;
+    const auditLabels={quote_quantity:'批量(只)',usage_qty:'每盒用量',cut_length:'开料长(mm)',cut_width:'开料宽(mm)',
+      machine_length:'上机长(mm)',machine_width:'上机宽(mm)',imposition_count:'排版模数',price_unit:'价格单位',
+      gsm:'克重(g/㎡)',ton_price:'吨价(元/吨)',labor_seconds:'工时(秒)',labor_rate:'费率(元/小时)'};
+    if (audit) html += `<details class="inline-row"><summary>金额核对 · 最低收费 ${esc(audit.minimum_charge_rows)} 行</summary><div class="inline-hint">${esc(audit.quantity_basis)}</div>`+
+      (audit.largest_items||[]).map(item=>`<div class="inline-row"><b>${esc(item.part_code||'整件')} · ${esc(item.name||item.formula_code||'费用')}</b> ${crMoney(item.amount)} 元/只${item.min_charge_applied?' · 最低收费已分摊':''}<div class="inline-hint">${esc(Object.entries(item.inputs||{}).map(([key,value])=>(auditLabels[key]||key)+'：'+value).join('；'))}</div></div>`).join('')+'</details>';
     if (crData.reconciled === false) html += `<div class="inline-warn">成本明细与总额未对齐，暂不能确认：${esc((crData.reconciliation_errors || []).join('、'))}</div>`;
   }
   const coefficients = packaging ? {} : final.coefficients || {};
@@ -639,6 +653,8 @@ function crConfirmBlocker() {
   if ((counts.missing || []).length) return `还有 ${counts.missing.length} 个零件没算成本`;
   if (!counts.assembly_costed) return '整机（组装）成本还没算';
   if ((counts.zero || []).length) return `这些行是 0 元：${counts.zero.join('、')}`;
+  const gaps=crData?.review?.gaps;
+  if ((gaps?.codes||[]).length) return gaps.text || (gaps.fields||[]).join('；') || '成本仍有缺口，可签字作为内部暂估确认';
   return '';
 }
 
@@ -1226,9 +1242,11 @@ async function crConfirmCost(waiver = null) {
       method: 'POST',
       body: JSON.stringify(waiver ? { waiver } : {}),
     });
-    crStatus('成本已确认');
-    crToast('成本已确认');
-    crSay('成本已确认。现在可以写入数据库、回传销售经理继续报价，或提交工艺经理确认（第 5 阶段）。');
+    const signed=crData.review?.confirmation_mode==='internal_estimate';
+    crStatus(signed?'成本已签字确认（内部暂估）':'成本已确认');
+    crToast(signed?'成本已签字确认（内部暂估）':'成本已确认');
+    crSay(signed?'成本已签字放行，缺口与估算依据仍保留，可继续内部流程；正式写库或对外发布仍需核对成本。'
+      :'成本已确认。现在可以写入数据库、回传销售经理继续报价，或提交工艺经理确认（第 5 阶段）。');
     crPublishTask('task-completed', { taskId: 'cost-confirm', label: '确认成本',
                                       status: 'succeeded' });
     return true;
@@ -1336,6 +1354,18 @@ function crBind() {
   $cr('crNext').onclick = () => window.CadWorkflowNavigation?.navigate('5.1');
 }
 
+async function crReadCostData(timeoutMs = 20000) {
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),timeoutMs);
+  try { return await api(crUrl(''),{signal:controller.signal}); }
+  catch(error) {
+    if (error.name==='AbortError') {
+      throw Object.assign(new Error('成本读取超时，请重试；不代表未测算或清单为空。'),{code:'cost-read-timeout'});
+    }
+    throw error;
+  } finally { clearTimeout(timer); }
+}
+
 async function crStart() {
   if (!crPid && crTaskId) {
     // URL 没带 project（财务从待办直接进入）：用 task_id 走共享模块唯一恢复项目身份。
@@ -1369,12 +1399,13 @@ async function crStart() {
   $cr('crProject').textContent = `项目 ${crPid}`;
   crLoadModelLabel();
   try {
-    crData = await api(crUrl(''));
+    crData = await crReadCostData();
     $cr('crNote').value = crData.review?.note || '';
     $cr('crQuantity').value = crData.packaging_cost ? (crData.quote_quantity ?? '') : crData.quantity || 1;
     crTab = crData.ready ? 'total' : (crData.counts?.missing || []).length ? 'parts' : 'assembly';
     crRender();
-    await crReplayTimeline();
+    // Cost data is already visible; conversation replay must not block page readiness.
+    void crReplayTimeline();
     crStatus(crReadOnly() ? '只读：本步归财务经理'
       : crData.review?.confirmed ? '成本已确认' : '就绪');
     if (crReadOnly()) crSay(crReadOnlyWhy());
@@ -1383,6 +1414,8 @@ async function crStart() {
     }
   } catch (error) {
     $cr('crBody').innerHTML = `<div class="inline-empty error">读取失败：${esc(error.message)}</div>`;
+    const retry=document.createElement('button');retry.type='button';retry.className='inline-action';
+    retry.textContent='重试读取';retry.onclick=()=>crStart();$cr('crBody').appendChild(retry);
     crStatus(`读取失败：${error.message}`, true);
   }
 }
@@ -1403,7 +1436,7 @@ document.addEventListener('cpq-sso-ready', () => {
   // 重新拉取并渲染（复用既有读取路径），供 Agent 改完说明 / 确认 / 去向之后刷新看板。
   const crRefresh = async () => {
     try {
-      crData = await api(crUrl(''));
+      crData = await crReadCostData();
       crRender();
       crStatus('已刷新');
       return { ok: true };

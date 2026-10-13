@@ -15,6 +15,9 @@ def requirement_defaults(requirement):
     from ..storage import kb_repo
     result=copy.deepcopy(requirement)
     data=result.setdefault('data',{})
+    from . import requirement_service
+    data=requirement_service.resolved_packaging_order_data(data)
+    result['data']=data
     boxes=kb_repo.packaging_box_types()
     preferred=data.get('box_type')
     box=next((row for row in boxes if row.get('box_type_code')==preferred),None)
@@ -118,28 +121,28 @@ def sync_integration(project_id, actor, route=None):
     if complete:
         plan.params_confirmed_by=plan.params_final_by='自动采用'
         plan.params_confirmed_at=plan.params_final_at=now_cst_str()
-    if route:
-        plan.process=ProcessPlan(part_id=integration.ASSEMBLY_PART_ID,
-            part_name=plan.params.assembly_name,part_class='packaging',
-            steps=[ProcessStep(step_no=int(s['step_no']),name=s['step_name'],type=ProcessType.other,
-                standard_seconds=s.get('standard_seconds'),duration_min=(s['standard_seconds']/60 if s.get('standard_seconds') is not None else None),
-                time_source=s.get('time_source') or 'poc_mock',note='同版包装项目路线投影，不另算组装成本')
-                for s in route.get('steps') or []],overall_note='自动采用包装路线，非人工审核；成本只读统一公式账')
-        plan.process_confirmed=True;plan.process_confirmed_by='自动采用'
-        plan.process_confirmed_at=now_cst_str()
+    # The full route belongs to billing; integration.process stores only cross-part assembly.
     plan.quantity=int(float(data.get('quote_quantity') or 1000))
     integration.save_plan(project_id,plan,actor.get('username',''))
     store.audit(project_id,'packaging_demo_integration_auto_adopted',{'by':actor.get('username'),
         'human_confirmed':False,'parameters_complete':complete,'route_adopted':bool(route)})
     return plan
 
-def prepare_route(project_id,actor):
+def prepare_route(project_id,actor, *, regenerate_assembly=False, note='', attachments=None):
     ensure_inputs(project_id,actor)
     from . import packaging_process_instances
+    from . import tasks
     collected=packaging_process_instances.collect(project_id)
     if collected['missing'] or not collected['active']:
+        tasks.report_progress(f'项目路线准备：仅补齐缺失工艺 {len(collected["missing"])} 件，其他有效工艺直接复用')
         generated=packaging_demo_inputs.prepare_processes(project_id,actor=actor.get('username',''))
         if generated['failures']:raise ValueError('demo_process_incomplete:'+str(generated['failures']))
+    else:
+        tasks.report_progress('全部零件工艺已齐，直接复用，不调用模型')
+    from . import packaging_assembly
+    tasks.report_progress('编制零件之间新增的组装工序，保留整件制造工艺')
+    packaging_assembly.prepare(project_id,actor,force=regenerate_assembly,note=note,attachments=attachments,automatic=True)
+    tasks.report_progress('汇总整件制造工艺与新增组装工序，生成当前包装项目路线')
     req_no=(store.load_requirement(project_id) or {}).get('requirement_no') or ''
     packaging_bom.build_bom(project_id,req_no)
     packaging_route.build_route(project_id,req_no)
@@ -167,6 +170,8 @@ def run(project_id, *, actor, run_model=None, progress=None):
                if collected['active'] and not collected['missing'] else
                packaging_demo_inputs.prepare_processes(project_id,actor=actor.get('username',''),run=run_model))
     if processes['failures']: raise ValueError('demo_process_incomplete:'+str(processes['failures']))
+    from . import packaging_assembly
+    packaging_assembly.prepare(project_id,actor,run=run_model,automatic=True)
     report('自动展开BOM、生成并采用项目路线')
     packaging_bom.build_bom(project_id,req_no)
     packaging_route.build_route(project_id,req_no)

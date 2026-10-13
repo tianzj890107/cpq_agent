@@ -338,9 +338,12 @@ class IntegrationPlan(BaseModel):
     project_id: Optional[str] = None
     requirement_note: str = Field("", description="用户在 2.2 输入的整合需求(参与参数推荐)")
     quantity: int = Field(1, description="成本测算的核算批量(台)")
+    packaging_cut_settings: dict = Field(default_factory=dict, description="包装开料余量配置，不改变成品需求")
     drawings: List[IntegrationDrawing] = Field(default_factory=list, description="整合图纸")
     params: Optional[IntegrationParamPlan] = Field(None, description="参数推荐结果")
     process: Optional[ProcessPlan] = Field(None, description="组装工艺路线")
+    packaging_assembly_scope: Optional[str] = None
+    packaging_assembly_input_hash: Optional[str] = None
     cost: Optional[CostAnalysis] = Field(None, description="整机成本测算")
     # 「参数推荐」的确认：整机参数与连接关系、BOM 由人核对过一遍才往下走。
     # 与 params_final 分开 —— 那个是最后交给报价前的收口，这个是这一环节本身的定稿。
@@ -352,6 +355,8 @@ class IntegrationPlan(BaseModel):
     process_confirmed: bool = Field(False, description="组装工艺已确认")
     process_confirmed_by: Optional[str] = None
     process_confirmed_at: Optional[str] = None
+    packaging_route_scheme_id: Optional[str] = Field(
+        None, description="包装项目路线所属方案；防止切换方案后沿用其他方案的路线")
     # 「整合参数」环节：成本测算之后的收口，确认报价要的成品参数都填齐了。
     # 单独一个标记而不是"必填都非空"就算完成 —— 补填是人做的判断，得有人按下确认，
     # 才谈得上"这份参数可以交给报价"。

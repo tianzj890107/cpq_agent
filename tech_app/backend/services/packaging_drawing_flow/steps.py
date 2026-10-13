@@ -676,8 +676,20 @@ def field_write(ctx: Dict[str, Any]) -> Dict[str, Any]:
     # 图纸候选覆盖，看板与门禁必须同时认它（`accept` 不再是恒空集）。
     manual_fields = _manual_accept_fields(data, sources)
     try:
-        apply_fn(project_id, semantics, accept=manual_fields,
-                 author=str(ctx.get("actor") or "system"))
+        from ..requirement_service import EDITABLE_STATUSES
+        if data.get('industry')=='packaging' and requirement.get('status') and requirement.get('status') not in EDITABLE_STATUSES:
+            store._meta().put_doc(project_id,'packaging_engineering_fields',{
+                'requirement_no':requirement.get('requirement_no'),
+                'requirement_revision':data.get('revision'), 'requirement_status':requirement.get('status'),
+                'ir_id':ir_id,'ir_hash':ir_hash,'run_id':run_id,
+                'fields':model.jsonable(fields),'author':str(ctx.get('actor') or 'system')})
+            for row in rows.values():
+                if row['board']=='written':
+                    row['board']='preserved'
+                    row['note']='解析字段已保存为工程证据；已提交客户需求不改写'
+        else:
+            apply_fn(project_id, semantics, accept=manual_fields,
+                     author=str(ctx.get("actor") or "system"))
     except Exception as exc:
         # 分类只在**一处**判：异常自带稳定码就认它（码 → HTTP / 可重试查登记表），
         # 没有稳定码才按类型区分"真写失败"与"未识别异常"，不靠 str(exc) 关键字匹配

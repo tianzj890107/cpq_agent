@@ -32,9 +32,9 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _stage_row(code: str) -> Optional[dict]:
+def _stage_row(code: str, industry: str = '') -> Optional[dict]:
     key = _text(code)
-    for row in workflow_stages.STAGES:
+    for row in workflow_stages.for_industry(industry):
         if row["sub"] == key:
             return row
     return None
@@ -69,12 +69,14 @@ def normalize_role(label: str) -> str:
     return name if name in getattr(auth, "ROLES", ()) else ""
 
 
-def _stage_block(code: str) -> Dict[str, Any]:
-    row = _stage_row(code)
+def _stage_block(code: str, industry: str = '') -> Dict[str, Any]:
+    row = _stage_row(code,industry)
     if not row:
         return {"code": _text(code), "index": 0, "total": STAGE_TOTAL, "title": "", "phase": 0}
-    return {"code": row["sub"], "index": _STAGE_INDEX.get(row["sub"], 0),
-            "total": STAGE_TOTAL, "title": row["sub_title"], "phase": int(row["phase"])}
+    definitions=workflow_stages.for_industry(industry)
+    index=next((i for i,r in enumerate(definitions,1) if r['sub']==row['sub']),0)
+    return {"code": row["sub"], "index": index,
+            "total": len(definitions), "title": row["sub_title"], "phase": int(row["phase"])}
 
 
 def _stage_url(project_id: str, row: dict) -> str:
@@ -84,8 +86,8 @@ def _stage_url(project_id: str, row: dict) -> str:
     return (_text(row.get("page")) or "index.html") + "?" + "&".join(params)
 
 
-def _primary_action(project_id: str, code: str, next_action: Optional[dict]) -> Optional[dict]:
-    row = _stage_row(code)
+def _primary_action(project_id: str, code: str, next_action: Optional[dict], industry: str = '') -> Optional[dict]:
+    row = _stage_row(code,industry)
     if not row:
         return None
     return {"id": "open-stage",
@@ -238,13 +240,13 @@ def build_card(project_id: str, meta: Optional[dict] = None, user: Optional[dict
     return {
         "owner": _text(meta.get("owner")),
         "owner_display_name": _text(meta.get("owner_display_name")) or _text(meta.get("owner")),
-        "stage": _stage_block(code),
+        "stage": _stage_block(code,projection.get('industry') or meta.get('industry') or ''),
         "waiting_for": _waiting_for(project_id, next_action),
         "last_event": _last_event(project_id, meta),
         "anomaly": _anomaly(project_id, projection, stages_rows),
         "business_case_id": business_case_id(project_id),
         "packaging_progress": packaging_progress(project_id),
-        "primary_action": _primary_action(project_id, code, next_action),
+        "primary_action": _primary_action(project_id, code, next_action,projection.get('industry') or meta.get('industry') or ''),
     }
 
 

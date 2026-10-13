@@ -2340,6 +2340,20 @@
                 : ''};
     }
 
+    function packagingMatchNotice(m) {
+      const reason = (m && m.new_tooling_reason) || '';
+      const best = (m && m.best) || {};
+      const score = best.total != null ? '最高候选得分 ' + escapeHtml(String(best.total)) + ' 分，' : '';
+      if (reason === 'size_out_of_range') {
+        return '⚠ ' + score + '但尺寸超出盒型库适用范围，当前没有可确认的现有盒型，需要新制评估。';
+      }
+      if (reason === 'no_box_type') return '⚠ 盒型库暂无可用盒型，需要新制评估。';
+      if (reason === 'all_rejected') return '⚠ 现有盒型候选均未通过适用条件，需要新制评估。';
+      if (reason === 'no_confirmable_candidate') return '⚠ 现有盒型没有可确认候选，需要新制评估。';
+      if (reason === 'missing_required_input') return '⚠ 包装匹配信息不完整，请先补齐必填需求。';
+      return '⚠ 盒型库中没有可确认的现有盒型，需要新制评估。';
+    }
+
     function renderCandidates(ui, opts) {
       opts = opts || {};
       // 跨行业候选：先拦（Spec §5），载荷行业/取数表/行本身三处任一露馅都不渲染。
@@ -2386,15 +2400,16 @@
         Object.entries(ui.weights || {}).map(([k, v]) => escapeHtml(k) + ' ' + escapeHtml(v)).join('、') +
         '</div>';
 
-      if (ui.below_threshold) {
+      if (ui.below_threshold && ui.industry !== 'packaging') {
         html += '<div class="cand-warn"><i class="ti ti-alert-triangle"></i> 最高分低于阈值 ' +
           ui.threshold + ' 分：' + escapeHtml(ui.advice || '') + '</div>';
       }
       // 盒型库接不住（Spec §2.5）：如实说明，并给「转技术工艺」出口，而不是照常画「选用」。
-      if (ui.needs_new_tooling) {
-        html += '<div class="cand-warn"><i class="ti ti-alert-triangle"></i> 盒型库里没有适配的盒型' +
-          (ui.new_tooling_reason ? '（' + escapeHtml(ui.new_tooling_reason) + '）' : '') +
-          '：请转技术工艺新增盒型后再回到报价。</div>';
+      if (ui.industry === 'packaging' && ui.needs_new_tooling) {
+        html += '<div class="cand-warn">' + packagingMatchNotice({
+          industry: ui.industry, new_tooling_reason: ui.new_tooling_reason,
+          best: list[0] || null,
+        }) + '请转技术工艺新增盒型后再回到报价。</div>';
       }
       if (opts.repick && opts.picked) {
         html += '<div class="cand-sub" style="color:var(--color-primary,#0060E6)">' +
@@ -2687,18 +2702,28 @@
         requirement: d.requirement || {}, products: d.products || [],
         weights: d.weights || {}, threshold: d.threshold,
         below_threshold: d.below_threshold, advice: d.advice,
+        industry: currentIndustry(), needs_new_tooling: d.needs_new_tooling,
+        new_tooling_reason: d.new_tooling_reason,
         all_count: d.all_count, source: d.source || {},
       });
       let md = (packagingMatch ? '🔎 已查包装案例库并完成盒型、尺寸和材料匹配：共评估 ' : '🔎 已查库并完成六维加权评分：共评估 ') + (d.all_count || 0) + ' 个产品，推荐 Top' +
         ((d.products || []).length) + '（见上表）。';
-      if (d.below_threshold) md += '\n\n⚠ ' + (d.advice || '无高度匹配标品，建议转入定制评估。');
+      const matchSummary = {
+        industry: currentIndustry(), needs_new_tooling: d.needs_new_tooling,
+        new_tooling_reason: d.new_tooling_reason,
+        best: (d.products || [])[0] || null,
+      };
+      if (d.below_threshold) md += '\n\n' + (packagingMatch
+        ? packagingMatchNotice(matchSummary)
+        : '⚠ ' + (d.advice || '无高度匹配标品，建议转入定制评估。'));
       md += '\n\n请在上方表格点「选用」确定产品（随后会自动带出参数与价格）。';
       addAiBubble(md);
       // 最高分低于阈值：这单靠标品接不住，给一个直达「新增工艺」的入口。
       // 光在文字里说一句"建议转定制"，销售还得自己想到去点转交、再从下拉里挑对选项。
       WF.matchResult = {
         below: !!d.below_threshold, best: (d.products || [])[0] || null,
-        threshold: d.threshold, advice: d.advice || '',
+        threshold: d.threshold, advice: d.advice || '', industry: currentIndustry(),
+        needs_new_tooling: d.needs_new_tooling, new_tooling_reason: d.new_tooling_reason,
       };
       if (d.below_threshold) showTechNewSuggestion(WF.matchResult);
       return true;
@@ -3607,14 +3632,17 @@
       div.id = 'wfTechNewBubble';
       div.setAttribute('data-agent-card', '');
       div.setAttribute('data-status', 'completed');
+      const notice = m.industry === 'packaging'
+        ? packagingMatchNotice(m)
+        : '<b>⚠ 最高匹配分 ' +
+          escapeHtml(String(best.total != null ? best.total : '—')) + ' 分，低于 ' +
+          escapeHtml(String(m.threshold != null ? m.threshold : 70)) + ' 分</b><br>' +
+          escapeHtml(m.advice || '无高度匹配标品。');
       div.innerHTML =
         '<div class="message-label" data-agent-role="header">'
         + '<span data-agent-role="identity">报价单智能体</span></div>'
         + '<div class="message-text" data-agent-role="body">' +
-        '<div style="margin-bottom:8px"><b>⚠ 最高匹配分 ' +
-        escapeHtml(String(best.total != null ? best.total : '—')) + ' 分，低于 ' +
-        escapeHtml(String(m.threshold != null ? m.threshold : 70)) + ' 分</b><br>' +
-        escapeHtml(m.advice || '无高度匹配标品。') +
+        '<div style="margin-bottom:8px">' + notice +
         '建议交给<b>工艺经理新增产品</b>：由他据本单需求做图纸解析与工艺测算，' +
         '出新成品编码后再回到报价。</div>' +
         '<button id="wfKindHandoffBtn" style="padding:7px 16px;margin-right:8px;border:none;' +
@@ -4326,12 +4354,30 @@
       return String(sectionId || '') === 'packaging_parts';
     }
 
+    function packagingAddonDefinitions() {
+      return [['freight','运输配送'],['financing','资金占用'],['insurance','保险'],
+        ['commission','销售佣金'],['business_service','商务服务'],['rush','加急交付'],
+        ['special_testing','专项检测认证'],['tech_premium','技术溢价'],
+        ['market_adjustment','市场调节'],['other_addon','其他加价']];
+    }
+
+    function packagingAddonValues(snap) {
+      const saved=Object.fromEntries(((snap?.packaging_quote||{}).addons||[]).map(row=>[row.code,row.amount]));
+      const values={...saved};
+      document.querySelectorAll('[data-packaging-addon]').forEach(input=>{
+        const raw=String(input.value||'').trim();
+        if (raw !== '') values[input.dataset.packagingAddon]=Number(raw);
+      });
+      return values;
+    }
+
     async function renderPackagingQuotePanel(snap) {
       const pricingSession = currentSessionId;
       const pkg = snap && snap.packaging_package;
       if (!pkg || !window.PackagingQuotePanel) return null;
       LAST_PACKAGING_PACKAGE = pkg;
       restorePackagingPricing(snap);
+      const addonValues=packagingAddonValues(snap);
       // A saved snapshot owns its saved rate. An earlier unpriced panel may
       // already contain an empty input; that must not erase restored pricing.
       const rate = snap.packaging_quote && snap.packaging_quote.pricing_mode === 'gross_margin'
@@ -4339,7 +4385,7 @@
       const key = [((pkg.box_type || {}).confirmed_box_type || ''),
                    ((pkg.source || {}).result_version || pkg.result_version || ''),
                    ((pkg.cost || {}).total_cost === undefined ? '' : (pkg.cost || {}).total_cost),
-                   (rate === null ? '' : rate)].join('|');
+                   (rate === null ? '' : rate), JSON.stringify(addonValues)].join('|');
       if (key === PACKAGING_PANEL_KEY && LAST_PACKAGING_QUOTE) {
         applyPackagingQuoteRows(LAST_PACKAGING_QUOTE);
         return null;
@@ -4364,6 +4410,12 @@
           ' value="' + (rate === null ? '' : String((rate * 100).toFixed(2))) + '"' +
           ' style="width:90px;max-width:100%;margin:0 8px">' +
           '<button class="btn btn-secondary" type="button" id="packagingRepriceBtn">按此毛利率重算</button>' +
+          '<details class="collapse-block"'+(shownStep===4?' open':'')+'><summary class="collapse-header">其他加价 · 元/只</summary>'+
+          '<div class="collapse-content"><div class="empty-hint">独立人工和产品包材已计成本，不在此重复加；运输填写值替换原估算运费。留空沿用原值，填0表示不收取。</div>'+
+          packagingAddonDefinitions().map(([code,label])=>'<label class="form-label">'+label+
+            ' <input class="form-input" type="number" step="0.01" data-packaging-addon="'+code+'" value="'+
+            (Number.isFinite(addonValues[code])?String(addonValues[code]):'')+'" style="width:100px;max-width:100%;margin:4px 8px"></label>').join('')+
+          '</div></details>'+
           '<div id="packagingQuoteContent"></div>' +
         '</div>';
       const reprice = document.getElementById('packagingRepriceBtn');
@@ -4378,6 +4430,7 @@
       }
       options.pricing_mode = 'gross_margin';
       options.gross_margin_rate = rate;
+      options.addons = addonValues;
       try {
         const result = await window.PackagingQuotePanel.renderCard(snap, content, options);
         if (currentSessionId !== pricingSession) return null;

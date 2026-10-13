@@ -143,13 +143,17 @@ def _cost_data(project_id: str, facts: Dict[str, Any]) -> Optional[dict]:
     `packaging_parts` 文档里（IR 为空），这一份必须一起交给同一个口径，否则
     「零件拆出来了、成本这一步一件都看不见」（Spec §2.1）。
     """
+    cache_key='_cost_data:'+project_id
+    if cache_key in facts:return facts[cache_key]
     ir = _ir_model(facts.get("ir"))
     if not (ir and ir.parts):
         ir = cost_review.ir_from_packaging_parts(facts.get("packaging_parts")) or ir
     try:
-        return cost_review.summarize(project_id, ir, facts.get("plan"))
+        result=cost_review.summarize(project_id, ir, facts.get("plan"))
     except Exception:  # noqa: BLE001
-        return None
+        result=None
+    facts[cache_key]=result
+    return result
 
 
 def _excluded_parts(facts: Dict[str, Any]) -> set:
@@ -216,6 +220,16 @@ def _judge(key: str, project_id: str, facts: Dict[str, Any]) -> dict:
     ir = _ir_model(facts.get("ir"))
     parts = list(ir.parts) if ir else []
 
+    if (req.get('data') or {}).get('industry')=='packaging' and key in ('3.1','3.2','3.3'):
+        from . import packaging_workspace
+        if '_packaging_workspace' not in facts:
+            doc=facts.get('packaging_business_parts') or {}
+            records=facts.get('packaging_process_records')
+            if records is None:records=packaging_workspace.load_records(project_id,doc)
+            facts['_packaging_workspace']=packaging_workspace.build(project_id,doc,req.get('data') or {},plan,records)
+        state=facts['_packaging_workspace']['status']['3.2' if key=='3.3' else key]
+        return {'status':'confirmed' if state['completed'] else 'generated' if key!='3.1' and plan and plan.process else 'not_started',**state}
+
     if key == "1.1":
         if not req_status:
             return {"status": "not_started", "completed": False}
@@ -259,6 +273,10 @@ def _judge(key: str, project_id: str, facts: Dict[str, Any]) -> dict:
         return _no_parts_verdict(facts)
 
     if key == "3.1":
+        if (req.get('data') or {}).get('industry')=='packaging':
+            from . import packaging_workspace
+            state=packaging_workspace.build(project_id,facts.get('packaging_business_parts') or {},req.get('data') or {},plan,{})['status']['3.1']
+            return {'status':'generated' if state['completed'] else 'not_started',**state}
         if plan is None:
             return {"status": "not_started", "completed": False}
         # 这一步**自己产出的东西**就是整合分析的结果（`runIntegration`：参数推荐 + 组装工艺）。
@@ -270,6 +288,10 @@ def _judge(key: str, project_id: str, facts: Dict[str, Any]) -> dict:
                 "missing": [] if done else ["整合分析还没有执行"]}
 
     if key == "3.2":
+        if (req.get('data') or {}).get('industry')=='packaging':
+            from . import packaging_workspace
+            state=packaging_workspace.build(project_id,facts.get('packaging_business_parts') or {},req.get('data') or {},plan,{})['status']['3.2']
+            return {'status':'generated' if state['completed'] else 'not_started',**state}
         if plan is None or plan.params is None:
             return {"status": "not_started", "completed": False, "missing": ["参数推荐还没有生成"]}
         if plan.params_confirmed:
@@ -278,6 +300,10 @@ def _judge(key: str, project_id: str, facts: Dict[str, Any]) -> dict:
                 "missing": ["参数推荐尚未人工确认"]}
 
     if key == "3.3":
+        if (req.get('data') or {}).get('industry')=='packaging':
+            from . import packaging_workspace
+            state=packaging_workspace.build(project_id,facts.get('packaging_business_parts') or {},req.get('data') or {},plan,{})['status']['3.3']
+            return {'status':'confirmed' if state['completed'] else 'generated' if plan and plan.process else 'not_started',**state}
         if plan is None or plan.process is None:
             return {"status": "not_started", "completed": False, "missing": ["组装工艺还没有生成"]}
         if plan.process_confirmed:
@@ -324,6 +350,12 @@ def _judge(key: str, project_id: str, facts: Dict[str, Any]) -> dict:
 def _judge_cost(key: str, project_id: str, facts: Dict[str, Any],
                 plan, review) -> dict:
     data = _cost_data(project_id, facts)
+    if data and data.get('packaging_cost') and data.get('parts') and review is not None and getattr(review,'confirmed',False):
+        from . import cost_review
+        gaps=cost_review.confirm_gaps(project_id,None,plan,data)
+        if gaps['codes'] and cost_review.waiver_covers(review,gaps['codes']) is not None:
+            return {'status':'confirmed','completed':True,'draft_only':True,
+                    'warnings':gaps['fields'],'confirmation_mode':'internal_estimate'}
     if key == "4.1":
         if not data:
             return {"status": "not_started", "completed": False, "missing": ["成本还没有测算"]}
@@ -361,10 +393,11 @@ def _judge_cost(key: str, project_id: str, facts: Dict[str, Any],
 # --------------------------------------------------------------------------- #
 def _rows_for(project_id: str, facts: Dict[str, Any], role: str) -> List[dict]:
     rows: List[dict] = []
-    keys = [row["sub"] for row in stages_table.STAGES]
+    definitions=stages_table.for_industry(((facts.get('requirement') or {}).get('data') or {}).get('industry'))
+    keys = [row["sub"] for row in definitions]
     done_by_key: Dict[str, bool] = {}
     judged: Dict[str, dict] = {}
-    for spec in stages_table.STAGES:
+    for spec in definitions:
         key = spec["sub"]
         try:
             verdict = _judge(key, project_id, facts)
@@ -409,7 +442,7 @@ def _rows_for(project_id: str, facts: Dict[str, Any], role: str) -> List[dict]:
                     # The actual engine still requires valid BOM/route inputs.
                     continue
                 if not done_by_key.get(prior):
-                    prior_spec = next(row for row in stages_table.STAGES if row["sub"] == prior)
+                    prior_spec = next(row for row in definitions if row["sub"] == prior)
                     blockers.append(f"请先完成 {prior} {prior_spec['sub_title']}")
                     break
 
@@ -430,9 +463,9 @@ def _rows_for(project_id: str, facts: Dict[str, Any], role: str) -> List[dict]:
         out.append({
             "key": key,
             "phase_no": int(spec["phase"]),
-            "phase_title": spec["phase_title"],
+            "phase_title": spec['phase_title'],
             "sub": spec["sub"],
-            "sub_title": spec["sub_title"],
+            "sub_title": spec['sub_title'],
             "stage_id": spec["stage_id"],
             "view": spec["view"],
             "status": status if status in STATUS_ENUM else "not_started",
@@ -444,7 +477,8 @@ def _rows_for(project_id: str, facts: Dict[str, Any], role: str) -> List[dict]:
             "blocked_reasons": blockers,
             "missing_requirements": missing,
             "required_role": role_label,
-            "primary_action": _PRIMARY_ACTIONS.get(key, ""),
+            "primary_action": ({'3.1':'confirmParamsAndNext','3.2':'sendIntegrationToFinance'}.get(key,_PRIMARY_ACTIONS.get(key,''))
+                               if (requirement.get('data') or {}).get('industry')=='packaging' else _PRIMARY_ACTIONS.get(key, "")),
             "next_stage": keys[index + 1] if index + 1 < len(keys) else "",
         })
     return out
@@ -463,7 +497,7 @@ def _phases(rows: List[dict]) -> List[dict]:
                 if not row["completed"]:
                     status = row["status"]
                     break
-        out.append({"no": int(phase["no"]), "title": phase["title"],
+        out.append({"no": int(phase["no"]), "title": members[0].get('phase_title',phase['title']) if members else phase['title'],
                     "completed": completed, "status": status})
     return out
 
@@ -499,6 +533,7 @@ def build_projection(project_id: str, user: Optional[dict] = None) -> dict:
         refresh_error = "部分数据读取失败：" + "、".join(sorted(errors))
     return {
         "project_id": project_id,
+        "industry": ((facts.get('requirement') or {}).get('data') or {}).get('industry') or '',
         "generated_at": now_cst_str(),
         "refresh_ok": ok,
         "refresh_error": refresh_error,

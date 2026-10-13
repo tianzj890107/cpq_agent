@@ -270,6 +270,8 @@ def confirm_gaps(project_id: str, ir: Optional[DesignIR], plan,
     if packaging:
         requirement = store.load_requirement(project_id) or {}
         requirement_data = requirement.get("data") or {}
+        from . import requirement_service
+        requirement_data=requirement_service.resolved_packaging_order_data(requirement_data)
         try:
             wanted = float(requirement_data.get("quote_quantity"))
             computed = float(packaging.get("quote_quantity"))
@@ -283,6 +285,9 @@ def confirm_gaps(project_id: str, ir: Optional[DesignIR], plan,
     if packaging.get("stale"):
         codes.append("packaging:stale")
         fields.append("包装成本依据已变化，需要重新测算")
+    if packaging and data.get('reconciled') is False:
+        codes.append('packaging:ledger_mismatch')
+        fields.append('成本明细与总额未对齐：'+ '、'.join(data.get('reconciliation_errors') or []))
     for index, gap in enumerate(packaging.get("gaps") or []):
         if not isinstance(gap, dict):
             continue
@@ -390,9 +395,9 @@ def waiver_summary(review: CostReview) -> Optional[dict]:
     }
 
 
-def payload(project_id: str, ir: Optional[DesignIR], plan, review: CostReview) -> dict:
+def payload(project_id: str, ir: Optional[DesignIR], plan, review: CostReview, *, data=None) -> dict:
     """接口统一返回体。前端只认这一种形状。"""
-    data = summarize(project_id, ir, plan)
+    data = data if data is not None else summarize(project_id, ir, plan)
     written = plan.material_writes[-1] if plan.material_writes else None
     # 「整合参数」这个收口环节从 2.2 搬到了这里：报价必填项要在**出成本、发报价之前**
     # 补齐，而发报价已经是财务的动作。表格的行由 DA 字典定，见 product_params。
@@ -411,8 +416,13 @@ def payload(project_id: str, ir: Optional[DesignIR], plan, review: CostReview) -
     # 不弹第二次；缺口本身如实带出去（签字只放行，不抹掉）。
     review_dict["gaps"] = confirm_gaps(project_id, ir, plan, data)
     review_dict["cost_waiver"] = waiver_summary(review)
+    covered=waiver_covers(review,review_dict['gaps']['codes'])
+    review_dict['confirmation_mode']=('internal_estimate' if review.confirmed and covered is not None
+        else 'needs_reconfirmation' if review.confirmed and review_dict['gaps']['codes'] else 'confirmed' if review.confirmed else 'unconfirmed')
     requirement = store.load_requirement(project_id) or {}
     req_data = requirement.get("data") or {}
+    from . import requirement_service
+    req_data=requirement_service.resolved_packaging_order_data(req_data)
     packaging = req_data.get("industry") == "packaging"
     def batch(value):
         try:

@@ -112,18 +112,13 @@ class FakeStore:
 
 
 class ASubmitConfirmationGuard(unittest.TestCase):
-    def test_a1_submit_is_blocked_when_drawing_not_parsed(self):
+    def test_a1_submit_precedes_drawing_parse(self):
         fake = FakeStore(DRAFT)
         with mock.patch.object(RS, "store", fake), \
              mock.patch.object(RS, "drawing_parse_prerequisite", blocked_prerequisite):
-            with self.assertRaises(RS.RequirementSaveError) as ctx:
-                RS.submit_requirement_confirmation("p-order", {"username": "PE1"})
-        self.assertEqual(int(ctx.exception.status_code), 409,
-                         "1.1 必须先挡在图纸解析之前（Spec §2.3）")
-        self.assertEqual(ctx.exception.stable_error_code, CODE,
-                         "错误码必须与 1.3 那条一致（Spec §2.3）")
-        self.assertEqual(fake.saved_statuses(), [],
-                         "被挡住时不许落盘（Spec §2.3）")
+            out=RS.submit_requirement_confirmation("p-order", {"username": "PE1"})
+        self.assertEqual('pending_confirmation',out['status'])
+        self.assertEqual(fake.saved_statuses(), ['pending_confirmation'])
 
     def test_a2_submit_unchanged_when_drawing_is_parsed(self):
         fake = FakeStore(DRAFT)
@@ -135,15 +130,13 @@ class ASubmitConfirmationGuard(unittest.TestCase):
 
 
 class BConfirmGuard(unittest.TestCase):
-    def test_b1_confirm_is_blocked_when_drawing_not_parsed(self):
+    def test_b1_confirm_precedes_drawing_parse(self):
         fake = FakeStore(PENDING)
         with mock.patch.object(RS, "store", fake), \
              mock.patch.object(RS, "drawing_parse_prerequisite", blocked_prerequisite):
-            with self.assertRaises(RS.RequirementSaveError) as ctx:
-                RS.confirm_requirement("p-order", {"username": "PE1"})
-        self.assertEqual(int(ctx.exception.status_code), 409, "1.2 也必须挡住（Spec §2.3）")
-        self.assertEqual(ctx.exception.stable_error_code, CODE)
-        self.assertEqual(fake.saved_statuses(), [], "被挡住时不许落盘（Spec §2.3）")
+            out=RS.confirm_requirement("p-order", {"username": "PE1"})
+        self.assertEqual('pending_review',out['status'])
+        self.assertEqual(fake.saved_statuses(), ['pending_review'])
 
     def test_b2_confirm_unchanged_when_drawing_is_parsed(self):
         fake = FakeStore(PENDING)
@@ -157,9 +150,8 @@ class BConfirmGuard(unittest.TestCase):
 class CSharedGuard(unittest.TestCase):
     def test_c1_both_entry_points_use_the_same_prerequisite(self):
         for name in ("submit_requirement_confirmation", "confirm_requirement"):
-            self.assertIn("drawing_parse_prerequisite(", func_body(name),
-                          "%s() 必须调用同一份 drawing_parse_prerequisite()，"
-                          "不许只修一处（Spec §2.1 / §2.5）" % name)
+            self.assertNotIn("drawing_parse_prerequisite(", func_body(name),
+                             '新顺序Spec：1.x客户需求不依赖2.1图纸解析')
 
     def test_c2_waiver_releases_and_leaves_a_trace(self):
         fake = FakeStore(DRAFT)
@@ -178,7 +170,8 @@ class CSharedGuard(unittest.TestCase):
 class DNoRegression(unittest.TestCase):
     def test_d1_review_guard_still_there(self):
         body = func_body("review_requirement")
-        self.assertIn("drawing_parse_prerequisite(", body, "1.3 既有拦截逐字不变（Spec §2.5）")
+        self.assertNotIn("drawing_parse_prerequisite(", body)
+        self.assertIn('doc.status != "pending_review"',body,'审核状态守卫仍保留')
         self.assertIn("waiver", body, "1.3 的 waiver 放行仍在（Spec §2.5）")
 
     def test_d2_not_required_never_blocks(self):

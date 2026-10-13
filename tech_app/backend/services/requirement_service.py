@@ -72,8 +72,8 @@ PACKAGING_CATEGORY_KEYWORDS = (
 )
 
 #: 品类 / 产品名称在原文里的标签（后面 : ：可有可无，值取到标点为止）。
-PACKAGING_CATEGORY_LABEL = r"包装品类\s*[:：]?\s*([^；;\n，,]+)"
-PACKAGING_PRODUCT_NAME_LABEL = r"包装产品名称\s*[:：]?\s*([^；;\n，,]+)"
+PACKAGING_CATEGORY_LABEL = r"包装品类\s*[:：]?\s*([^；;\n，,、]+)"
+PACKAGING_PRODUCT_NAME_LABEL = r"包装产品名称\s*[:：]?\s*([^；;\n，,、]+)"
 
 
 def _category_from_vocabulary(source: str):
@@ -127,8 +127,8 @@ def extract_explicit_packaging_quote_fields(text: str) -> dict:
 
     labels = {
         "box_type": r"盒型编码\s*[:：]?\s*([A-Z0-9]+(?:-[A-Z0-9]+)+)",
-        "box_family": r"盒族\s*[:：]?\s*([^；;\n，,]+)",
-        "closure_type": r"闭合方式\s*[:：]?\s*([^；;\n，,]+)",
+        "box_family": r"盒族\s*[:：]?\s*([^；;\n，,、]+)",
+        "closure_type": r"闭合方式\s*[:：]?\s*([^；;\n，,、]+)",
     }
     for key, pattern in labels.items():
         value = unique(pattern)
@@ -161,7 +161,14 @@ def extract_explicit_packaging_quote_fields(text: str) -> dict:
         out["v_groove"] = "yes" if groove in ("是", "有") else "no"
     elif re.search(r"(?:^|[；;，,\s])V\s*槽(?:[；;，,\s。]|$)", source, re.I):
         out["v_groove"] = "yes"
-    quantity = unique(r"数量\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(?:只|个|件)\b")
+    quantity_values = {float(match.group(1)) for pattern in (
+        r"(?:报价|订单|采购)数量\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(?:只|个|件)?(?=$|[\s，,、；;。])",
+        r"(?:预计\s*)?首批\s*(?:订购|订|定|采购)?\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(?:只|个|件)(?=$|[\s，,、；;。])")
+        for match in re.finditer(pattern, source, re.I)}
+    if not quantity_values:
+        quantity_values={float(match.group(1)) for match in re.finditer(
+            r"(?:^|[\s，,、；;。])数量\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(?:只|个|件)?(?=$|[\s，,、；;。])",source,re.I)}
+    quantity = next(iter(quantity_values)) if len(quantity_values) == 1 else None
     if quantity and float(quantity) > 0:
         out["quote_quantity"] = quantity
     category = unique(PACKAGING_CATEGORY_LABEL)
@@ -185,13 +192,27 @@ def merge_explicit_packaging_quote_fields(data: dict, text: str) -> dict:
     provenance = dict(merged.get("field_provenance") or {})
     for key, value in extract_explicit_packaging_quote_fields(text).items():
         existing = merged.get(key)
-        if existing is not None and (not isinstance(existing, str) or existing.strip()):
+        # A legacy, unsourced one-box default cannot beat explicit order evidence.
+        assumption=(merged.get('demo_assumptions') or {}).get(key) or {}
+        placeholder_quantity = (key == 'quote_quantity' and not sources.get(key) and not provenance.get(key)
+                                and (values_equivalent(existing, 1) or
+                                     (assumption.get('mock') is True and values_equivalent(existing,assumption.get('value')))))
+        if existing is not None and (not isinstance(existing, str) or existing.strip()) and not placeholder_quantity:
             continue
         if sources.get(key) and sources[key] != "user_text":
             continue
         merged[key] = value
         sources[key] = "user_text"
         evidence[key] = text
+        if placeholder_quantity:
+            resolution=dict(merged.get('quantity_resolution') or {})
+            resolution.update(
+                original_value=existing,value=value,source='explicit_order_text',
+                reason='明确订单数量优先于无来源单只/估算批量默认值')
+            merged['quantity_resolution']=resolution
+            assumptions=dict(merged.get('demo_assumptions') or {})
+            assumptions.pop(key,None)
+            merged['demo_assumptions']=assumptions
         provenance.setdefault(key, {"origin": "user_text", "status": "needs_confirmation",
                                     "value": value, "confidence": 0.0,
                                     "evidence_refs": ["quote_requirement_text"]})
@@ -201,6 +222,13 @@ def merge_explicit_packaging_quote_fields(data: dict, text: str) -> dict:
     if evidence:
         merged["quote_text_field_evidence"] = evidence
     return merged
+
+def resolved_packaging_order_data(data: dict) -> dict:
+    """One evidence rule for costing, confirmation and handoff; does not mutate input."""
+    data=dict(data or {})
+    if data.get('industry') != 'packaging':return data
+    return merge_explicit_packaging_quote_fields(data,
+        '\n'.join(str(data.get(k) or '') for k in QUOTE_TEXT_KEYS))
 
 #: 需求修订版在 `data` 里的键（RequirementDoc 没有 revision 列，不新增 schema）。
 REVISION_KEY = "revision"
@@ -687,10 +715,7 @@ def submit_requirement_confirmation(project_id: str, user: Optional[dict] = None
     doc = RequirementDoc(**saved)
     if doc.status not in EDITABLE_STATUSES:
         raise RequirementSaveError("当前需求不在可提交状态", 409, code=REQUIREMENT_SAVE_REJECTED)
-    # 顺序门禁（Spec `packaging-requirement-confirm-order-guard.md` §2.1/§2.3）：判据与 1.3
-    # 审核共用同一份 `drawing_parse_prerequisite()`；图纸没解析完且没有 waiver 的 .dwg/.dxf
-    # 包装项目先别提交确认（否则第 8 步 field_write 必 blocked，退回草稿重跑才过）。
-    assert_requirement_drawing_parsed(drawing_parse_prerequisite(project_id), waiver=waiver)
+    # 客户需求先确认；图纸解析属于2.1，不作为提交前置。
     # 1.1 不新增硬门禁：星号字段没填全时，前端弹「仍要继续」，点继续就把 waiver 带到这里。
     # 缺口属于 L2（质量依赖），允许带着继续，但必须留下可追溯的签字记录。
     if waiver:
@@ -873,9 +898,7 @@ def confirm_requirement(project_id: str, user: Optional[dict] = None,
     doc = RequirementDoc(**saved)
     if doc.status != "pending_confirmation":
         raise RequirementSaveError("当前需求不在待确认状态", 409, code=REQUIREMENT_SAVE_REJECTED)
-    # 顺序门禁（Spec `packaging-requirement-confirm-order-guard.md` §2.1/§2.3）：与 1.1/1.3
-    # 共用同一份判据，图纸没解析完且没有 waiver 时同样挡住（pending_confirmation → pending_review）。
-    assert_requirement_drawing_parsed(drawing_parse_prerequisite(project_id), waiver=waiver)
+    # 客户需求先确认；图纸解析属于2.1，不作为确认前置。
     # 1.2 不新增硬门禁：有缺口时前端弹「仍要继续」，点继续才把 waiver 带到这里。
     # 同一批缺口在 1.1 已签过字就复用（reused=True），不再重复索要第二次签字。
     if waiver:
@@ -948,20 +971,7 @@ def review_requirement(project_id: str, user: Optional[dict] = None,
         raise RequirementSaveError("当前需求不在待审核状态", 409, code=REQUIREMENT_SAVE_REJECTED)
     if decision not in ("approve", "reject"):
         raise RequirementSaveError("decision 必须为 approve 或 reject", 400, code=REQUIREMENT_SAVE_REJECTED)
-    # 审批前要求完成图纸解析（Spec §3.3）：包装项目的 .dwg/.dxf 没解析完就不批 ——
-    # 但这是可豁免的业务前置（1.3 既有口径：带缺口批准只留痕，不放宽审核结论），
-    # 所以给了 waiver 就放行，并把缺口写进审计。
-    if decision == "approve":
-        prerequisite = drawing_parse_prerequisite(project_id)
-        if prerequisite["required"] and not prerequisite["done"]:
-            if not waiver:
-                raise RequirementSaveError(prerequisite["message"], 409,
-                                           code=REQUIREMENT_DRAWING_NOT_PARSED)
-            store.audit(project_id, "workflow:requirement_approved_without_drawing_parse", {
-                "by": user.get("username", "system"),
-                "code": prerequisite["code"], "suffix": prerequisite["suffix"],
-                "reason": _waiver_reason(waiver),
-            })
+    # 图纸未解析不妨碍客户需求批准，冻结需求的解析另存工程证据。
     # 1.3 把「业务批准」与「技术上能不能解析」分开记：带缺口批准只留痕，不放宽审核结论与权限。
     if waiver:
         gaps = requirement_gaps(project_id, doc)

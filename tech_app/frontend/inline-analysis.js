@@ -283,6 +283,9 @@
       // 生成完**立刻**就有这一行：结果就是任务返回值，不重新读一次（Spec §C2）。
       if (!window.PackagingConclusionNotes) throw new Error("页面说明组件未就绪，请刷新后重试");
       state.basisNote = window.PackagingConclusionNotes.basis(result);
+      if (state.mode === "process" && result.process_scope === "business_part/1") {
+        state.businessNote = window.PackagingConclusionNotes.businessIdentity(result);
+      }
       state.editing = false;
       render(state);
       setStatus(state, `${title}已完成`, false);
@@ -414,8 +417,9 @@
   function renderProcess(state) {
     const body = state.root.querySelector("[data-inline-body]");
     const plan = state.plan;
+    const identity = businessIdentityRow(state);
     if (!plan) {
-      body.innerHTML = `<div class="inline-empty">尚未生成工艺推荐。点击上方“生成工艺推荐”，AI 将依据当前零件的特征、材料、尺寸编制结构化加工工艺路线。</div>`;
+      body.innerHTML = identity + `<div class="inline-empty">尚未生成工艺推荐。点击上方“生成工艺推荐”，AI 将依据当前零件的特征、材料、尺寸编制结构化加工工艺路线。</div>`;
       return;
     }
     // 自上而下，每一段各占满整行：
@@ -424,7 +428,7 @@
     // 多行工序表），塞进等宽栏里总有一栏被挤扁。工艺流程图已删 —— 和工序明细
     // 是同一份顺序信息。
     const validation = state.validation || {};
-    let html = businessIdentityRow(state) + businessBasisRow(state)
+    let html = identity + businessBasisRow(state)
       + `<div class="inline-process-stack">`;
 
     html += `<section class="inline-card"><div class="inline-card-title">工序明细</div><div class="inline-steps">`;

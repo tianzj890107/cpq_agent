@@ -586,7 +586,7 @@ def preconditions(project_id: str) -> List[Dict[str, Any]]:
                       "unavailable": {}})
         return items
     status = str(requirement.get("status") or "").strip()
-    if status and status not in EDITABLE_STATUSES:
+    if status and status not in EDITABLE_STATUSES and (requirement.get('data') or {}).get('industry') != 'packaging':
         spec = model.PRECONDITION_BLOCKERS[REQUIREMENT_NOT_EDITABLE]
         items.append({"code": REQUIREMENT_NOT_EDITABLE, "severity": "blocking",
                       "message": "需求已提交（当前状态：%s），不能直接改写；请先退回草稿"

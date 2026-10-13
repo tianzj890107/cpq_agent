@@ -3172,6 +3172,8 @@ class IntegrationSettings(BaseModel):
     """2.2 的两个手填输入：整合需求与核算批量。"""
     requirement_note: str = ""
     quantity: int = 1
+    packaging_cut_settings: Optional[dict] = None
+    prepare_packaging_cut_inputs: bool = False
 
 
 def _integration_ir(project_id: str) -> DesignIR:
@@ -3211,6 +3213,17 @@ def update_integration_settings(project_id: str, body: IntegrationSettings,
     if not store.load_meta(project_id):
         raise HTTPException(404, "项目不存在")
     plan = integration.load_plan(project_id)
+    if body.packaging_cut_settings is not None or body.prepare_packaging_cut_inputs:
+        from .services import packaging_workspace
+        if ((store.load_requirement(project_id) or {}).get('data') or {}).get('industry') != 'packaging':
+            raise HTTPException(400,'开料余量仅适用于包装项目')
+        try:
+            if body.packaging_cut_settings is not None:
+                plan.packaging_cut_settings=packaging_workspace.validate_cut_settings(body.packaging_cut_settings)
+            if body.prepare_packaging_cut_inputs:
+                packaging_workspace.prepare_cut_inputs(project_id,user.get('username',''))
+        except ValueError as exc:
+            raise HTTPException(400,str(exc)) from exc
     plan.requirement_note = body.requirement_note
     plan.quantity = max(1, int(body.quantity or 1))
     integration.save_plan(project_id, plan, user.get("username", "system"))
@@ -3463,16 +3476,22 @@ async def generate_integration_process(
     _workflow_project(project_id)
     from .services import packaging_demo_flow
     automatic_demo=packaging_demo_flow.ensure_inputs(project_id,user)
-    ir = _integration_ir(project_id)
-    if integration.load_plan(project_id).params is None:
+    packaging_project=((store.load_requirement(project_id) or {}).get('data') or {}).get('industry')=='packaging'
+    ir = None if packaging_project else _integration_ir(project_id)
+    if not packaging_project and integration.load_plan(project_id).params is None:
         raise HTTPException(400, "请先完成参数推荐：组装工序要按整机 BOM 与连接关系来排")
     author = user.get("username", "system")
     atts = await _read_attachments(attachments)
 
     def job():
-        if automatic_demo:
-            tasks.report_progress('采用当前包装项目路线，不再生成独立3D组装工艺')
-            plan=packaging_demo_flow.prepare_route(project_id,user)
+        if packaging_project:
+            tasks.report_progress('只编制零件之间新增的组装工序，不重复零件制造工艺')
+            if automatic_demo:
+                plan=packaging_demo_flow.prepare_route(project_id,user,regenerate_assembly=True,note=note,attachments=atts)
+            else:
+                from .services import packaging_assembly
+                packaging_demo_flow.sync_integration(project_id,user)
+                plan=packaging_assembly.prepare(project_id,user,force=True,note=note,attachments=atts)
             return _integration_payload(project_id,plan)
         plan = integration.load_plan(project_id)
         lookup = _integration_process_lookup(project_id, plan)
@@ -3500,6 +3519,11 @@ def update_integration_process(project_id: str, plan_body: ProcessPlan,
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
     if not store.load_meta(project_id):
         raise HTTPException(404, "项目不存在")
+    if ((store.load_requirement(project_id) or {}).get('data') or {}).get('industry')=='packaging':
+        from .services import packaging_assembly
+        try:plan=packaging_assembly.save(project_id,plan_body,user)
+        except ValueError as exc:raise HTTPException(400,str(exc)) from exc
+        return _integration_payload(project_id,plan)
     plan_body.part_id = integration.ASSEMBLY_PART_ID
     plan_body.steps.sort(key=lambda step: step.step_no)
     # part_class 必须钉成 assembly：ProcessPlan 的默认值是 machining，而机加工模板不
@@ -3737,6 +3761,8 @@ def _cost_review_ctx(project_id: str):
     """
     if not store.load_meta(project_id):
         raise HTTPException(404, "项目不存在")
+    if ((store.load_requirement(project_id) or {}).get('data') or {}).get('industry')=='packaging':
+        return None,integration.load_plan(project_id),cost_review.load_review(project_id)
     snapshot = manufacturing_snapshot.load_snapshot(project_id)
     ir = None
     if snapshot.get("ready"):
@@ -7708,9 +7734,32 @@ def derive_packaging_business_parts(pid: str, user: dict = Depends(current_user)
 
 
 @app.get(PACKAGING_BUSINESS_PARTS_READ_PATH)
-def read_packaging_business_parts(pid: str, user: dict = Depends(current_user)):
+def read_packaging_business_parts(pid: str, user: dict = Depends(current_user), workspace: bool = False):
     """业务部件清单（纯读）：页面 / BOM / 工艺 / 成本的**唯一**部件集合。"""
     _workflow_project(pid)
+    if workspace:
+        from .services import packaging_workspace
+        doc=packaging_parts.load_business_parts(pid) or {}
+        records={}
+        from .services import packaging_layout, packaging_conclusions
+        try:active=packaging_layout.active_business_document(doc)
+        except ValueError:active={'business_parts':[]}
+        historical={}
+        for row in active.get('business_parts') or []:
+            code=row.get('business_part_code')
+            if not code:continue
+            record=dict(packaging_parts.load_part_process(pid,code) or {})
+            if record.get('business_parts_hash') and record['business_parts_hash']!=doc.get('business_parts_hash'):
+                version=record.get('business_parts_id')
+                if version not in historical:historical[version]=packaging_parts.load_business_parts(pid,version) if version else {}
+                before=next((r for r in (historical[version] or {}).get('business_parts') or [] if r.get('business_part_code')==code),None)
+                record['stale']=not before or packaging_conclusions._input(before)!=packaging_conclusions._input(row)
+            records[code]=record
+        board=packaging_workspace.build(pid,doc,(store.load_requirement(pid) or {}).get('data') or {},
+                                       integration.load_plan(pid),records)
+        return {'workspace':board,'business_parts_hash':doc.get('business_parts_hash'),
+                'business_parts':[{'business_part_code':p['code'],'name':p['name'],'scheme_id':p['scheme_id']} for p in board['layout_parts']],
+                'layout_rows':board['layouts']}
     return _business_parts_body(pid)
 
 
@@ -9608,7 +9657,7 @@ async def packaging_business_part_process(
     geometry_code = geometry_label.split(":", 1)[1] if geometry_label.startswith("bound:") else ""
     part = packaging_parts.business_as_ir_part(row)
     atts = await _read_attachments(attachments)
-    expected = _digest_value({"part": row, "note": note})
+    expected = _digest_value({"part": row, "note": note, "process_scope": "business_part/1"})
 
     def job():
         size_text = str(inputs.get("size_text") or "").strip() or "%s×%s mm" % (
@@ -9618,33 +9667,24 @@ async def packaging_business_part_process(
                               % (size_text, str(inputs.get("material_text") or "未填")))
         # 复用既有工艺链路（`process.outline_process()` 只吃 Part）：业务件与图纸零件走
         # **同一个**模型口径，区别只在输入 —— 这里没有整体 IR、没有几何，只有清单原文。
-        from .services import da_process_routing
+        from .services import da_process_routing, packaging_process_instances
         # DA 桥接缓存（Spec `packaging-process-batch-concurrency-and-cache.md` §2 C4）：
-        # 只在这一个工艺请求的处理期间开启 —— 各组成/多次读取共享同一份路线与候选集，
-        # 直接调用 `for_row` 的其它读侧不受影响。进程级计数，覆盖组成并行的工作线程。
+        # 只在这一个整件工艺请求期间开启；检索与推荐共享同一份父件路线与候选集。
+        # 直接调用 `for_row` 的其它读侧不受影响。
         with da_process_routing.cache_scope():
-            da_lookup = da_process_routing.for_row(row) if not inputs.get('sections') else {
-                'status': 'per_section', 'notice': '各组成独立检索，不沿用父件路线'}
+            da_lookup = da_process_routing.for_row(row)
             tasks.report_progress('DA 工艺路线：' + str(da_lookup.get('notice') or da_lookup.get('status')))
             sections = []
             def recommend(part, **kwargs):
                 if automatic_demo:
-                    child=next((s for s in row.get('sections') or [] if s.get('section_id') and part.part_id.endswith('::'+s['section_id'])),None)
-                    demo_inputs=(child or {}).get('poc_inputs') or row.get('poc_inputs') or {}
+                    demo_inputs=row.get('poc_inputs') or {}
                     return packaging_demo_inputs.demo_process_plan(part,kwargs.get('lookup') or {},demo_inputs,allow_fallback=True,
                         note=kwargs.get('note') or '',attachments=kwargs.get('attachments') or [])
                 return process.outline_process(part,**kwargs)
-            if inputs.get('sections'):
-                from .services import packaging_sections
-                plan_dict, coverage, sections = packaging_sections.recommend_process(
-                    inputs, recommend, note=note, attachments=atts)
-                da_lookup['sections'] = [{'section_id': section['section_id'],
-                                          'lookup': section.get('lookup') or {}} for section in sections]
-            else:
-                plan, coverage = recommend(
-                    part, overall=None, geom=None,
-                    note=_packaging_business_part_process_note(inputs, note) + '\n' + da_process_routing.grounding(da_lookup), attachments=atts,lookup=da_lookup)
-                plan_dict = plan.model_dump() if hasattr(plan,'model_dump') else dict(plan)
+            plan, coverage = recommend(
+                part, overall=None, geom=None,
+                note=_packaging_business_part_process_note(inputs, note) + '\n' + da_process_routing.grounding(da_lookup), attachments=atts,lookup=da_lookup)
+            plan_dict = plan.model_dump() if hasattr(plan,'model_dump') else dict(plan)
         steps_total = len(plan_dict.get("steps") or [])
         library = (coverage or {}).get("summary") or {}
         tasks.report_progress(
@@ -9665,6 +9705,7 @@ async def packaging_business_part_process(
             "engine_version": packaging_parts.ENGINE_VERSION,
             "plan": plan_dict, "validation": validation, "coverage": coverage,
             "sections": sections,
+            "process_scope": packaging_process_instances.BUSINESS_PART_PROCESS_SCOPE,
             # 业务件没有知识库检索依据，不装样子（与业务件成本那条同口径）。
             "lookup": da_lookup, "assumptions": ([assumption] if assumption else []) + [da_process_routing.grounding(da_lookup)],
             "process_origin": coverage.get('process_origin') or "model_recommendation_with_da_reference",
@@ -9682,6 +9723,7 @@ async def packaging_business_part_process(
         # 同上：任务返回值带口径四键（Spec §C3），面板生成完立刻说得清按哪套尺寸编的。
         return {"part_code": inputs["part_code"], "part_id": part.part_id,
                 "plan": plan_dict, "validation": validation, "coverage": coverage, "sections": sections,
+                "process_scope": packaging_process_instances.BUSINESS_PART_PROCESS_SCOPE,
                 "lookup": da_lookup, "process_origin": coverage.get('process_origin') or "model_recommendation_with_da_reference",
                 "size_source": inputs["size_source"],
                 "size_source_ref": inputs["size_source_ref"],
@@ -9719,6 +9761,15 @@ def get_packaging_business_part_process(pid: str, code: str,
             "size_text": str(record.get("size_text") or ""),
             "geometry": str(record.get("geometry") or "")}
     body.update(_packaging_part_conclusion_version(pid, record, loaded['doc']))
+    from .services import packaging_process_instances
+    scope_changed = bool(record) and not packaging_process_instances.is_whole_part_process(record)
+    body['process_scope'] = record.get('process_scope') or ''
+    body['process_scope_changed'] = scope_changed
+    if scope_changed:
+        body.update(historical_plan=body['plan'], historical_sections=body['sections'],
+                    plan=None, sections=[], validation=None,
+                    business_stale=True, business_stale_reason='process_scope_changed',
+                    process_scope_notice='旧工艺按组成分别生成，请重新生成整件工艺；历史结果保留。')
     return body
 
 

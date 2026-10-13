@@ -392,7 +392,8 @@ class AContract(unittest.TestCase):
         self.assertEqual(module.RATE_FIELDS, {"gross_margin": "gross_margin_rate",
                                               "markup": "markup_rate"})
         self.assertEqual([code for code, _ in module.ADDON_CATEGORIES],
-                         ["tech_premium", "market_adjustment", "other_addon"])
+                         ["tech_premium", "market_adjustment", "other_addon", "freight",
+                          "financing", "insurance", "commission", "business_service", "rush", "special_testing"])
         self.assertEqual([code for code, _ in module.DEDUCTION_CATEGORIES], ["discount"])
         self.assertEqual(module.DEFAULT_TAX_RATE, 0.13)
         self.assertEqual(module.PRICE_PATH, "/api/packaging-quote/price")

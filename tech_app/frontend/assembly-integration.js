@@ -59,7 +59,7 @@ const aiHasProcess = () => Boolean(aiData?.status?.has_process);
    而「确认图纸并进入参数推荐」「确认并进入下一页签」这两个收口函数定义在外层，
    调用它当场就是 ReferenceError「aiSetTab is not defined」。切页签是这一页的基础
    设施，挂在模块作用域，视图注册与业务函数共用同一个。 */
-function aiSetTab(name) { aiTab = name; aiRender(); }
+function aiSetTab(name) { aiTab = aiIndustry==='packaging' && name==='drawings'?'params':name; aiRender(); }
 
 /* 同一处病灶的另外两个助手：「确认图纸并进入参数推荐」在闭包外调用 aiAnalyzed()，
    留在闭包里同样一跑就 ReferenceError。它们只读看板手里那份 payload，不额外发请求。 */
@@ -67,6 +67,7 @@ function aiStatusState() {
   return (aiData && aiData.status) || {};
 }
 function aiAnalyzed() {
+  if(aiIndustry==='packaging')return Boolean(aiBusinessParts?.workspace?.status?.['3.1']?.completed && aiHasProcess());
   const state = aiStatusState();
   return Boolean(state.has_params && state.has_process);
 }
@@ -340,6 +341,8 @@ function aiShowFailure(code, message, traceId) {
 
 /** 这一环节能不能开跑。返回空串表示可以，否则是拦下来的理由。 */
 function aiBlocker(tab) {
+  if(aiIndustry==='packaging')return tab==='process'?(aiBusinessParts?.workspace?.status?.['3.1']?.missing||[]).join('；')
+    :aiBusinessParts?.workspace?.scheme_ready===false?'请先选择当前图纸方案':'';
   const state = aiData?.status || {};
   if (tab === 'params') return '';
   if (tab === 'process' && !state.has_params) return '请先完成「参数推荐」：组装工序要按整机 BOM 与连接关系来排。';
@@ -450,6 +453,7 @@ async function aiPost(path, opts) {
     aiPublishTask('task-progress', { taskId: taskId, label: title, status: 'running',
                                      progress: `${title}已提交，正在生成…` });
     aiData = await aiPollTask(taskId, card, title);
+    if(typeof aiIndustry!=='undefined' && aiIndustry==='packaging')await aiRefreshPackagingWorkspace();
     aiEditing[path] = false;
     card.done(true);
     aiStatus(`${title}已完成`);
@@ -537,6 +541,15 @@ async function aiPut(path, payload, message) {
 function aiRenderActions() {
   const host = $ai('aiActions');
   if (!host) return;
+  if (aiIndustry === 'packaging') {
+    host.innerHTML=aiTab==='params'
+      ? '<button class="inline-action" type="button" id="aiPackagingNext">进入组装工艺</button>'
+      : `<button class="inline-action" type="button" id="aiPackagingGenerate" ${aiBusy?'disabled':''}>生成新增组装工艺</button><button class="inline-action" type="button" id="aiPackagingAdopt" ${aiBusy||!aiHasProcess()?'disabled':''}>采用组装工艺</button>`;
+    const next=$ai('aiPackagingNext');if(next)next.onclick=()=>aiTab==='drawings'?aiConfirmDrawingsAndNext():aiConfirmParamsAndNext();
+    const gen=$ai('aiPackagingGenerate');if(gen)gen.onclick=()=>aiGenerate('process');
+    const adopt=$ai('aiPackagingAdopt');if(adopt)adopt.onclick=()=>aiConfirmStep('process');
+    return;
+  }
   if (aiTab === 'drawings') {
     host.innerHTML = `<button type="button" class="inline-action" id="aiUploadBtn">上传整合图纸</button>`
       + `<span class="ai-hint">装配图 / 爆炸图 / 接线图都可以，支持多选。它们会作为参数推荐与组装工艺的视觉输入。</span>`;
@@ -607,11 +620,12 @@ function aiGenerate(tab, options) {
   const form = new FormData();
   const note = $ai('aiRequirement')?.value.trim() || '';
   if (note) form.append('note', note);
-  return aiPost(tab, Object.assign({ form }, options || {}));
+  return aiPost(tab, Object.assign({ form, keepTab:aiIndustry==='packaging' }, options || {}));
 }
 
 // --------------------------------------------------------------------------- 面板：整合图纸
 function aiRenderDrawings() {
+  if(aiIndustry==='packaging')return window.PackagingStageWorkspace.render('drawings',aiBusinessParts?.workspace);
   const plan = aiPlan();
   const parts = aiParts;
   let html = `<section class="inline-card"><div class="inline-card-title">已上传的整合图纸</div>`;
@@ -712,13 +726,13 @@ function aiRequiredCard() {
 // --------------------------------------------------------------------------- 面板：参数推荐
 function aiRenderPackagingLayout() {
   const rows = aiBusinessParts?.layout_rows || [];
-  let html = '<section class="inline-card" data-packaging-layout><div class="inline-card-title">3.2 排版排模 · 图纸证据</div>';
+  let html = '<section class="inline-card" data-packaging-layout><div class="inline-card-title">3.1 排版排模 · 图纸证据</div>';
   if (!rows.length) return html + '<div class="inline-empty">图纸中尚无明确排模说明或重复展开图候选；不能据此编造开料利用率。</div></section>';
   html += '<div class="inline-warn">排模说明不计入零件清单。确认只表示认可图上文字；未绑定到具体零件、未核实纸张与用量前，不参与正式成本。</div>';
   rows.forEach(row => {
     const candidate = row.kind === 'drawing_layout_candidate';
     const associated = (aiBusinessParts?.business_parts || []).filter(p => (row.part_codes || []).includes(p.business_part_code));
-    const sheet = row.sheet_mm?.length === 2 ? `${row.sheet_mm[0]} × ${row.sheet_mm[1]} mm` : '纸张尺寸待确认';
+    const sheet = row.sheet_mm?.length === 2 ? `${Number(row.sheet_mm[0]).toFixed(2)} × ${Number(row.sheet_mm[1]).toFixed(2)} mm` : '纸张尺寸待确认';
     const options = (aiBusinessParts?.business_parts || []).filter(part => !row.scheme_id
       || [row.scheme_id,'common'].includes(part.scheme_id)).map(part => {
       const code = String(part.business_part_code || '');
@@ -731,6 +745,9 @@ function aiRenderPackagingLayout() {
     if (associated.length) html += `<div class="ai-hint">已关联：${associated.map(p=>esc(p.name || p.business_part_code)).join('、')}；无需再次保存，展开可调整。</div>`;
     if (row.classification_notice) html += `<div class="ai-hint">${esc(row.classification_notice)}</div>`;
     if (row.machine_mm) html += `<div class="ai-hint">上机尺寸：${esc(row.machine_mm.join(' × '))} mm（不作为开料尺寸）</div>`;
+    if(row.utilization!=null)html+=`<div class="ai-hint">展开包络面积利用率：${(row.utilization*100).toFixed(2)}%（非刀线净面积）</div>`;
+    ['direction','margin_mm','spacing_mm'].forEach(key=>{if(row[key]!=null)html+=`<div class="ai-hint">${esc({direction:'排模方向',margin_mm:'边距(mm)',spacing_mm:'间距(mm)'}[key])}：${esc(row[key])}</div>`;});
+    html+=`<button type="button" class="inline-action" data-pkg-drawing="">查看排模原图</button>`;
     html += `<details class="ai-layout-picker" data-ai-cut-region="${aiAttr(row.entity_id)}"><summary>开料尺寸与排出数量</summary>`
       + '<div class="ai-hint">开料尺寸、上机尺寸、零件展开尺寸分别记录。近邻标注尚未证明是纸张尺寸；核实后再采纳。无排模件默认展开长+0mm、宽+5mm，可按材料配置余量。</div>';
     (row.cut_dimension_candidates || []).forEach((dimension,index) => {
@@ -738,10 +755,10 @@ function aiRenderPackagingLayout() {
         + `<button class="inline-action" type="button" data-ai-cut-preview="${aiAttr(row.entity_id)}" data-index="${index}">查看原图标注</button>`
         + `<button class="inline-action" type="button" data-ai-cut-use="${aiAttr(row.entity_id)}" data-index="${index}">填入开料尺寸</button></div>`;
     });
-    html += `<div class="inline-cov-row"><label>开料长(mm) <input type="number" min="0.01" step="0.01" data-ai-cut-length value="${aiAttr(row.sheet_mm?.[0] || '')}"></label>`
+    html += `<div class="ai-layout-size-grid"><label>开料长(mm) <input type="number" min="0.01" step="0.01" data-ai-cut-length value="${aiAttr(row.sheet_mm?.[0] || '')}"></label>`
       + `<label>开料宽(mm) <input type="number" min="0.01" step="0.01" data-ai-cut-width value="${aiAttr(row.sheet_mm?.[1] || '')}"></label></div>`;
     associated.forEach(part => {
-      html += `<label class="ai-layout-option">${esc(part.name || part.business_part_code)} · 每张排出 <input type="number" min="1" step="1" data-ai-cut-count="${aiAttr(part.business_part_code)}" value="${aiAttr(row.part_counts?.[part.business_part_code] || '')}">件</label>`;
+      html += `<label class="ai-layout-partcount"><span>${esc(part.name || part.business_part_code)} · 每张排出</span><input type="number" min="1" step="1" data-ai-cut-count="${aiAttr(part.business_part_code)}" value="${aiAttr(row.part_counts?.[part.business_part_code] || (associated.length===1?row.n_up:'') || '')}">件</label>`;
     });
     html += `<div class="ai-hint">费用按各件所需展开面积占比分摊，合计等于整张费用；关联不自动推导用量。来源：${esc(row.size_source || '未取得开料尺寸')}</div>`
       + `<button class="inline-action save" type="button" data-ai-cut-save="${aiAttr(row.entity_id)}">核实并保存开料参数</button></details>`;
@@ -756,6 +773,8 @@ function aiRenderPackagingLayout() {
 }
 
 function aiRenderParams() {
+  if(aiIndustry==='packaging')return window.PackagingStageWorkspace.render('scheme',aiBusinessParts?.workspace)
+    +aiRenderPackagingLayout()+window.PackagingStageWorkspace.render('params',aiBusinessParts?.workspace);
   const layoutHtml = aiIndustry === 'packaging' ? aiRenderPackagingLayout() : '';
   const params = aiPlan().params;
   if (!params) {
@@ -818,6 +837,7 @@ async function aiConfirmStep(step) {
                                    progress: `正在确认${label}…` });
   try {
     aiData = await api(aiUrl(`/${step}/confirm`), { method: 'POST' });
+    if(aiIndustry==='packaging')await aiRefreshPackagingWorkspace();
     const missing = aiData?.status?.required_missing || 0;
     aiStatus(`${label}已确认`);
     aiToast(`${label}已确认`);
@@ -981,6 +1001,9 @@ async function aiGenerateParamsFully() {
     后端真实状态（GET /integration），整合结果确实在才切到「参数推荐」页签；回读不到或
     还没分析出结果就如实返回原因，不用本地布尔冒充确认完成。 */
 async function aiConfirmDrawingsAndNext() {
+  if(aiIndustry==='packaging') {
+    return aiPackagingNext('drawings');
+  }
   if (aiBusy) {
     return { ok: false, error: { code: 'busy', message: '已有任务在执行，请稍候。' } };
   }
@@ -1043,6 +1066,9 @@ function aiAskProceed(why, options = {}) {
     必填没齐时不硬阻断：把缺的项摆清楚，人点「仍要继续」就把已填的值先落库，
     再走 /params/confirm 带着缺口进入组装工艺 —— 这是人的决定，由他签字。 */
 async function aiConfirmParamsAndNext() {
+  if(aiIndustry==='packaging') {
+    return aiPackagingNext('params');
+  }
   if (aiBusy) {
     return { ok: false, error: { code: 'busy', message: '已有任务在执行，请稍候。' } };
   }
@@ -1160,6 +1186,7 @@ function aiCollectParams() {
 
 // --------------------------------------------------------------------------- 面板：组装工艺
 function aiRenderProcess() {
+  if(aiIndustry==='packaging')return window.PackagingStageWorkspace.render('process',aiBusinessParts?.workspace);
   const plan = aiPlan().process;
   if (!plan) {
     return `<div class="inline-empty">尚未生成组装工艺。平台会先按整机类别检索企业工艺库里的<strong>组装路线模板</strong>，`
@@ -1318,6 +1345,7 @@ function aiOpenQuestionsCard(assumptions, questions) {
 
 // --------------------------------------------------------------------------- 渲染入口
 function aiRender() {
+  if(aiIndustry==='packaging' && aiTab==='drawings')aiTab='params';
   const renderers = {
     drawings: aiRenderDrawings, params: aiRenderParams, process: aiRenderProcess,
   };
@@ -1331,8 +1359,9 @@ function aiRender() {
   // 一项、busy 或失败都不算完成。每次 render 都同步，重新生成 / Agent 改动后同样生效。
   const analyzed = Boolean(state.has_params && state.has_process);
   document.body.dataset.integrationAnalyzed = analyzed ? 'true' : 'false';
-  const done = { drawings: state.drawings > 0, params: state.params_confirmed,
-                 process: state.process_confirmed };
+  const done = aiIndustry==='packaging'
+    ? {params:aiBusinessParts?.workspace?.status?.['3.1']?.completed,process:aiBusinessParts?.workspace?.status?.['3.2']?.completed}
+    : { drawings: state.drawings > 0, params: state.params_confirmed, process: state.process_confirmed };
   document.querySelectorAll('#aiStepBody [data-ai-tab]').forEach(button => {
     button.classList.toggle('active', button.dataset.aiTab === aiTab);
     button.classList.toggle('done', Boolean(done[button.dataset.aiTab]));
@@ -1348,6 +1377,10 @@ function aiRender() {
     + ` · 工艺 ${state.process_confirmed ? '已确认' : state.has_process ? '待确认' : '—'}`;
   const name = aiPlan().params?.assembly_name;
   $ai('aiTitle').textContent = name ? `组装与整合 · ${name}` : '组装与整合';
+  if(aiIndustry==='packaging') {
+    $ai('aiTitle').textContent='排模与组装';
+    $ai('aiSideState').textContent=`部件 ${aiBusinessParts?.workspace?.parts?.length||0} · 排模 ${aiBusinessParts?.layout_rows?.length||0} · 工艺待补 ${aiBusinessParts?.workspace?.process_missing??'—'}`;
+  }
   aiPublishState();
 }
 
@@ -1377,6 +1410,11 @@ function aiPublishState() {
    见 aiFinanceGaps() 与 aiConfirmProcessAndSendToFinance()。
    aiRenderOps() 的页内 why 与左侧动作快照的 run() 共用这一份，两处不许漂移。 */
 function aiFinanceBlocker() {
+  if(aiIndustry==='packaging'){
+    if(!aiBusinessParts?.workspace?.status?.['3.1']?.completed)return '请先完成排模与开料输入';
+    if(!aiHasProcess() || aiBusinessParts?.workspace?.assembly_scope_changed)return '请先生成当前方案的新增组装工艺';
+    return '';
+  }
   const state = aiData?.status || {};
   if (!state.has_params) return '请先完成参数推荐';
   if (!state.has_process) return '请先完成组装工艺';
@@ -1446,7 +1484,8 @@ function aiRenderOps() {
   const finance = plan.finance_handoff;
   box.textContent = finance
     ? `已交给${finance.target_role_name || '财务经理'}（任务 ${finance.task_no || ''}）`
-    : '确认参数推荐与组装工艺后，把任务交给财务经理测算成本';
+    : (aiIndustry === 'packaging' ? '完成排版排模与新增组装工艺后，把任务交给财务经理测算成本'
+       : '确认参数推荐与组装工艺后，把任务交给财务经理测算成本');
 
   const financeBtn = $ai('aiToFinance');
   const draftBtn = $ai('aiFinanceDraft');
@@ -1482,7 +1521,8 @@ function aiRenderOps() {
   hint.innerHTML = (done.length
     ? done.map(line => `<div class="ai-op-done">✓ ${line}</div>`).join('')
       + `<div style="margin-top:6px">再点一次可以换个派发方式重发（旧任务会被作废）。</div>`
-    : '工艺与整机参数在这一步定稿（报价必填参数在「参数推荐」里补齐并确认）；'
+    : (aiIndustry === 'packaging' ? '本步完成排版排模和零件之间新增的组装工艺；'
+       : '工艺与整机参数在这一步定稿（报价必填参数在「参数推荐」里补齐并确认）；')
       + '<strong>成本由财务经理在 4 成本测算完成</strong>，写入数据库与发送至报价也都移到了那一步。')
     + (why ? '' : '');
 }
@@ -1699,7 +1739,8 @@ async function aiRunOp(kind, dispatch) {
 `
       + `他会在 4 成本测算逐个零件加整机算完成本，然后选择写入数据库、发送至报价，`
       + (finance.draft ? `或退回补齐缺口；当前参数和工艺未定稿，成本仅用于内部草稿核算。`
-                       : `或把结果退回给你复核工艺与用量。报价必填参数已在前面「参数推荐」里定稿。`));
+                       : (aiIndustry === 'packaging' ? `或把结果退回给你复核工艺、排模与用量。`
+                          : `或把结果退回给你复核工艺与用量。报价必填参数已在前面「参数推荐」里定稿。`)));
     card.done(true);
     aiStatus(`${labels[kind]}完成`);
     aiPublishTask('task-completed', { taskId: opTask, label: labels[kind],
@@ -1721,6 +1762,48 @@ function aiLayoutSelectedCodes(group) {
 }
 
 function aiBindBody() {
+  document.querySelectorAll('[data-pkg-save-assembly]').forEach(button=>{button.onclick=async()=>{
+    const group=button.closest('[data-pkg-assembly-step]');
+    const index=Number(button.dataset.pkgSaveAssembly);
+    const current=aiBusinessParts?.workspace?.assembly_steps?.[index];
+    const payload=JSON.parse(JSON.stringify(aiPlan().process||{}));
+    const step=(payload.steps||[]).find(s=>s.step_no===current?.step_no);
+    if(!step||!group)return;
+    step.part_codes=Array.from(group.querySelectorAll('[data-pkg-assembly-part]:checked')).map(input=>input.dataset.pkgAssemblyPart);
+    aiUserSay('保存“'+step.name+'”的关联零件。');button.disabled=true;
+    try{
+      aiData=await api(aiUrl('/process'),{method:'PUT',body:JSON.stringify(payload)});
+      await aiRefreshPackagingWorkspace();aiRender();aiSay('工序关联已保存，原成本需按更新后的路线重算。');
+    }catch(error){aiToast(error.message,true);button.disabled=false;}
+  };});
+  document.querySelectorAll('[data-pkg-drawing]').forEach(button=>{button.onclick=()=>{
+    const code=button.dataset.pkgDrawing.split('::')[0];
+    sessionStorage.removeItem('cpq:packaging-focus:'+aiPid);
+    if(code)sessionStorage.setItem('cpq:packaging-focus:'+aiPid,code);
+    window.TechEmbed.requestNavigate('drawing',aiPid);
+  };});
+  document.querySelectorAll('[data-pkg-scheme]').forEach(button=>{button.onclick=async()=>{
+    try {
+      aiUserSay('采用图纸方案 '+button.dataset.pkgScheme);button.disabled=true;
+      await api(`/api/projects/${encodeURIComponent(aiPid)}/requirement/packaging-business-parts/scheme`,{
+        method:'POST',body:JSON.stringify({scheme_id:button.dataset.pkgScheme,business_parts_hash:aiBusinessParts.business_parts_hash})});
+      await aiRefreshPackagingWorkspace();aiRender();aiSay('当前方案已采用，其他方案仍保留。');
+    }catch(error){aiToast(error.message,true);}finally{button.disabled=false;}
+  };});
+  document.querySelectorAll('[data-pkg-save-allowance]').forEach(button=>{button.onclick=async()=>{
+    try {
+      const settings={...(aiBusinessParts?.workspace?.cut_settings||{}),
+        cut_margin_length_mm:Number(document.querySelector('[data-pkg-margin-length]').value),
+        cut_margin_width_mm:Number(document.querySelector('[data-pkg-margin-width]').value)};
+      settings.cut_allowances={...(settings.cut_allowances||{})};
+      document.querySelectorAll('[data-pkg-material]').forEach(row=>{
+        settings.cut_allowances[row.dataset.pkgMaterial]={length_mm:Number(row.querySelector('[data-pkg-material-length]').value),width_mm:Number(row.querySelector('[data-pkg-material-width]').value)};
+      });
+      aiUserSay('保存开料余量。');button.disabled=true;
+      aiData=await api(aiUrl(''),{method:'PUT',body:JSON.stringify({requirement_note:aiPlan().requirement_note||'',quantity:aiPlan().quantity||1,packaging_cut_settings:settings})});
+      await aiRefreshPackagingWorkspace();aiRender();aiSay('开料余量已保存，第4阶段使用同一规则重算成本。');
+    }catch(error){aiToast(error.message,true);}finally{button.disabled=false;}
+  };});
   document.querySelectorAll('[data-ai-cut-use]').forEach(button => {
     button.onclick = () => {
       const row=aiBusinessParts.layout_rows.find(r=>r.entity_id===button.dataset.aiCutUse);
@@ -1740,6 +1823,7 @@ function aiBindBody() {
         aiBusinessParts=await api(`/api/projects/${encodeURIComponent(aiPid)}/requirement/packaging-layout/${encodeURIComponent(button.dataset.aiCutSave)}/confirmation`,{
           method:'PUT',body:{confirmed:true,business_parts_hash:aiBusinessParts.business_parts_hash,
             cut_inputs:{sheet_mm:[Number(region.querySelector('[data-ai-cut-length]').value),Number(region.querySelector('[data-ai-cut-width]').value)],part_counts}}});
+        await aiRefreshPackagingWorkspace();
         aiRender();
       } catch(error) { alert(error.message); button.disabled=false; }
     };
@@ -1780,6 +1864,7 @@ function aiBindBody() {
           method: 'PUT', body: JSON.stringify({ confirmed: false,
             part_codes: selectedCodes }),
         });
+        await aiRefreshPackagingWorkspace();
         aiRender();
       } catch (error) { aiToast(error.message || '排模关联保存失败', true); }
       finally {
@@ -1796,6 +1881,7 @@ function aiBindBody() {
         aiBusinessParts = await api(`/api/projects/${encodeURIComponent(aiPid)}/requirement/packaging-layout/${encodeURIComponent(button.dataset.aiLayoutConfirm)}/confirmation`, {
           method: 'PUT', body: JSON.stringify({ confirmed: button.dataset.confirmed !== 'true' }),
         });
+        await aiRefreshPackagingWorkspace();
         aiRender();
       } catch (error) { aiToast(error.message || '排模确认失败', true); }
     };
@@ -1911,6 +1997,12 @@ async function aiUploadDrawings(files) {
 
 /** 一键跑完三个环节。任一环节失败就停在那里 —— 后面两个本来就依赖它的结果。 */
 async function aiRunAll() {
+  if(aiIndustry==='packaging') {
+    if(typeof aiUserSay==='function')aiUserSay('读取方案与部件。');
+    await aiRefreshPackagingWorkspace();
+    aiSay('当前方案与部件已读取；本步骤不生成参数或工艺，请在各自页签继续。');
+    aiRender();return;
+  }
   const note = $ai('aiRequirement').value.trim();
   await api(aiUrl(''), {
     method: 'PUT',
@@ -1997,7 +2089,7 @@ async function aiLoadModelLabel() {
 // --------------------------------------------------------------------------- 启动
 function aiBindShell() {
   document.querySelectorAll('[data-ai-tab]').forEach(button => {
-    button.onclick = () => { aiTab = button.dataset.aiTab; aiRender(); };
+    button.onclick = () => aiSetTab(button.dataset.aiTab);
   });
   // 左边已经是 56px 导航条，没有可折叠的卡片了；右窗仍是浮动小窗，折叠方式与 2.1
   // 一致：把 collapsed 打在 dock 上（agent-chat.css 里同时管宽度与箭头方向）。
@@ -2201,12 +2293,8 @@ async function aiConfirm() {
 async function aiLoadParts() {
   try {
     if (aiIndustry === 'packaging') {
-      aiBusinessParts = await api(`/api/projects/${encodeURIComponent(aiPid)}/requirement/packaging-business-parts`);
-      return (aiBusinessParts?.business_parts || []).map(part => ({
-        part_id: part.business_part_code, name: part.name, quantity: 1,
-        hasCost: false, unitCost: null, fragments: part.cad_fragments || [],
-        sections: part.declared_sections || [],
-      }));
+      const board=await aiRefreshPackagingWorkspace();
+      return board.parts;
     }
     const aggregate = await api(`/api/projects/${encodeURIComponent(aiPid)}/summary`);
     const parts = aggregate?.ir?.parts || [];
@@ -2223,6 +2311,27 @@ async function aiLoadParts() {
   } catch { return []; }
 }
 
+async function aiRefreshPackagingWorkspace() {
+  aiBusinessParts=await api(`/api/projects/${encodeURIComponent(aiPid)}/requirement/packaging-business-parts?workspace=true`);
+  window.CadWorkflowNavigation?.setPackagingStatus?.(aiBusinessParts.workspace.status);
+  return aiBusinessParts.workspace;
+}
+
+async function aiPackagingNext(tab) {
+  if(aiBusy||aiDeferredBusy)return {ok:false,error:{code:'busy',message:'已有任务在执行，请稍候'}};
+  aiUserSay('完成排版排模，进入组装工艺。');
+  aiData=await api(aiUrl(''),{method:'PUT',body:JSON.stringify({requirement_note:aiPlan().requirement_note||'',quantity:aiPlan().quantity||1,prepare_packaging_cut_inputs:true})});
+  const board=await aiRefreshPackagingWorkspace();
+  const key='3.1';
+  if(!board.status[key].completed) {
+    const message=board.status[key].missing.join('；')||'请先完成方案选择和开料输入';
+    aiToast(message,true);return {ok:false,error:{code:'packaging-step-not-ready',message}};
+  }
+  aiSetTab('process');
+  aiSay('开料输入已齐，进入组装工艺。');
+  return {ok:true};
+}
+
 async function aiStart() {
   if (!aiPid) { if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.exitToTechHome();return;} location.href = 'home.html'; return; }
   aiBindShell();
@@ -2235,11 +2344,26 @@ async function aiStart() {
     const requirementPayload = await api(`/api/projects/${encodeURIComponent(aiPid)}/requirement`).catch(() => ({}));
     aiIndustry = String(requirementPayload?.requirement?.data?.industry || '');
     if (aiIndustry === 'packaging') {
-      const names = { drawings: '方案与部件', params: '排版排模', process: '后道加工与组装工艺' };
+      document.body.dataset.industry='packaging';
+      const names = { params: '排版排模', process: '组装工艺' };
+      Object.assign(AI_TABS,names);
+      Object.keys(names).forEach(key=>{AI_TAB_NAMES[key]=`${{params:'3.1',process:'3.2'}[key]} ${names[key]}`;});
+      window.CadWorkflowNavigation?.setIndustry?.('packaging');
       document.querySelectorAll('[data-ai-tab]').forEach(button => {
+        if(button.dataset.aiTab==='drawings'){button.hidden=true;button.setAttribute('aria-hidden','true');return;}
         const name = names[button.dataset.aiTab];
-        if (name) button.textContent = `${{ drawings: '3.1', params: '3.2', process: '3.3' }[button.dataset.aiTab]} ${name}`;
+        if (name) {
+          const label=`${{ params: '3.1', process: '3.2' }[button.dataset.aiTab]} ${name}`;
+          const title=button.querySelector('b');if(title)title.textContent=label;else button.textContent=label;
+          button.setAttribute('aria-label',label);
+          const detail=button.querySelector('.oc-rail-tip span');if(detail)detail.textContent='包装业务工作区';
+        }
       });
+      if(aiTab==='drawings')aiTab='params';
+      const requested=new URLSearchParams(location.search).get('view')||sessionStorage.getItem('cpq:packaging-view:'+aiPid);
+      if(requested==='process'||requested==='params')aiTab=requested;
+      sessionStorage.removeItem('cpq:packaging-view:'+aiPid);
+      const start=$ai('aiStart');if(start)start.textContent='读取排模数据';
     }
     const settledPlan = await savedPlan;
     if(settledPlan.error) throw settledPlan.error;
@@ -2249,7 +2373,7 @@ async function aiStart() {
     $ai('aiRequirement').value = aiPlan().requirement_note || '';
     const state = aiData.status || {};
     // 落在"下一件该做的事"上。
-    aiTab = state.has_process ? 'process' : state.has_params ? 'params' : 'drawings';
+    if(aiIndustry!=='packaging')aiTab = state.has_process ? 'process' : state.has_params ? 'params' : 'drawings';
     aiRender();
     aiReplayTimeline().catch(() => null);
     aiStatus(state.confirmed ? '本步已确认' : '就绪');
@@ -2290,6 +2414,7 @@ aiStart();
         return { ok: true };
       },
       getState: () => {
+        if(aiIndustry==='packaging')return {visible:aiTab==='params',enabled:true,busy:aiBusy||aiDeferredBusy,label:'读取排模数据',role:'aux',order:10};
         const analyzed = aiAnalyzed();
         const busy = aiBusy || aiDeferredBusy;
         // 开始整合分析是「整合图纸」页的起点：整条链（参数推荐 + 组装工艺）从这里发起，
@@ -2337,6 +2462,7 @@ aiStart();
       order: 15,
       run: () => aiConfirmDrawingsAndNext(),
       getState: () => {
+        if(aiIndustry==='packaging')return {visible:false,enabled:true,busy:aiBusy,label:'进入排版排模',role:'aux',order:15};
         const show = aiTab === 'drawings' && aiAnalyzed();
         return { visible: show, enabled: true, busy: aiBusy,
                  analyzed: show, role: show ? 'primary' : 'aux', order: 15,
@@ -2357,7 +2483,7 @@ aiStart();
       // 左侧因此不再需要「智能补全 / 保存补填 / 确认参数已齐」三颗按钮。
       run: () => { aiGenerateParamsFully(); return { ok: true }; },
       getState: () => {
-        const show = aiTab === 'params';
+        const show = aiTab === 'params' && aiIndustry!=='packaging';
         // 未生成时它就是参数页的主按钮；生成之后主按钮交给「确认并进入下一步」。
         return { visible: show, enabled: true, busy: aiBusy,
                  role: aiHasParams() ? 'aux' : 'primary', order: 30 };
@@ -2386,8 +2512,10 @@ aiStart();
         return { ok: true };
       },
       // role 只在这里声明一次：整个 3 组装与整合页只允许有「当前那一个」主按钮。
-      getState: () => ({ visible: aiTab === 'params' && aiHasParams(),
-                         enabled: true, busy: aiBusy, role: 'primary', order: 35 }),
+      getState: () => {
+        if(aiIndustry==='packaging')return {visible:aiTab==='params',label:'进入组装工艺',enabled:true,busy:aiBusy,role:'primary',order:35};
+        return { visible: aiTab === 'params' && aiHasParams(), enabled: true, busy: aiBusy, role: 'primary', order: 35 };
+      },
     },
     generateIntegrationProcess: {
       label: '一键生成组装工艺',
@@ -2396,6 +2524,7 @@ aiStart();
       deferred: true,
       run: () => { aiGenerate('process'); return { ok: true }; },
       getState: () => {
+        if(aiIndustry==='packaging')return {visible:aiTab==='process',enabled:true,busy:aiBusy,label:'生成新增组装工艺',role:aiHasProcess()?'aux':'primary',order:40};
         const show = aiTab === 'process';
         // 未生成工艺时它就是本页主按钮；生成之后主按钮交给「确认并进入下一步」。
         return { visible: show, enabled: true, busy: aiBusy,
@@ -2486,12 +2615,14 @@ aiStart();
       prompt:(payload) => {
         const step = String((payload && payload.step) || '').toLowerCase();
         const partId = String((payload && payload.part_id) || '').trim();
+        if(aiIndustry==='packaging')return step==='process'?'补齐当前包装项目缺失的工艺并汇总路线。':'';
         if (step === 'params') return partId ? `帮我生成 ${partId} 的参数推荐。` : '帮我生成参数推荐。';
         if (step === 'process') return partId ? `帮我生成 ${partId} 的组装工艺。` : '帮我生成组装工艺。';
         return '';
       },
       run: (payload) => {
         const step = String((payload && payload.step) || '').toLowerCase();
+        if(aiIndustry==='packaging' && step!=='process')return {ok:false,error:{code:'packaging-step',message:'包装排模页不生成整机参数；请在排模页保存开料参数，工艺生成使用process步骤。'}};
         // 成本测算属于第 4 阶段（成本页），不再从本步发起 —— 这里只跑参数推荐与组装工艺。
         const labels = { params: '参数推荐', process: '组装工艺' };
         if (!labels[step]) {

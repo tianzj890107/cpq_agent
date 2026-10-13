@@ -477,7 +477,7 @@ def validate_order(steps) -> list:
 def _steps_fingerprint(steps) -> str:
     """工序序列（含 step_no）的稳定指纹。"""
     if any(row.get('part_code') for row in steps or []):
-        keys=('step_no','step_name','part_code','section_id','formula_code','usage_qty',
+        keys=('step_no','step_name','part_code','section_id','formula_code','usage_qty','part_codes','scope',
               'cost_parameters','standard_seconds','source_ref')
         payload=json.dumps([{k:(_num(s.get(k)) if k in ('step_no','standard_seconds','usage_qty')
                               else s.get(k)) for k in keys} for s in steps],
@@ -658,7 +658,9 @@ def _stale_reasons(row: dict, steps: list, versions: list, project_id: str) -> t
             if _stored_source_versions(row).get('part_process_hash'):
                 from . import packaging_process_instances
                 live = packaging_process_instances.collect(project_id)
-                current = {'steps':packaging_process_instances.expand(live['records'])}
+                from . import packaging_assembly
+                current = {'steps':packaging_assembly.append_operations(project_id,
+                    packaging_process_instances.expand(live['records']))}
             else:
                 current = build_route_steps(box_code, data)
         except RouteError as exc:
@@ -666,15 +668,21 @@ def _stale_reasons(row: dict, steps: list, versions: list, project_id: str) -> t
             recompute_unavailable = {"code": _text(getattr(exc, "code", "")),
                                      "reason": str(getattr(exc, "message", "") or exc)}
         except ValueError as exc:
-            if not str(exc).startswith('packaging_scheme_selection_required'):
+            if str(exc)=='assembly_inputs_changed':
+                current=None
+                recompute_unavailable={'code':'assembly_inputs_changed','reason':'零件或工艺已变化，请更新新增组装工艺'}
+            elif not str(exc).startswith('packaging_scheme_selection_required'):
                 raise
-            current = None
-            recompute_unavailable = {'code':'packaging_scheme_selection_required','reason':str(exc)}
+            else:
+                current = None
+                recompute_unavailable = {'code':'packaging_scheme_selection_required','reason':str(exc)}
     stored_fingerprint = _steps_fingerprint(steps)
     current_fingerprint = (_steps_fingerprint(current["steps"]) if current
                            else stored_fingerprint)
     frozen = _text(latest.get("steps_fingerprint"))
     reasons: list = []
+    if recompute_unavailable.get('code') == 'assembly_inputs_changed':
+        reasons.append('assembly_inputs_changed')
     if not recompute_unavailable:
         if frozen and (frozen != stored_fingerprint or frozen != current_fingerprint):
             reasons.append("route_changed")
@@ -861,7 +869,11 @@ def build_route(project_id: str, requirement_no: str = "") -> dict:
 
     _save_template_gap(project_id, req_no, template_gap)
     if instances['active']:
-        unified_steps = packaging_process_instances.expand(instances['records'])
+        from . import packaging_assembly
+        try:
+            unified_steps = packaging_assembly.append_operations(project_id,packaging_process_instances.expand(instances['records']))
+        except ValueError as exc:
+            raise RouteError(str(exc),409,'assembly_inputs_changed') from exc
         known_seconds = [_num(s.get('standard_seconds')) for s in unified_steps
                          if _num(s.get('standard_seconds')) is not None]
         seconds = sum(known_seconds) if known_seconds else None
@@ -962,6 +974,10 @@ def confirm_route(project_id: str, requirement_no: str, *, actor: Any = None) ->
     part_drift = packaging_process_instances.drift(project_id, stored_versions)
     if part_drift:
         raise RouteError('单件工序已变化或不可读取，请重算路线后再确认',409,part_drift)
+    from . import packaging_assembly
+    assembly_drift=packaging_assembly.route_drift(project_id,steps)
+    if assembly_drift:
+        raise RouteError('新增组装工序或关联零件已变化，请重算路线后再确认',409,assembly_drift)
     stored_hash = _text(stored_versions.get("bom_hash"))
     live_rows, bom_unavailable = _current_bom_rows(project_id, req_no)
     current_hash = bom_input_hash(live_rows) if live_rows is not None else ""

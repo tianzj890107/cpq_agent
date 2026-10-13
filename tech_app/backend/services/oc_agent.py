@@ -2951,6 +2951,9 @@ class ProjectAgent:
                 self.conv.profile.disabled_tools.append(tool_name)
         self._rebuild_tools()
         self.conv.system_prompt = f"{self.conv.system_prompt}\n{SYSTEM_APPENDIX}"
+        requirement=store.load_requirement(project_id) or {}
+        if (requirement.get('data') or {}).get('industry')=='packaging':
+            self.conv.system_prompt+='\n包装行业覆盖上述第3阶段口径：只显示3.1排版排模（params视图）与3.2组装工艺（process视图）。drawings是旧入口，兼容跳转排模。组装只新增不同零件之间的工序并绑定相关整件，不能重复零件制造工艺；成本仍读取完整制造+组装路线。'
         self.lock = threading.Lock()
 
     def _rebuild_tools(self) -> None:

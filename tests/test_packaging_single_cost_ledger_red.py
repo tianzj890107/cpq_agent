@@ -29,10 +29,11 @@ class SingleLedger(unittest.TestCase):
         before = copy.deepcopy(cost)
         view = self.project(doc,cost)
         row = view['parts'][0]
-        self.assertEqual(20,row['subtotal'])
-        self.assertEqual(10,row['unit_cost'])
+        # Updated ownership Spec: independent labor stays in project expenses.
+        self.assertEqual(14,row['subtotal'])
+        self.assertEqual(7,row['unit_cost'])
         self.assertEqual(11,view['parts_total']['material'])
-        self.assertEqual(10,view['project_expenses']['total'])
+        self.assertEqual(16,view['project_expenses']['total'])
         self.assertEqual(30,view['final']['total'])
         self.assertTrue(view['reconciled'])
         self.assertEqual('same',row['estimate_id'])
@@ -97,7 +98,7 @@ class SingleLedger(unittest.TestCase):
         self.assertEqual('task-canonical',result['task_id'])
         build.assert_called_once_with('project',actor=user)
         old_write.assert_not_called()
-        self.assertEqual(10,settled[0]['summary']['computed_total'])
+        self.assertEqual(7,settled[0]['summary']['computed_total'])
         self.assertEqual('same',settled[0]['estimate_id'])
 
     def test_part_summary_reads_canonical_cost_and_ignores_old_record(self):

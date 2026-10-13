@@ -295,29 +295,36 @@ def cost_review_ctx(project_id: str):
 
     if not store.load_meta(project_id):
         raise CostFlowError("项目不存在", 404)
-    ir_dict = store.load_ir(project_id)
+    packaging=((store.load_requirement(project_id) or {}).get('data') or {}).get('industry')=='packaging'
+    ir_dict = None if packaging else store.load_ir(project_id)
     ir = DesignIR(**ir_dict) if ir_dict else None
     return ir, integration.load_plan(project_id), cost_review.load_review(project_id)
 
 
-def _ready(project_id: str):
+def _ready(project_id: str, *, allow_estimate=False):
     """三个去向动作的共同前置：成本得先算齐并确认。"""
     ir, plan, review = cost_review_ctx(project_id)
-    _assert_packaging_ledger(project_id)
     if not review.confirmed:
         raise CostFlowError("请先点「确认成本」：三个去向都以确认过的成本为准")
+    if allow_estimate:
+        data=cost_review.summarize(project_id,ir,plan)
+        gaps=cost_review.confirm_gaps(project_id,ir,plan,data)
+        _assert_packaging_ledger(project_id,view=data,
+            allow_quality=cost_review.waiver_covers(review,gaps['codes']) is not None)
+    else:
+        _assert_packaging_ledger(project_id)
     return ir, plan, review
 
 
-def _assert_packaging_ledger(project_id):
+def _assert_packaging_ledger(project_id, *, view=None, allow_quality=False):
     requirement = store.load_requirement(project_id) or {}
     if (requirement.get('data') or {}).get('industry') != 'packaging':
         return
     from . import packaging_cost_ledger
-    view = packaging_cost_ledger.load(project_id)
-    if not view['reconciled']:
+    view = view if view is not None else packaging_cost_ledger.load(project_id)
+    if not view['reconciled'] and not allow_quality:
         raise CostFlowError('包装成本明细与总额未对齐，不能确认或发送，请重新测算并核对')
-    if view['packaging_cost'].get('stale'):
+    if view['packaging_cost'].get('stale') and not allow_quality:
         raise CostFlowError('包装公式成本已过期，请重新测算')
 
 
@@ -359,11 +366,13 @@ def confirm_review(project_id: str, user: Optional[dict] = None,
       （`review.gaps` / `review.cost_waiver`），事后查得出是谁在什么时候放的行。
     """
     ir, plan, review = cost_review_ctx(project_id)
-    _assert_packaging_ledger(project_id)
     data = cost_review.summarize(project_id, ir, plan)
     gaps = cost_review.confirm_gaps(project_id, ir, plan, data)
     if not gaps["parts"]:
         raise CostFlowError("还没有零件可以确认，请先完成成本测算")
+    covering = cost_review.waiver_covers(review,gaps['codes'])
+    _assert_packaging_ledger(project_id,view=data,
+        allow_quality=waiver is not None or covering is not None)
     if gaps["codes"]:
         covering = cost_review.waiver_covers(review, gaps["codes"])
         # 请求里没带签字、库里也没有覆盖这批缺口的签字 —— 如实拒绝，并说清可以怎么办，
@@ -387,7 +396,7 @@ def confirm_review(project_id: str, user: Optional[dict] = None,
     cost_review.save_review(project_id, review, (user or {}).get("username", "system"))
     store.audit(project_id, "cost_review_confirm",
                 {"by": review.confirmed_by, "total": data["final"].get("total")})
-    return cost_review.payload(project_id, ir, plan, review)
+    return cost_review.payload(project_id, ir, plan, review,data=data)
 
 
 # --------------------------------------------------------------------------- #
@@ -1070,7 +1079,7 @@ def return_to_process(project_id: str, user: Optional[dict] = None, *,
     成本必须先确认：未确认的数不该作为正式结果往下走。
     """
     user = user or {}
-    ir, plan, review = _ready(project_id)
+    ir, plan, review = _ready(project_id,allow_estimate=True)
     snapshot = cost_review.summarize(project_id, ir, plan)
     requirement = store.load_requirement(project_id) or {}
     req_data = requirement.get("data") or {}

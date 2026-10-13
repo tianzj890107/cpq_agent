@@ -31,6 +31,9 @@ _FIELD_CODES = ("field_missing", "field_unconfirmed", "field_conflict")
 def _requirement(project_id: str) -> Dict[str, Any]:
     doc = store.load_requirement(project_id) or {}
     data = doc.get("data") if isinstance(doc.get("data"), dict) else {}
+    if data.get('industry')=='packaging':
+        from ..packaging_semantics.provenance import engineering_inputs
+        data=engineering_inputs(project_id,data)
     return {"data": data or {},
             "sources": (data or {}).get("field_sources") or {},
             "provenance": (data or {}).get("field_provenance") or {}}

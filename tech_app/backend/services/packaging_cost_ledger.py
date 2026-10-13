@@ -1,5 +1,6 @@
 """Read-only views of the canonical packaging formula ledger; no second cost store."""
 import math
+import json
 
 KEYS = ('material', 'labor', 'processing', 'tooling', 'packaging', 'freight', 'other')
 TOTAL_KEYS = dict(zip(KEYS, ('material_total', 'labor_total', 'process_total',
@@ -80,9 +81,15 @@ def project(doc, ledger):
         if _number(item.get('amount')) is None:
             errors.append('invalid_amount:' + (code or 'project'))
         owner = _owner_part_code(code, codes, item) if code else ''
-        if code and not owner:
+        try:inputs=json.loads(item.get('inputs_json') or '{}')
+        except (TypeError,ValueError):inputs={}
+        related=inputs.get('part_codes') or []
+        project_operation=(code=='ASSY' and inputs.get('scope')=='project' and isinstance(related,list)
+                           and len(related)>=2 and len(related)==len(set(related)) and set(related)<=codes)
+        if code and not owner and not project_operation:
             errors.append('unknown_part:' + code)
-        if owner:
+        # Keep source bindings, but only material/manufacturing belongs to a part subtotal.
+        if owner and item.get('cost_category') not in ('labor', 'packaging', 'freight', 'other') and not item.get('tooling_code'):
             grouped.setdefault(owner, []).append(item)
     rows = []
     allocated = dict.fromkeys(KEYS, 0.0)
@@ -130,15 +137,32 @@ def project(doc, ledger):
     if any(value < -.00001 for value in project_values.values()):
         errors.append('part_amount_exceeds_category_total')
     expenses = _breakdown(project_values)
+    audit_items=[]
+    for item in ledger.get('items') or []:
+        try:inputs=json.loads(item.get('inputs_json') or '{}')
+        except (TypeError,ValueError):inputs={}
+        audit_items.append({'part_code':item.get('part_code'),'name':item.get('part_name') or inputs.get('name'),
+            'amount':item.get('amount'),'category':item.get('cost_category'),
+            'formula_code':item.get('formula_code'),'min_charge_applied':bool(item.get('min_charge_applied')),
+            'inputs':{k:inputs.get(k) for k in ('quote_quantity','usage_qty','cut_length','cut_width',
+                'machine_length','machine_width','imposition_count','price_unit','gsm','ton_price',
+                'labor_seconds','labor_rate') if k in inputs}})
+    audit_items.sort(key=lambda r:_number(r.get('amount')) or 0,reverse=True)
     missing = [row['id'] for row in rows if not row['has_cost']]
     zero = [row['id'] for row in rows if row['has_cost'] and row['subtotal'] <= 0]
     reconciled = not errors
     usable = built and not stale and reconciled
     return {'parts': rows, 'parts_total': _breakdown(allocated), 'final': final,
+        'unit_cost':final['total'], 'quote_quantity':_number(ledger.get('quote_quantity')),
+        'order_total_cost':final['total'] * _number(ledger.get('quote_quantity')) if _number(ledger.get('quote_quantity')) else None,
+        'cost_unit':'元/只', 'expense_policy':'part_material_processing_project_labor_packaging/1',
+        'cost_audit':{'largest_items':audit_items[:10],
+            'minimum_charge_rows':sum(r['min_charge_applied'] for r in audit_items),
+            'quantity_basis':'报价数量只用于订单批量分摊；零件用量只表示每盒数量'},
         'assembly': {'id': '__assembly__', 'name': '包装整单成本', 'kind': 'assembly',
             'has_cost': usable, 'quantity': 1, 'unit_cost': final['total'], 'subtotal': final['total'],
             'breakdown': final if built else {}, 'cost_stale': built and stale,
-            'summary': '同一份公式成本账汇总，不叠加单件成本', 'open_questions': len(ledger.get('gaps') or [])},
+            'summary': '零件材料与实际加工 + 独立人工、组装、出货包材及项目费用；同一份账汇总，不重复计费', 'open_questions': len(ledger.get('gaps') or [])},
         'counts': {'parts': len(rows), 'parts_costed': len(rows) - len(missing),
             'missing': missing, 'zero': zero, 'assembly_costed': usable},
         'ready': bool(rows) and usable and not missing and not zero,

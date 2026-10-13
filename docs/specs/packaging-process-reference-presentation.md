@@ -1,6 +1,6 @@
 # 包装工艺统一参考件与AI推荐口径
 
-状态：Spec + 红测（已实现，本地验证；未提交推送部署）。
+状态：Spec + 红测（已实现）；本地验证，发布状态以提交和部署记录为准。
 红测：`tests/test_packaging_process_reference_presentation_red.py`
 
 ## 范围与验收

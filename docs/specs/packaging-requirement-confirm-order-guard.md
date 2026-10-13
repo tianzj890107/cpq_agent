@@ -1,5 +1,7 @@
 # 1.1/1.2 的「顺序陷阱」：进路要挡住"图纸还没解析"，退路（退回草稿）要一直走得通
 
+> 2026-10-13后续口径：本文件的“必须先解析再提交”由 `packaging-sequential-requirement-cost-waiver-fast-read.md` 取代。当前1.1–1.3先确认客户需求，2.1再解析；退回草稿及直接修改冻结客户字段的护栏保留。
+
 血缘：`packaging-drawing-flow`（八步）第 8 步「字段写入」+ `e2e-packaging-dwg-quote-tech-continuity.md` §4.4、
 `packaging-manual-field-confirmation.md`（人工确认口径）。本层补**一道顺序门禁 + 一个退路**。
 

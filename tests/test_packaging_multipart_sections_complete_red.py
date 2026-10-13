@@ -131,7 +131,7 @@ class MultipartSectionsTest(unittest.TestCase):
         inputs=parts.business_cost_inputs(verified)
         self.assertEqual(100,inputs['sections'][0]['variables']['cut_length'])
 
-    def test_process_summary_remaps_local_numbers_and_dependencies(self):
+    def test_whole_part_process_preserves_dependencies_without_portion_time_multiplier(self):
         from tech_app.backend.models.process import ProcessPlan,ProcessStep
         from tech_app.backend.services import process
         s=self.service();doc=self.confirmed()
@@ -141,12 +141,17 @@ class MultipartSectionsTest(unittest.TestCase):
             return ProcessPlan(part_id=part.part_id,steps=[
                 ProcessStep(step_no=10,name='下料',type='blank',description='原工序',duration_min=1),
                 ProcessStep(step_no=20,name='模切',type='other',description='原工序',duration_min=1,depends_on=[10])]),{}
-        merged,coverage,sections=s.recommend_process(inputs,recommend)
-        self.assertEqual([10,20,30,40],[r['step_no'] for r in merged['steps']])
-        self.assertEqual([[],[10],[],[30]],[r.get('depends_on') or [] for r in merged['steps']])
-        self.assertEqual([],process.compute(merged)['warnings'])
-        self.assertEqual(12,process.compute(merged)['total_duration_min'])
-        self.assertEqual([10,20],[r['step_no'] for r in sections[1]['plan']['steps']])
+        # Whole-part Spec replaces duplicated portion plans; keep whole-plan dependencies/time.
+        from tech_app.backend.services import packaging_process_instances
+        plan,_=recommend(parts.business_as_ir_part(row),note=inputs['grounding'])
+        payload=plan.model_dump();payload['part_class']='packaging'
+        merged=packaging_process_instances.expand([{'part_code':'BP-A','process_scope':'business_part/1',
+            'plan':payload,'sections':[],'usage_qty':2}])
+        self.assertEqual([10,20],[r['step_no'] for r in merged])
+        self.assertEqual([None,10],[r['depends_on'] for r in merged])
+        self.assertEqual([],process.compute(payload)['warnings'])
+        self.assertEqual(2,process.compute(payload)['total_duration_min'])
+        self.assertEqual([2,2],[r['usage_qty'] for r in merged])
 
     def test_storage_roundtrip_keeps_all_sections_and_stales_old_result(self):
         doc=self.confirmed()
@@ -213,7 +218,7 @@ class MultipartSectionsTest(unittest.TestCase):
         self.assertEqual(27.2,result['line']['amount'])
         self.assertEqual(2,len(saved[0]['sections']))
 
-    def test_actual_process_task_calls_each_section_and_keeps_identity(self):
+    def test_actual_process_task_calls_whole_part_and_keeps_identity(self):
         from tech_app.backend import main
         from tech_app.backend.models.process import ProcessPlan
         doc=self.confirmed();seen=[];saved=[]
@@ -229,9 +234,11 @@ class MultipartSectionsTest(unittest.TestCase):
              patch.object(main.packaging_parts,'save_part_process',side_effect=lambda pid,value:saved.append(value)):
             asyncio.run(main.packaging_business_part_process('p','BP-A','',[],{'role':'process_manager','username':'PE1'}))
             result=self.job()
-        self.assertEqual(['BP-A::inside','BP-A::outside'],[r[0] for r in seen])
-        self.assertEqual(2,len(result['sections']))
-        self.assertEqual(2,len(saved[0]['sections']))
+        self.assertEqual(['BP-A'],[r[0] for r in seen])
+        self.assertEqual([],result['sections'])
+        self.assertEqual([],saved[0]['sections'])
+        self.assertEqual('business_part/1',saved[0]['process_scope'])
+        self.assertIn('100',seen[0][1]);self.assertIn('80',seen[0][1])
 
     def test_single_business_name_can_propose_multiple_owned_shapes(self):
         from tech_app.backend.services import packaging_part_visual_review as review
@@ -411,7 +418,8 @@ class MultipartSectionsTest(unittest.TestCase):
         row = parts.verified_business_part_input_row(doc['business_parts'][0],doc)
         inputs = parts.business_process_inputs(row)
         self.assertTrue(inputs['ok'])
-        self.assertEqual(['inside','outside'],[r['section_id'] for r in inputs['sections']])
+        self.assertEqual(['inside','outside'],[r['section_id'] for r in inputs['composition']])
+        self.assertFalse(inputs.get('sections'))
         self.assertIn('100',inputs['grounding'])
         self.assertIn('80',inputs['grounding'])
 
