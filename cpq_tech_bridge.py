@@ -523,6 +523,10 @@ def _step2_snapshot(result: dict) -> dict:
         row = _fill_row(columns, values, norm)
         if row:
             snapshot[sid] = {"数据": [row]}
+    package=result.get('packaging_package') or {}
+    if isinstance(package,dict) and package.get('industry')=='packaging':
+        projected=packaging_snapshot(result)
+        snapshot.update({key:projected[key] for key in PACKAGING_SNAPSHOT_SECTIONS})
     return snapshot
 
 
@@ -764,6 +768,26 @@ def send_to_finance(user: dict, session_id: str, title: str, customer: str = "",
                       target_role_code=target_role_code)
 
 
+def _repair_missing_packaging_snapshot(conn, existing, result):
+    package=result.get('packaging_package') or {}
+    if not isinstance(package,dict) or package.get('industry')!='packaging':
+        return False
+    session=str(existing.get('target_quote_session_id') or '')
+    snapshot=cpq_wf._snapshot_dict(cpq_wf.step_snapshot(session,TECH_CONFIRM_STEP,conn=conn))
+    if snapshot.get('packaging_package'):
+        return False
+    projected=packaging_snapshot(result)
+    missing={key:projected[key] for key in PACKAGING_SNAPSHOT_SECTIONS if key not in snapshot}
+    if not missing:
+        return False
+    cpq_wf.merge_step_snapshot(session,TECH_CONFIRM_STEP,missing,conn=conn)
+    verify_handoff_snapshot(session,missing,conn=conn)
+    sections=sorted(set(existing.get('snapshot_sections') or []) | set(missing))
+    cpq_wf.update_handoff(conn,existing['handoff_id'],snapshot_sections=sections)
+    existing['snapshot_sections']=sections
+    return True
+
+
 def _finance_completion_card(conn, task_id, user, project_id):
     if str(user.get('role_code') or '') not in ({'finance_mgr'} | set(cpq_wf.ADMIN_ROLES)):
         raise BridgeError('只有财务经理或管理员可以完成财务任务并回传报价')
@@ -912,8 +936,13 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
             existing = cpq_wf.find_handoff(conn, key)
             if not existing:
                 raise BridgeError("回传记录读取失败，请稍后重试")
+            repaired=_repair_missing_packaging_snapshot(conn,existing,result)
             out = _reuse_handoff_outcome(conn, existing, completion_task_id or source_task_id, linked_by)
-            conn.rollback()
+            if repaired:
+                conn.commit()
+                out['snapshot_repaired']=True
+            else:
+                conn.rollback()
             return out
 
         # ③ 落点卡片：新建会话这条路的卡片也必须在同一事务里建（回滚要一起没）

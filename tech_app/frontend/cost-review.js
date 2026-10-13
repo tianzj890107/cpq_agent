@@ -331,8 +331,9 @@ function crPublishTask(name, extra) {
   const runtime = window.TechBoardRuntime;
   if (!runtime || typeof runtime.publish !== 'function') return;
   try {
-    runtime.publish(name, 'costStep', Object.assign({ action: 'costStep' }, extra || {}));
-    crRememberSettle(name, 'costStep', extra);
+    const action=extra?.action || 'costStep';
+    runtime.publish(name, action, Object.assign({ action: action }, extra || {}));
+    crRememberSettle(name, action, extra);
   } catch { /* 进度上报失败不影响业务本身 */ }
 }
 
@@ -879,7 +880,9 @@ async function crRunOp(kind) {
   const card = crCard(labels[kind]);
   crStatus(`${labels[kind]}中…`);
   const opTask = `cost-op-${kind}`;
-  crPublishTask('task-progress', { taskId: opTask, label: labels[kind],
+  const opAction={'material-write':'writeCostReviewMaterial','send-to-quote':'sendCostReviewToQuote',
+    'return-to-process':'returnCostReviewToProcess'}[kind];
+  crPublishTask('task-progress', { action:opAction, taskId: opTask, label: labels[kind],
                                    progress: `${labels[kind]}中…` });
   try {
     const body = {
@@ -943,7 +946,7 @@ async function crRunOp(kind) {
     }
     card.done(true);
     crStatus(`${labels[kind]}完成`);
-    crPublishTask('task-completed', { taskId: opTask, label: labels[kind],
+    crPublishTask('task-completed', { action:opAction, taskId: opTask, label: labels[kind],
                                       status: 'succeeded' });
     return true;
   } catch (error) {
@@ -952,7 +955,7 @@ async function crRunOp(kind) {
     crToast(error.message || `${labels[kind]}失败`, true);
     // 回传/交接失败是报价侧收不到的那一类：必须常驻 + 带追踪 ID。
     crShowFailure('handoff_failed', error.message || `${labels[kind]}失败`, error.trace_id);
-    crPublishTask('task-failed', { taskId: opTask, label: labels[kind],
+    crPublishTask('task-failed', { action:opAction, taskId: opTask, label: labels[kind],
                                    status: 'failed', error: error.message || '失败' });
     return false;
   } finally {
@@ -1415,10 +1418,17 @@ document.addEventListener('cpq-sso-ready', () => {
     label: label,
     role: role || 'aux',
     order: order == null ? null : order,
-    run: async () => {
-      const ok = await crRunOp(kind);
-      return ok ? { ok: true }
-        : { ok: false, error: { code: 'op-failed', message: `${label}失败，请查看看板提示。` } };
+    deferred: true,
+    run: () => {
+      if (crBusy || crDeferredBusy) return {ok:false,error:{code:'busy',message:'正在处理，请稍候。'}};
+      const action={ 'material-write':'writeCostReviewMaterial', 'send-to-quote':'sendCostReviewToQuote',
+        'return-to-process':'returnCostReviewToProcess' }[kind];
+      crLastSettle=null;
+      crRunOp(kind).then(ok => {
+        crSettleIfNeeded(ok ? 'task-completed' : 'task-failed',action,
+          ok ? {status:'succeeded'} : {status:'failed',error:crLastSettle?.message || `${label}失败，请查看看板提示。`});
+      }).catch(error => crSettleIfNeeded('task-failed',action,{status:'failed',error:error.message || `${label}失败`}));
+      return {ok:true};
     },
     // 非财务身份（工艺经理）不占操作栏：这一页他只有「发送给财务」一个出口。
     getState: () => ({ visible: !crReadOnly(), enabled: true, busy: Boolean(crBusy) }),
