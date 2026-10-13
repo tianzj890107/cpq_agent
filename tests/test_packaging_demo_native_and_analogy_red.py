@@ -7,6 +7,24 @@ from tech_app.backend.models.ir import Part
 from tech_app.backend.models.process import ProcessOutline, OutlineStep, ProcessType
 
 class DemoNativeAndAnalogy(unittest.TestCase):
+    def test_unknown_material_estimate_has_explicit_label_not_empty_gate_input(self):
+        value=demo.demo_inputs_for({'name':'未分类部件','business_part_code':'p'}, {},materials=[],allow_estimates=True)
+        self.assertTrue(value['ok'])
+        self.assertEqual('未识别材料（估算）',value['material_text'])
+        self.assertEqual('demo_unknown_material',value['material_source'])
+
+    def test_selected_whole_region_size_precedes_fragment_sizes(self):
+        row={'geometry_binding':{'status':'bound','entity_ids':['a','b'],
+             'component_ids':['c1','c2'],'length_mm':340,'width_mm':570,
+             'bbox':[10,20,350,590]}}
+        sizes={'c1':{'length_mm':100,'width_mm':210},'c2':{'length_mm':80,'width_mm':300}}
+        value=demo.demo_size(row,sizes)
+        self.assertEqual((340,570),(value['length_mm'],value['width_mm']))
+        self.assertEqual('auto_selected_cad_geometry',value['size_source'])
+        row['confirmed_size']={'length_mm':341,'width_mm':571}
+        value=demo.demo_size(row,sizes)
+        self.assertEqual((341,571),(value['length_mm'],value['width_mm']))
+
     def test_unbound_packaging_gap_does_not_break_part_reconciliation(self):
         from tech_app.backend.services.packaging_cost_ledger import project
         doc={'business_parts':[{'business_part_code':'p','reference':{'quantity':1}}]}

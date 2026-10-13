@@ -67,7 +67,8 @@ def ensure_inputs(project_id, actor):
                 for row in doc.get('business_parts') or []]
         return hashlib.sha256(json.dumps(values,sort_keys=True,default=str).encode()).hexdigest()
     doc=packaging_parts.load_business_parts(project_id)
-    if doc.get('demo_prepared_geometry_hash')==identity(doc): return True
+    if (doc.get('demo_prepared_geometry_hash')==identity(doc)
+            and doc.get('demo_inputs_version')==packaging_demo_inputs.ENGINE_VERSION): return True
     requirement=requirement_defaults(store.load_requirement(project_id) or {})
     requirement['data']['poc_auto_no_manual']=True
     store.save_requirement(project_id,requirement,author=actor.get('username',''))

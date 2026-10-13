@@ -5,6 +5,17 @@ from tech_app.backend.storage import store
 from tech_app.backend.services import packaging_parts,packaging_bom
 
 class AutoCloseLoop(DemoFlow):
+    def test_preparation_rule_version_change_rebuilds_saved_inputs(self):
+        from tech_app.backend.services import packaging_demo_flow,packaging_demo_inputs
+        store.save_requirement(PID,{'project_id':PID,'requirement_no':REQ_NO,'data':dict(REQ)})
+        packaging_parts.save_parts(PID,dict(GEOMETRY))
+        packaging_parts.save_business_parts(PID,dict(BUSINESS))
+        actor={'username':'PE1','role':'process_manager'}
+        packaging_demo_flow.ensure_inputs(PID,actor)
+        with mock.patch.object(packaging_demo_inputs,'ENGINE_VERSION','new-input-rule'),mock.patch.object(packaging_demo_inputs,'prepare',wraps=packaging_demo_inputs.prepare) as prepare:
+            packaging_demo_flow.ensure_inputs(PID,actor)
+            prepare.assert_called_once()
+
     def test_original_click_sequence_reuses_processes_at_finance_cost_step(self):
         from tech_app.backend.services import packaging_demo_flow,packaging_demo_inputs
         store.save_requirement(PID,{'project_id':PID,'requirement_no':REQ_NO,'data':dict(REQ)})

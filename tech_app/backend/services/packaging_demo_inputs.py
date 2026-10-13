@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import packaging_material_match as material_match
 
-ENGINE_VERSION = "packaging-demo-inputs/2"
+ENGINE_VERSION = "packaging-demo-inputs/3"
 
 #: 件名关键词 → 材料族（**仅用于图纸没写材料时推定**，且必须随结论披露）。通用规则，不含图号。
 NAME_FAMILY_HINTS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
@@ -208,6 +208,17 @@ def _kb_tax_factor() -> float:
 
 def demo_size(row, sizes):
     """仅演示入口：保留真实尺寸；缺失使用明示占位，绝不写CAD确认。"""
+    confirmed=row.get('confirmed_size') or {}
+    length,width=_num(confirmed.get('length_mm')),_num(confirmed.get('width_mm'))
+    if length and width and length>0 and width>0:
+        return {'length_mm':length,'width_mm':width,'size_source':'confirmed_size','component_ids':_component_ids(row)}
+    binding=row.get('geometry_binding') or {}
+    if binding.get('status')=='bound' and binding.get('entity_ids'):
+        from . import packaging_parts
+        selected=packaging_parts._automatic_selected_size(binding,binding['entity_ids'])
+        if selected:
+            return {'length_mm':selected['length_mm'],'width_mm':selected['width_mm'],
+                    'size_source':selected['source'],'component_ids':_component_ids(row)}
     for key in ('confirmed_size', 'reference', 'authority'):
         value=row.get(key) or {}
         length,width=_num(value.get('length_mm')),_num(value.get('width_mm'))
@@ -341,6 +352,9 @@ def demo_inputs_for(row: Any, sizes: Dict[str, Dict[str, Any]], *,
     size = demo_size(record, sizes) if allow_estimates else part_size(record, sizes)
     material = material_text_of(record)
     text = _text(material.get("material_text"))
+    if allow_estimates and not text:
+        text='未识别材料（估算）'
+        material={'material_text':text,'source':'demo_unknown_material'}
     if not (size["length_mm"] and size["width_mm"]):
         return {"ok": False, "reason": "no_geometry_size",
                 "message": "这一件没有可用的几何尺寸（未绑定分量），演示输入给不出开料长宽",
