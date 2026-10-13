@@ -7,6 +7,10 @@ from . import packaging_cost,packaging_cost_ledger,packaging_handoff
 from ..storage import store
 from ..storage.meta_backend import get_backend
 
+def _missing_input(value):
+    return value is None or (isinstance(value,str) and value.strip() in
+        ('','待人工确认','待确认','待填写','未填写','未填','未知','暂无','—','-'))
+
 def requirement_defaults(requirement):
     from ..storage import kb_repo
     result=copy.deepcopy(requirement)
@@ -31,10 +35,11 @@ def requirement_defaults(requirement):
         defaults[name]=(float(lo)+float(hi))/2 if lo is not None and hi is not None else 100
     assumptions=dict(data.get('demo_assumptions') or {})
     for key,value in defaults.items():
-        if data.get(key) is None or data.get(key)=='':
+        original=data.get(key)
+        if _missing_input(original):
             data[key]=value
             assumptions[key]={'value':value,'source':'demo_template_or_generic_default',
-                              'box_type_code':box.get('box_type_code'),'mock':True}
+                              'box_type_code':box.get('box_type_code'),'mock':True,'original_value':original}
     data.update(poc_demo=True,demo_assumptions=assumptions)
     return result
 
@@ -67,8 +72,12 @@ def ensure_inputs(project_id, actor):
                 for row in doc.get('business_parts') or []]
         return hashlib.sha256(json.dumps(values,sort_keys=True,default=str).encode()).hexdigest()
     doc=packaging_parts.load_business_parts(project_id)
+    data=(store.load_requirement(project_id) or {}).get('data') or {}
+    required=('quote_quantity','packaging_product_name','packaging_category','box_type',
+              'inner_length','inner_width','inner_height','closure_type','v_groove','face_paper_gsm','fit_clearance')
     if (doc.get('demo_prepared_geometry_hash')==identity(doc)
-            and doc.get('demo_inputs_version')==packaging_demo_inputs.ENGINE_VERSION): return True
+            and doc.get('demo_inputs_version')==packaging_demo_inputs.ENGINE_VERSION
+            and all(not _missing_input(data.get(key)) for key in required)): return True
     requirement=requirement_defaults(store.load_requirement(project_id) or {})
     requirement['data']['poc_auto_no_manual']=True
     store.save_requirement(project_id,requirement,author=actor.get('username',''))

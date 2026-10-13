@@ -820,7 +820,8 @@ def integration_material_write_record(project_id: str, plan, *,
 
 def integration_send_to_quote_body(project_id: str, *, product_name: str = "",
                                    spec: str = "", note: str = "",
-                                   token: str = "", user: Optional[dict] = None) -> dict:
+                                   token: str = "", user: Optional[dict] = None,
+                                   completion_task_id: str = "") -> dict:
     """「发送至报价」的正文。**不含权限判断** —— 由调用方各自把门。
 
     两个入口：2.2 归工艺经理（MANAGER_ROLES），2.3 归财务经理（COST_ROLES）。
@@ -895,6 +896,8 @@ def integration_send_to_quote_body(project_id: str, *, product_name: str = "",
     quote_source_task_id = str(req_data.get("source_task_id") or "")
     quote_source_session_id = str(req_data.get("source_session_id") or "")
     quote_result = integration_quote_result(project_id, plan, title, requirement)
+    if completion_task_id:
+        quote_result['completion_task_id']=str(completion_task_id)
     # 技术项目号与报价会话号必须是两个字段（Spec §3.1）：混成一个值就会让财务领取后
     # 打开报价卡片、成本工作台报「项目不存在」。
     assert_distinct_project_and_quote_session(
@@ -950,7 +953,7 @@ def integration_send_to_quote_body(project_id: str, *, product_name: str = "",
         kind=HANDOFF_KIND_COST,
         quote_session_id=str(result.get("quote_session_id")
                              or plan.quote_handoff.session_id or ""),
-        source_task_id=quote_source_task_id,
+        source_task_id=completion_task_id or quote_source_task_id,
         handoff_id=str(result.get("handoff_id") or ""),
         closed=bool(source_task.get("closed")),
         author=user.get("username", "system"))
@@ -1018,7 +1021,8 @@ def send_to_quote(project_id: str, user: Optional[dict] = None, *,
     # 走正文，不走 2.2 那个路由函数：那里的权限认的是工艺经理。
     result = integration_send_to_quote_body(
         project_id, product_name=product_name, spec=spec, note=note,
-        token=token, user=user)
+        token=token, user=user,completion_task_id=source_task_id or str(
+            getattr(integration.load_plan(project_id).finance_handoff,'task_id','') or ''))
     ir, plan, review = cost_review_ctx(project_id)
     handoff = result.get("handoff") or {}
     # 来源待办关没关、为什么没关，都随这一次回传的结果一起回给界面（可追溯到 handoff_id）

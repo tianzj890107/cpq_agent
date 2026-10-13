@@ -731,6 +731,15 @@ function crDisableActions() {
   });
 }
 
+function crPackagingCostNotice(data) {
+  const cost=data?.packaging_cost || {};
+  if (cost.stale) return '包装成本依据已变化，需要重新测算；当前金额不能作为正式报价。';
+  if (data?.ready && data?.reconciled && !data?.quantity_mismatch) {
+    return `全部零件与整单已完成估算测算；保留 ${(cost.gaps || []).length} 项来源/估算提示，不能作为正式报价。`;
+  }
+  return `包装成本有 ${(cost.gaps || []).length} 项缺口，当前仅为部分成本草稿，不能作为正式报价。`;
+}
+
 function crRender() {
   const renderers = { parts: crRenderParts, assembly: crRenderAssembly,
                       total: crRenderTotal };
@@ -752,7 +761,7 @@ function crRender() {
     notice.className = 'inline-warn';
     notice.textContent = packagingCost.stale
       ? '包装成本依据已变化，需要重新测算；当前金额不能作为正式报价。'
-      : `包装成本有 ${(packagingCost.gaps || []).length} 项缺口，当前仅为部分成本草稿，不能作为正式报价。`;
+      : crPackagingCostNotice(crData);
     $cr('crBody').prepend(notice);
   }
   crRenderActions();

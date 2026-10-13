@@ -5,6 +5,27 @@ from tech_app.backend.storage import store
 from tech_app.backend.services import packaging_parts,packaging_bom
 
 class AutoCloseLoop(DemoFlow):
+    def test_cached_geometry_does_not_skip_new_pending_requirement_values(self):
+        from tech_app.backend.services import packaging_demo_flow
+        store.save_requirement(PID,{'project_id':PID,'requirement_no':REQ_NO,'data':dict(REQ)})
+        packaging_parts.save_parts(PID,dict(GEOMETRY))
+        packaging_parts.save_business_parts(PID,dict(BUSINESS))
+        actor={'username':'PE1','role':'process_manager'}
+        packaging_demo_flow.ensure_inputs(PID,actor)
+        req=store.load_requirement(PID)
+        req['data']['quote_quantity']='待人工确认'
+        store.save_requirement(PID,req)
+        packaging_demo_flow.ensure_inputs(PID,actor)
+        self.assertEqual(1000,store.load_requirement(PID)['data']['quote_quantity'])
+
+    def test_pending_placeholder_is_missing_input_not_a_numeric_value(self):
+        from tech_app.backend.services import packaging_demo_flow
+        result=packaging_demo_flow.requirement_defaults({'data':{'industry':'packaging',
+            'box_type':REQ['box_type'],'quote_quantity':'待人工确认','inner_width':'待确认'}})
+        self.assertEqual(1000,result['data']['quote_quantity'])
+        self.assertGreater(result['data']['inner_width'],0)
+        self.assertEqual('待人工确认',result['data']['demo_assumptions']['quote_quantity']['original_value'])
+
     def test_preparation_rule_version_change_rebuilds_saved_inputs(self):
         from tech_app.backend.services import packaging_demo_flow,packaging_demo_inputs
         store.save_requirement(PID,{'project_id':PID,'requirement_no':REQ_NO,'data':dict(REQ)})

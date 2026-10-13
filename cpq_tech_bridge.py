@@ -764,6 +764,26 @@ def send_to_finance(user: dict, session_id: str, title: str, customer: str = "",
                       target_role_code=target_role_code)
 
 
+def _finance_completion_card(conn, task_id, user, project_id):
+    if str(user.get('role_code') or '') not in ({'finance_mgr'} | set(cpq_wf.ADMIN_ROLES)):
+        raise BridgeError('只有财务经理或管理员可以完成财务任务并回传报价')
+    tid=_int_or_none(task_id)
+    if tid is None:
+        raise BridgeError('财务完成任务编号无效')
+    row=cpq_auth._exec(conn,'SELECT task_kind, payload, card_id, status, claimed_by_user_id FROM cpq_wf_task WHERE task_id = %s',(tid,)).fetchone()
+    if not row or str(row[0] or '') != 'tech_cost':
+        raise BridgeError('财务回传只能完成真实的成本测算任务')
+    payload=cpq_wf._payload_of(row[1])
+    if str((payload.get('tech_cost') or {}).get('project_id') or '') != str(project_id):
+        raise BridgeError('财务完成任务不属于本技术项目')
+    if str(row[3] or '') not in ('claimed','completed') or row[4] is None:
+        raise BridgeError('请先领取本项目的有效财务任务，不能完成未领取或已撤销任务')
+    if str(row[3])=='completed' and _int_or_none(row[4]) != _int_or_none(user.get('user_id')) \
+            and str(user.get('role_code') or '') not in cpq_wf.ADMIN_ROLES:
+        raise BridgeError('已完成财务任务的领取人不是当前用户')
+    return int(row[2])
+
+
 def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
                   project_name: str = "", note: str = "",
                   source_task_id: str = "", result: dict = None,
@@ -835,6 +855,12 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
 
     new_session_id = ""
     try:
+        completion_task_id=str(result.get('completion_task_id') or '').strip()
+        completion_card_id=None
+        if completion_task_id:
+            if handoff_kind != 'cost_to_quote':
+                raise BridgeError('财务完成任务身份只允许用于成本回传报价')
+            completion_card_id=_finance_completion_card(conn,completion_task_id,user,tech_project_id)
         # ① 落点由业务实例号唯一裁决（批次 6）：候选 → decide → linked / 抛错 / 新建。
         #    task / session 两条老线索仍作候选来源（老卡片没有实例号时照样认回原卡），
         #    但"都没有就静默新建"这条老路已经拆掉 —— 没有明确的新建确认与原因，一律拒绝。
@@ -865,6 +891,8 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
         # ② 幂等键 + 交接记录占位：唯一约束才是"谁说了算"的裁判，不是先 SELECT 再 INSERT。
         key = handoff_key_of(handoff_kind, source_task_id, tech_project_id,
                              result_version, quote_session_id)
+        if completion_task_id:
+            key += '|completion:'+completion_task_id
         # 老键（批次 3 之前的四元组）逐字照旧算一遍：它只作**迁移期线索** —— 老任务
         # 把它写在 payload.handoff_key 里，记进本次 payload 就能按老键查回来；新记录的
         # 幂等一律以 cpq_wf_handoff 为准。
@@ -874,7 +902,7 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
         handoff_id = cpq_wf._new_id(conn)
         created = cpq_wf.insert_handoff_placeholder(
             conn, handoff_id, key, handoff_kind,
-            source_project_id=tech_project_id, source_task_id=source_task_id,
+            source_project_id=tech_project_id, source_task_id=completion_task_id or source_task_id,
             source_result_version=result_version,
             target_quote_session_id=quote_session_id,
             created_by_user_id=_int_or_none(user.get("user_id")),
@@ -884,7 +912,7 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
             existing = cpq_wf.find_handoff(conn, key)
             if not existing:
                 raise BridgeError("回传记录读取失败，请稍后重试")
-            out = _reuse_handoff_outcome(conn, existing, source_task_id, linked_by)
+            out = _reuse_handoff_outcome(conn, existing, completion_task_id or source_task_id, linked_by)
             conn.rollback()
             return out
 
@@ -912,11 +940,11 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
         # 放在完成第 2 步之前：complete_step 会把「本人领取的其它 claimed 任务」一并收尾，
         # 先关掉这里才能如实报出 closed / already。
         src_info = cpq_wf.close_source_task(
-            conn, source_task_id, user,
+            conn, completion_task_id or source_task_id, user,
             comment=f"技术工艺{_HANDOFF_LABELS.get(handoff_kind, '回传报价')}："
                     f"来源待办已随本次交接完成",
             allow_packaging_delegate=(handoff_kind == PACKAGING_HANDOFF_KIND),
-            expected_card_id=card["card_id"])
+            expected_card_id=completion_card_id or card["card_id"])
 
         # ⑤ 第 2 步：只进不退；快照**只合并**（老键保留、同名覆盖），绝不整份覆盖 ——
         # 第 2 步里还有别人填过的东西（s1_basic 之类），一次回传不该把它们抹掉。
@@ -979,6 +1007,7 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
             "result_version": result_version,
             "source_project_id": tech_project_id,
             "source_task_id": str(source_task_id or ""),
+            "completion_task_id": completion_task_id,
             "source_task_no": source_task_no,
             "tech_project_id": tech_project_id,
             "quote_session_id": quote_session_id,

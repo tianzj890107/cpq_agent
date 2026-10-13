@@ -1,0 +1,15 @@
+# 财务回报价：定位原报价与完成财务任务分离
+
+状态：Spec + 红测（已实现）；待发布复验。
+红测：`tests/test_finance_quote_completion_identity_red.py`
+
+线上013c1fe85471已28/28有成本并由FI1确认，回传却400：原新增工艺任务由PE1领取，FI1不能关闭。根因是source_task_id兼作报价定位和本次任务关闭。
+
+- 原source_task_id/source_session_id/business_case_id继续定位报价，不替换、不新建幽灵报价。
+- 财务入口传completion_task_id（页面当前财务任务，空时从项目已保存finance_handoff取），字段由服务编排写入tech_result，不由模型生成。
+- 服务端在同一交接事务中校验该任务真实存在、kind=tech_cost、数据库payload.tech_cost.project_id与本技术项目一致；只接受cost_to_quote且财务/管理员身份。任务必须已领取（或本人已完成的重试），不允许用未领取/已撤销任务当本次完成任务；领取人校验仍走close_source_task，不允许关闭其他财务人员任务。
+- 只关闭自己的财务任务，原PE1任务不代签、不擅自关闭。旧调用没有completion_task_id保持原行为与越权门禁。
+- 幂等键在有completion_task_id时加入该身份，交接记录source_task_id存实际关闭任务；任务载荷保留原路由来源和completion_task_id。相同命令重试只有一条交接/销售任务，不回退报价步骤。
+- 不要求为了财务回传先发布工艺正式报告；正式报告审批/发布门禁不变。
+
+成本页面必须区分可算齐的估算与真正缺金额：ready且reconciled时，不因182条来源/估算提示就说“仅部分成本”；保留提示数量与非正式报价披露。未齐、过期、对账不一致继续警告，不隐去真实缺口。
