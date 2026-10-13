@@ -1,6 +1,7 @@
 # 包装需求原文 → 成品参数（包装产品名称 / 包装品类）
 
-状态：Spec + 红测（待实现）
+状态：Spec + 红测（已实现）
+红测：`tests/test_packaging_requirement_text_params_red.py`、`tests/test_packaging_cost_to_quote_integration_projection_red.py`
 范围：1.1 需求原文抽取 + 4.x 回传销售的参数族投影
 相关：`docs/specs/packaging-cost-to-quote-integration-projection.md`（§2.5 / §2.6）、
 `docs/specs/packaging-requirement-template.md`（3.1 产品与订单）

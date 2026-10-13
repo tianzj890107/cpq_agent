@@ -3275,6 +3275,9 @@ async def generate_integration_params(
 ):
     """参数推荐：用户需求 + 整合图纸 + 2.1 已确认零件 → 整机参数/连接/BOM(异步)。"""
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
+    _workflow_project(project_id)
+    from .services import packaging_demo_flow
+    automatic_demo=packaging_demo_flow.ensure_inputs(project_id,user)
     ir = _integration_ir(project_id)
     author = user.get("username", "system")
     atts = await _read_attachments(attachments)
@@ -3284,6 +3287,10 @@ async def generate_integration_params(
         integration.save_plan(project_id, plan, author)
 
     def job():
+        if automatic_demo and not note.strip() and not atts:
+            tasks.report_progress('采用现有包装需求与demo默认值，保留各字段来源，无需逐项确认')
+            plan=packaging_demo_flow.sync_integration(project_id,user)
+            return _integration_payload(project_id,plan)
         plan = integration.load_plan(project_id)
         result = integration.recommend_params(
             project_id, ir, plan, attachments=atts, progress=tasks.report_progress)
@@ -3453,6 +3460,9 @@ async def generate_integration_process(
 ):
     """组装工艺推荐：先查库内组装路线，再让模型在库内工序上排产(异步)。"""
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
+    _workflow_project(project_id)
+    from .services import packaging_demo_flow
+    automatic_demo=packaging_demo_flow.ensure_inputs(project_id,user)
     ir = _integration_ir(project_id)
     if integration.load_plan(project_id).params is None:
         raise HTTPException(400, "请先完成参数推荐：组装工序要按整机 BOM 与连接关系来排")
@@ -3460,6 +3470,10 @@ async def generate_integration_process(
     atts = await _read_attachments(attachments)
 
     def job():
+        if automatic_demo:
+            tasks.report_progress('采用当前包装项目路线，不再生成独立3D组装工艺')
+            plan=packaging_demo_flow.prepare_route(project_id,user)
+            return _integration_payload(project_id,plan)
         plan = integration.load_plan(project_id)
         lookup = _integration_process_lookup(project_id, plan)
         result, coverage = integration.outline_process(
@@ -3802,7 +3816,11 @@ def run_cost_review_assembly(project_id: str, user: dict = Depends(current_user)
         _workflow_project(project_id)
         def packaging_job():
             tasks.report_progress("按包装 BOM、工艺路线和已保存排模证据测算整单成本")
-            packaging_cost.build_cost(project_id, actor=user)
+            from .services import packaging_demo_flow
+            if packaging_demo_flow.enabled(project_id):
+                packaging_demo_flow.run(project_id,actor=user,progress=tasks.report_progress)
+            else:
+                packaging_cost.build_cost(project_id, actor=user)
             return _cost_review_payload(project_id)
         return {"task_id": tasks.submit(project_id, "cost_review_assembly", packaging_job)}
     ir, plan, review = _cost_review_ctx(project_id)
@@ -6848,6 +6866,8 @@ def build_requirement_packaging_bom(
     """按确认盒型参数化展开部件并落库：同一 (项目, 需求单) 整体替换，锁定行保留。"""
     _require(user, packaging_bom.BOM_WRITE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
     _workflow_project(project_id)
+    from .services import packaging_demo_flow
+    packaging_demo_flow.ensure_inputs(project_id,user)
     record = _packaging_bom_flow(packaging_bom.build_bom, project_id, body.requirement_no,
                                  overrides=body.overrides or {})
     return {"bom": record}
@@ -8015,7 +8035,17 @@ def build_requirement_packaging_route(
     """按确认盒型 + 需求表面字段排工序并落库；重算一律回到 draft（Spec §3.2）。"""
     _require(user, packaging_route.ROUTE_WRITE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
     _workflow_project(project_id)
+    from .services import packaging_demo_flow,packaging_demo_inputs,packaging_process_instances
+    automatic_demo=packaging_demo_flow.ensure_inputs(project_id,user)
+    if automatic_demo:
+        collected=packaging_process_instances.collect(project_id)
+        if collected['missing'] or not collected['active']:
+            generated=packaging_demo_inputs.prepare_processes(project_id,actor=user.get('username',''))
+            if generated['failures']: raise HTTPException(409,generated['failures'])
+        packaging_bom.build_bom(project_id,body.requirement_no)
     record = _packaging_route_flow(packaging_route.build_route, project_id, body.requirement_no)
+    if automatic_demo:
+        record=packaging_route.confirm_route(project_id,body.requirement_no,actor=user)
     return {"route": record}
 
 
@@ -8080,6 +8110,10 @@ def build_requirement_packaging_cost(
     _require(user, packaging_cost.COST_WRITE_ROLES,
              "需要工艺经理、工艺技术总监、财务经理或管理员权限")
     _workflow_project(project_id)
+    from .services import packaging_demo_flow
+    if packaging_demo_flow.enabled(project_id) and not body.scenario:
+        result=packaging_demo_flow.run(project_id,actor=user)
+        return {'cost':result['cost_projection']['packaging_cost']}
     record = _packaging_cost_flow(packaging_cost.build_cost, project_id, body.requirement_no,
                                   scenario=(body.scenario or None), actor=user)
     return {"cost": record}
@@ -9492,6 +9526,10 @@ async def packaging_business_part_cost(
 
     def job():
         tasks.report_progress("刷新同一份整单公式成本账并读取本件明细")
+        from .services import packaging_demo_flow
+        if packaging_demo_flow.enabled(pid):
+            result=packaging_demo_flow.run(pid,actor=user,progress=tasks.report_progress)
+            return packaging_cost_ledger.part_view(pid,code,result['cost_projection'])
         try:
             return packaging_cost_ledger.rebuild_part(pid, code, user)
         except packaging_cost.CostError as exc:
@@ -9554,6 +9592,8 @@ async def packaging_business_part_process(
     """
     _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
     _workflow_project(pid)
+    from .services import packaging_demo_flow, packaging_demo_inputs
+    automatic_demo=packaging_demo_flow.ensure_inputs(pid,user)
     loaded = _packaging_business_part_row(pid, code)
     doc = loaded["doc"]
     try:
@@ -9583,17 +9623,24 @@ async def packaging_business_part_process(
             'status': 'per_section', 'notice': '各组成独立检索，不沿用父件路线'}
         tasks.report_progress('DA 工艺路线：' + str(da_lookup.get('notice') or da_lookup.get('status')))
         sections = []
+        def recommend(part, **kwargs):
+            if automatic_demo:
+                child=next((s for s in row.get('sections') or [] if s.get('section_id') and part.part_id.endswith('::'+s['section_id'])),None)
+                demo_inputs=(child or {}).get('poc_inputs') or row.get('poc_inputs') or {}
+                return packaging_demo_inputs.demo_process_plan(part,kwargs.get('lookup') or {},demo_inputs,allow_fallback=True,
+                    note=kwargs.get('note') or '',attachments=kwargs.get('attachments') or [])
+            return process.outline_process(part,**kwargs)
         if inputs.get('sections'):
             from .services import packaging_sections
             plan_dict, coverage, sections = packaging_sections.recommend_process(
-                inputs, process.outline_process, note=note, attachments=atts)
+                inputs, recommend, note=note, attachments=atts)
             da_lookup['sections'] = [{'section_id': section['section_id'],
                                       'lookup': section.get('lookup') or {}} for section in sections]
         else:
-            plan, coverage = process.outline_process(
+            plan, coverage = recommend(
                 part, overall=None, geom=None,
                 note=_packaging_business_part_process_note(inputs, note) + '\n' + da_process_routing.grounding(da_lookup), attachments=atts,lookup=da_lookup)
-            plan_dict = plan.model_dump()
+            plan_dict = plan.model_dump() if hasattr(plan,'model_dump') else dict(plan)
         steps_total = len(plan_dict.get("steps") or [])
         library = (coverage or {}).get("summary") or {}
         tasks.report_progress(

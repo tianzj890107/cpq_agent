@@ -1788,10 +1788,12 @@ function startAllPackagingPartProcesses(rows) {
     const code = String((row && row.business_part_code) || "");
     const geometry = packagingBusinessPartDownstreamTarget(row, currentPackagingParts || {});
     const drawing = !!((currentPackagingBusinessParts || {}).derived_from_drawing);
+    if (drawing && currentPackagingBusinessParts.auto_geometry_inputs !== false && code) {
+      ready.push({code, target:code, mode:'author'+'ity'});
+      return; // 原有按钮提交业务件，由后端统一补齐demo输入，不在前端要求人工确认。
+    }
     const binding = (row && row.geometry_binding) || {};
-    const sizeReady = !drawing || (binding.status === "bound" && ["manual", "auto"].includes(binding.bound_by)
-      && binding.size_confirmed === true && !!((row || {}).confirmed_size || {}).length_mm
-      && !!((row || {}).confirmed_size || {}).width_mm);
+    const sizeReady = !drawing;
     if (geometry.ok && sizeReady) {
       ready.push({ code: code, target: String(geometry.part_code || ""), mode: "geometry" });
       return;
@@ -3499,7 +3501,7 @@ function packagingBusinessPartProcessTarget(row, partsDoc) {
   if (partsDoc && partsDoc.derived_from_drawing) {
     if ((Array.isArray(part.sections) && part.sections.length > 1) || part.sections_source === 'manual') {
       if (!packagingSectionsReady(part, partsDoc.auto_geometry_inputs !== false)) return {ok:false,code:'section_size_not_confirmed',part_code:code,message:'全部组成的CAD归属、尺寸或用量不完整，请重新解析或选择完整候选。'};
-      if (!text(reference.material_text) && !text(part.material)
+      if (partsDoc.auto_geometry_inputs === false && !text(reference.material_text) && !text(part.material)
           && !(part.sections || []).every(s=>text(s.material_text))) return {ok:false,code:'material_missing',part_code:code,message:'补上各组成材料后再排工艺。'};
       return {ok:true,code:'',message:'',part_code:code};
     }
@@ -3516,7 +3518,7 @@ function packagingBusinessPartProcessTarget(row, partsDoc) {
       return {ok: false, code: "drawing_part_size_not_confirmed", part_code: code,
               message: "当前CAD归属或有效尺寸缺失，请重新解析或选择完整候选。"};
     }
-    if (!text(reference.material_text) && !text(part.material)) {
+    if (!autoReady && !text(reference.material_text) && !text(part.material)) {
       return {ok: false, code: "material_missing", part_code: code,
               message: "这一件尚无材料原文，补上材料后再排工艺。"};
     }

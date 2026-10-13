@@ -41,9 +41,13 @@ def _similar_route(row, payload):
         if not verified and reference.get('size_quality') in ('unfolded','verified_cad_dimension'):
             size = reference
             verified = True
+        estimated = reference.get('size_quality') in ('auto_geometry_reference','poc_reference')
+        if not verified and estimated:
+            size=reference
         feature = {'name':row.get('name') or row.get('business_part_name'),
                    'material_text':reference.get('material_text') or row.get('material') or '',
-                   'length_mm':size.get('length_mm'),'width_mm':size.get('width_mm'),'size_verified':verified}
+                   'length_mm':size.get('length_mm'),'width_mm':size.get('width_mm'),'size_verified':verified,
+                   'size_estimated':estimated,'demo':estimated}
         ranking = rank_route_features(feature,response.get('candidates') or [])
         result = {**payload,'status':ranking['status'] if ranking['status']!='unbound' else 'not_found',
                   'match_method':'feature_similarity','similarity':ranking,

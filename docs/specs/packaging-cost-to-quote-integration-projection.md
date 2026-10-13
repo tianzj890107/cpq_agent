@@ -1,6 +1,6 @@
 # Spec：包装项目的成本确认之后，整机成本必须是同一份包装账（否则回传销售走不通）
 
-状态：Spec + 红测（成本投影已实现；包装参数投影本批已实现）
+状态：Spec + 红测（已实现）；成本投影与包装参数投影均已实现。
 红测：`tests/test_packaging_cost_to_quote_integration_projection_red.py`（7 条：成本投影 4 + 包装参数 3）
 血缘：`docs/specs/packaging-single-cost-ledger.md`（单份成本账、不复制算法）、
 `docs/specs/tech-cost-confirm-gaps-and-waiver.md`（确认成本与缺口签字）、

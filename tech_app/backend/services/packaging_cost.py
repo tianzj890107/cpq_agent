@@ -2268,6 +2268,9 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     demo_doc = packaging_layout.active_business_document(demo_doc)
     demo_rows = {str(row.get('business_part_code')):row.get('poc_inputs') or {}
                  for row in demo_doc.get('business_parts') or []}
+    for row in demo_doc.get('business_parts') or []:
+        for section in row.get('sections') or []:
+            demo_rows[str(row.get('business_part_code'))+'::'+str(section.get('section_id'))]=section.get('poc_inputs') or {}
     demo_enabled = data.get('poc_demo') is True and demo_doc.get('poc_demo') is True
     gaps: list = []
     assumptions: list = []

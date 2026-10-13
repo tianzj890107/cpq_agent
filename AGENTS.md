@@ -3,11 +3,11 @@
 ## 仓库与分支
 
 - 本仓库是 `cpq_agent`，不再把 `cad_engine` 作为本项目的 GitLab 跟踪来源。
-- 日常开发和发布统一使用 `20260909` 分支；该分支以 GitHub 的 `yiweilineng4` 为初始基线。
-- 日常修改只进入开发分支 `20260909`；`master` 是唯一发布主线，只能通过 `20260909 → master` Merge Request 合入，禁止直接 push、自动合并或 force push。
+- 当前包装行业开发与34演示环境发布统一使用 `ytbz` 分支；`20260909` 保留为原行业开发分支，不自动同步或改写。
+- 包装修改只进入 `ytbz`；`master` 是正式发布主线，包装合入只能通过 `ytbz → master` Merge Request，禁止直接 push、自动合并或 force push。34演示环境允许在用户明确授权后直接部署双远端已推送的 `ytbz` 精确提交，不要求先merge。
 - 遗留 `main` 只作旧 `cad_engine` 历史保留，不得作为开发、MR、tag、Release 或部署来源；未经用户再次明确要求不得删除或改写。
-- 拉取统一使用 GitLab `gitlab/20260909`，只允许 fast-forward 同步，禁止自动合并或改写历史；推送到 GitLab 并镜像推送到 GitHub 同名分支，GitHub 不作为拉取来源。
-- 用户明确要求 push/推送时，把当前提交同时推送到 GitLab 与 GitHub 的 `20260909`。推送前先运行 `python3 scripts/push_remotes.py --check`，再运行 `python3 scripts/push_remotes.py`；某个远端失败时如实报告成功/失败清单，并以 `--only <远端>` 在同一 HEAD 只补推缺失远端。用户未明确要求 push 时不得自行推送。
+- 拉取统一使用 GitLab `gitlab/ytbz`，只允许 fast-forward 同步，禁止自动合并或改写历史；推送到 GitLab 并镜像推送到 GitHub 同名分支，GitHub 不作为拉取来源。
+- 用户明确要求 push/推送时，把当前提交同时推送到 GitLab 与 GitHub 的 `ytbz`。推送前先运行 `python3 scripts/push_remotes.py --check`，再运行 `python3 scripts/push_remotes.py`；某个远端失败时如实报告成功/失败清单，并以 `--only <远端>` 在同一 HEAD 只补推缺失远端。用户未明确要求 push 时不得自行推送。
 - GitHub（镜像远端，仅在 push 时与 GitLab 双推同名分支，不拉取、不部署）：`git@github.com:tianzj890107/cpq_agent.git`
 - GitLab：`git@gitlab.boulderaitech.com:ai-team/cpq_agent.git`
 - 当前内网服务 `http://172.16.10.34:8010/` 对应本仓库服务；除非用户明确要求，不要改用旧 `cad_engine` 部署链路。
@@ -35,8 +35,9 @@
 
 - 不提交密钥、本地配置、历史会话、数据库运行文件、缓存或 `.DS_Store`。
 - 提交前检查 `git status`、目标 diff 和相关测试结果；不得覆盖用户已有的未提交修改。
-- 推送后用 `git ls-remote gitlab refs/heads/20260909` 与 `git ls-remote origin refs/heads/20260909` 分别回读，两个远端分支都必须指向当前提交。
+- 推送后用 `git ls-remote gitlab refs/heads/ytbz` 与 `git ls-remote origin refs/heads/ytbz` 分别回读，两个远端分支都必须指向当前提交。
 - 只暂存本任务相关文件，禁止用 `git add -A` 把无关修改一起提交。检查、测试或推送失败时不得谎报完成。
+- 推送预检要求已跟踪改动与暂存区干净；未跟踪文件必须人工核对并留在原处，不因发布而提交、删除或隐藏。脚本不把无关Excel锁文件、用户资料作为发布内容。
 - 推送失败时保留已成功的远端结果，修复外部阻塞后以同一 HEAD 用 `python3 scripts/push_remotes.py --only <远端>` 只补推缺失远端；不得生成补偿 commit、force push、改写历史或改走服务器部署绕过仓库权限。
 
 ## 周 changelog
@@ -48,8 +49,8 @@
 
 ## Push、Merge、Tag、Release、部署边界
 
-- `push`：提交验证后的 `20260909`，同时推送 GitLab 与 GitHub 的 `20260909`；不创建 MR、tag、Release，不部署。
-- `merge`：只创建或更新 GitLab MR `20260909 → master`，reviewer 固定 `tianzijing`，assignee 固定 `zhangzhen`；不得自动合并。
+- `push`：提交验证后的 `ytbz`，同时推送 GitLab 与 GitHub 的 `ytbz`；不创建 MR、tag、Release，不部署。
+- `merge`：只创建或更新 GitLab MR `ytbz → master`，reviewer 固定 `tianzijing`，assignee 固定 `zhangzhen`；不得自动合并。
 - `tag`：只有用户明确指定版本号并明确要求打 tag 时，才允许在已合入 `master` 的提交上创建 annotated tag；禁止移动已有 tag，禁止 `git push --tags`。
 - `release`：只有用户明确要求创建 GitLab Release 时执行；必须绑定已存在且已推送的同名 tag。Release 不等于部署。
 - `部署`：只有用户在当前任务明确授权具体环境和版本时执行。部署前校验目标 tag/commit，保护服务器设置和历史数据，部署后检查 `http://127.0.0.1:8010/`；push、merge、tag、Release 均不得自动部署。
@@ -57,8 +58,8 @@
 
 ## 任务指令与动作映射（最高优先级）
 
-- 用户说 `push`/“推送”：只提交已验证的当前任务并将 HEAD 同时推送到 GitLab 与 GitHub 的 `20260909`；不创建 MR、tag、Release，不部署。
-- 用户说 `merge`/“合并”/“创建 MR”：只创建或更新 `20260909 → master` MR，完整归纳 `master..20260909` 的提交和 diff，等待 `tianzijing` code review；不得自动合并或直接 push `master`。
+- 用户说 `push`/“推送”：只提交已验证的当前任务并将 HEAD 同时推送到 GitLab 与 GitHub 的 `ytbz`；不创建 MR、tag、Release，不部署。
+- 用户说 `merge`/“合并”/“创建 MR”：只创建或更新 `ytbz → master` MR，完整归纳 `master..ytbz` 的提交和 diff，等待 `tianzijing` code review；不得自动合并或直接 push `master`。
 - 用户说 `tag`：只有同时明确给出目标版本号时才创建并推送该单个 immutable annotated tag；不创建 Release，不部署。
 - 用户说 `Release`：只基于已存在的同名远端 tag 幂等创建/更新 GitLab Release；不移动 tag，不部署。
 - 用户说“部署”：只部署当前指令明确的环境和 tag/commit；没有明确目标时先停止并询问，不从历史授权、文档或建议推断。

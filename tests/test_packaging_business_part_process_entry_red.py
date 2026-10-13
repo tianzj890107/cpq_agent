@@ -255,8 +255,10 @@ class CGuardrails(unittest.TestCase):
         # `test_packaging_business_part_{basis_in_panel,cost_by_authority_size,
         # process_by_authority_route}_red` 的同一冻结逐字一致（重指≠放宽，多出来的两条
         # 逐个点名，见下面对 /sections /geometry-binding /size-confirm /auto-bind-candidates 的精确断言）。
-        self.assertEqual(11, src.count("packaging-business-parts/"),
-                         "额外入口仅限本轮声明的 sections 写入与批量工艺复用")
+        # 整图多方案 Spec 增加唯一 scheme 选择入口；旧入口不得被任意增加。
+        self.assertEqual(12, src.count("packaging-business-parts/"),
+                         "额外入口仅限声明的 sections、批量工艺复用及 scheme 选择")
+        self.assertEqual(1, src.count("packaging-business-parts/scheme"))
         self.assertIn('/sections${suffix}',src)
         self.assertEqual(1, src.count("/geometry-binding"))
         self.assertEqual(2, src.count("/size-confirm"))  # 整件兼容 + 逐部分确认

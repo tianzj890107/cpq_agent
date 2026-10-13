@@ -4939,8 +4939,12 @@ def verified_business_part_input_row(row: Any, doc: Any) -> Dict[str, Any]:
     result = copy.deepcopy(row) if isinstance(row, dict) else {}
     if isinstance(doc, dict) and doc.get('poc_demo') is True and (result.get('poc_inputs') or {}).get('mock') is True:
         result[REFERENCE_BLOCK_KEY] = {**business_part_reference_block(result), **result['poc_inputs'], 'size_quality':'poc_reference'}
-        result['sections'] = []  # POC按整件参照估算；原文档各组成保持不变。
-        result['sections_source'] = 'poc_aggregate_reference'
+        if len(result.get('sections') or []) > 1 or result.get('sections_source')=='manual':
+            from . import packaging_sections
+            for section in result['sections']:
+                if not section.get('confirmed_size'):
+                    section['automatic_size']=_automatic_selected_size(section,section.get('entity_ids') or [])
+            result['sections']=packaging_sections.verified_sections(result)
         return result
     if not isinstance(doc, dict) or not doc.get("derived_from_drawing"):
         return result

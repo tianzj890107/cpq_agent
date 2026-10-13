@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create or reuse the fixed GitLab MR 20260909 -> master; never merge it."""
+"""Create or reuse the fixed GitLab MR ytbz -> master; never merge it."""
 import argparse
 import json
 import os
@@ -10,7 +10,7 @@ import urllib.request
 from pathlib import Path
 
 PROJECT = "ai-team/cpq_agent"
-SOURCE = "20260909"
+SOURCE = "ytbz"
 TARGET = "master"
 REVIEWER = "tianzijing"
 ASSIGNEE = "zhangzhen"

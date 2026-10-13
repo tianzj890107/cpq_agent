@@ -596,13 +596,20 @@ def business_part_rows(business_doc: Any) -> list:
             continue
         if len(row.get('sections') or []) > 1 or row.get('sections_source') == 'manual':
             from . import packaging_sections
+            from . import packaging_parts
+            try:
+                row=packaging_parts.verified_business_part_input_row(row,business_doc)
+            except ValueError:
+                pass  # 真正缺归属或尺寸仍逐部分披露，不能只取第一部分。
             reference = _reference_block(row)
             usage = _positive_number(reference.get('quantity'))
+            if not usage and business_doc.get('poc_demo') is True:
+                usage=_positive_number((row.get('poc_inputs') or {}).get('quantity'))
             for section in row.get('sections') or []:
-                size = section.get('confirmed_size') or {}
+                size = section.get('confirmed_size') or section.get('automatic_size') or {}
                 valid = (section.get('status') == 'bound' and section.get('entity_ids')
                          and set(size.get('entity_ids') or []) == set(section['entity_ids'])
-                         and size.get('source') in ('manual_confirmed_drawing','verified_cad_dimension'))
+                         and size.get('source') in ('manual_confirmed_drawing','verified_cad_dimension','auto_selected_cad_geometry'))
                 if size.get('source') == 'manual_confirmed_drawing' and not (size.get('confirmed_by') and size.get('note')):
                     valid = False
                 length = _positive_number(size.get('length_mm')) if valid else None

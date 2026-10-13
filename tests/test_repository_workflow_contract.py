@@ -12,7 +12,7 @@ class RepositoryWorkflowContract(unittest.TestCase):
     def test_fixed_branch_and_review_flow(self):
         push = (ROOT / "scripts/push_remotes.py").read_text()
         mr = (ROOT / "scripts/create_mr.py").read_text()
-        self.assertIn('BRANCH = "20260909"', push)
+        self.assertIn('BRANCH = "ytbz"', push)
         self.assertIn('REMOTE = "gitlab"', push)
         self.assertIn('GITHUB_REMOTE = "origin"', push)
         self.assertIn("git@gitlab.boulderaitech.com:ai-team/cpq_agent.git", push)
@@ -20,7 +20,7 @@ class RepositoryWorkflowContract(unittest.TestCase):
         self.assertIn("--only", push)
         self.assertNotIn("--force", push)
         self.assertNotIn("-f", push.split("EXPECTED_PUSH_URLS")[0])
-        self.assertIn('SOURCE = "20260909"', mr)
+        self.assertIn('SOURCE = "ytbz"', mr)
         self.assertIn('TARGET = "master"', mr)
         self.assertIn('REVIEWER = "tianzijing"', mr)
         self.assertNotIn("merge_when_pipeline_succeeds", mr)

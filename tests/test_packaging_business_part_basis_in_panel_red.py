@@ -383,7 +383,9 @@ class CTaskResultsCarryTheBasis(unittest.TestCase):
         # 2026-10-08：多组成闭环 Spec `packaging-multipart-business-part-complete.md` 新增共用
         # sections 写入与逐部分尺寸确认两个入口，计数精确重指为 9 / size-confirm 2，逐条点名。
         # 批量工艺入口已增加两个既有路由调用；说明组件修复不新增接口。
-        self.assertEqual(11, _source(APP_JS).count("packaging-business-parts/"))
+        # 整图多方案 Spec 新增唯一 scheme 选择入口，重指而非取消精确冻结。
+        self.assertEqual(12, _source(APP_JS).count("packaging-business-parts/"))
+        self.assertEqual(1, _source(APP_JS).count("packaging-business-parts/scheme"))
         self.assertIn('/sections${suffix}', _source(APP_JS))
         self.assertEqual(1, _source(APP_JS).count("/geometry-binding"))
         self.assertEqual(2, _source(APP_JS).count("/size-confirm"))

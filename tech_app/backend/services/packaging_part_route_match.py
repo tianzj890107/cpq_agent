@@ -63,11 +63,13 @@ def rank_route_features(part, candidates, *, analogy=False):
         a = sorted(filter(None, (_positive(part.get('length_mm')), _positive(part.get('width_mm')))))
         b = sorted(filter(None, (_positive(candidate.get('length_mm')), _positive(candidate.get('width_mm')))))
         size = 0
-        if part.get('size_verified') is True and len(a) == len(b) == 2:
+        if (part.get('size_verified') is True or (part.get('size_estimated') is True and part.get('demo') is True)) and len(a) == len(b) == 2:
             size = sum(min(x,y)/max(x,y) for x,y in zip(a,b))/2
         else:
             missing.append('verified_size')
         scores = {'name': SequenceMatcher(None,name,other).ratio(), 'material':material_score, 'size':size}
+        if part.get('size_estimated') and not part.get('size_verified'):
+            missing.append('size_is_estimated_not_verified')
         score = .55*scores['name'] + .25*material_score + .20*size
         ranked.append({**candidate, 'score':round(score,4), 'scores':scores, 'missing_features':missing})
     ranked.sort(key=lambda c: (-c['score'], str(c.get('code') or ''), str(c.get('name') or '')))

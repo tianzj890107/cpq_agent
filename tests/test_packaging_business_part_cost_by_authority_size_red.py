@@ -366,8 +366,10 @@ class EGuardrails(unittest.TestCase):
         src = _source(ROOT / "tech_app" / "frontend" / "app.js")
         # 图纸尺寸人工确认单列 size-confirm PUT，总数精确重指为 7。
         # 多组成闭环 Spec 明确新增共用 sections 写入，不解除其它批次冻结。
-        self.assertEqual(11, src.count("packaging-business-parts/"),
-                         "额外入口仅限本轮声明的 sections 写入")
+        # 整图多方案 Spec 的唯一 scheme 入口使精确冻结重指为 12。
+        self.assertEqual(12, src.count("packaging-business-parts/"),
+                         "额外入口仅限声明的 sections、批量工艺及 scheme 选择")
+        self.assertEqual(1, src.count("packaging-business-parts/scheme"))
         self.assertIn('/sections${suffix}',src)
         self.assertEqual(1, src.count("/geometry-binding"))
         self.assertEqual(2, src.count("/size-confirm"))  # 整件兼容 + 逐部分确认

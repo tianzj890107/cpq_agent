@@ -218,12 +218,13 @@ def demo_size(row, sizes):
     return {**value,'length_mm':100.,'width_mm':100.,'size_source':'demo_placeholder_not_cad'}
 
 
-def demo_process_plan(part, lookup, inputs, *, run=None, allow_fallback=False):
+def demo_process_plan(part, lookup, inputs, *, run=None, allow_fallback=False, note='', attachments=None):
     from . import packaging_manufacturing, llm_client, packaging_process_instances, packaging_cost
     lookup=json.loads(json.dumps(lookup,ensure_ascii=False,default=str))
     try:
         plan,coverage=packaging_manufacturing.outline(part,lookup=lookup,
-            note='演示项目：依据本件材料和尺寸适配工序，不增加无依据表面处理。'+str(inputs),
+            note='演示项目：依据本件材料和尺寸适配工序，不增加无依据表面处理。'+str(inputs)+'\n'+note,
+            attachments=attachments,
             run=run or llm_client.run)
     except Exception as exc:
         if not allow_fallback: raise
@@ -279,7 +280,7 @@ def prepare_processes(project_id, *, actor='', run=None):
                 child['sections']=[]
                 child['reference']={**(child.get('reference') or {}),
                     'material_text':section.get('material_text') or (child.get('reference') or {}).get('material_text')}
-                child_inputs={**(row.get('poc_inputs') or {}),
+                child_inputs={**(section.get('poc_inputs') or row.get('poc_inputs') or {}),
                     **{k:v for k,v in (section.get('confirmed_size') or {}).items() if k in ('length_mm','width_mm')}}
                 child_plan,child_coverage=demo_process_plan(packaging_parts.business_as_ir_part(child),
                     da_process_routing.for_row(child),child_inputs,run=run,allow_fallback=True)
@@ -317,7 +318,9 @@ def prepare_demo_layouts(business):
                 counts[code]=layout.get('n_up') if len(codes)==1 and layout.get('n_up') else 1
                 changed=True
         layout['part_counts']=counts
-        if not layout.get('sheet_mm') and not layout.get('machine_mm'):
+        if not layout.get('sheet_mm') or layout.get('dimension_role') in ('machine_sheet','unclassified'):
+            if layout.get('sheet_mm'):
+                layout['demo_original_sheet_candidate']=copy.deepcopy(layout['sheet_mm'])
             cuts=[packaging_sheet_cost.individual_cut(parts[code].get('poc_inputs') or {},{}) for code in codes]
             if all(all(size.get('sheet_mm') or []) for size in cuts):
                 layout.update(sheet_mm=[sum(cut['sheet_mm'][0]*counts[code] for cut,code in zip(cuts,codes)),
@@ -450,6 +453,7 @@ def prepare(project_id: str, *, actor: str = "", enable_demo: bool = False) -> D
     doc = copy.deepcopy(business)
     doc["poc_demo"] = True
     doc["demo_inputs_version"] = ENGINE_VERSION
+    geometry_sizes_map=geometry_sizes(packaging_parts.load_parts(project_id) or {})
     tax_factor = _kb_tax_factor()
     written, skipped = 0, []
     for row in (doc.get("business_parts") or []):
@@ -484,6 +488,29 @@ def prepare(project_id: str, *, actor: str = "", enable_demo: bool = False) -> D
             },
         }
         row["poc_inputs"] = inputs
+        for section in row.get('sections') or []:
+            child=dict(section,reference={'material_text':section.get('material_text') or value.get('material_text')},
+                geometry_binding={'component_ids':section.get('component_ids') or []},
+                confirmed_size=section.get('confirmed_size') or section.get('estimated_size') or {})
+            child_value=demo_inputs_for(child,geometry_sizes_map,allow_estimates=True)
+            section['poc_inputs']={**inputs,'quantity':section.get('quantity') or 1,
+                'length_mm':child_value['length_mm'],'width_mm':child_value['width_mm'],
+                'gsm':child_value['grammage'],'ton_price':child_value['unit_price']*1000,
+                'material_text':child_value['material_text'],'note':child_value['note']}
+        sections=row.get('sections') or []
+        assigned=set((row.get('geometry_binding') or {}).get('entity_ids') or [])
+        sets=[set(s.get('entity_ids') or []) for s in sections]
+        if (sections and assigned and all(sets) and set().union(*sets)==assigned
+                and sum(map(len,sets))==len(assigned)):
+            for section in sections:
+                if section.get('status')=='pending_attribution' and section.get('source')=='raw_cad_extra':
+                    section['demo_original_status']='pending_attribution'
+                    section['status']='bound'
+                    section['demo_note']='演示按剩余CAD图元独立部分估算；实际物理组成未人工核实'
+            if all(s.get('status')=='bound' for s in sections):
+                row['sections_complete']=True
+                row['sections_completion_source']='demo_entity_coverage'
+                row['demo_composition_notes']=list(row.get('section_gaps') or [])
         row["usage_qty"] = row.get('usage_qty') or (row.get('reference') or {}).get('quantity') or 1
         row["cost_parameters"] = {**(row.get('cost_parameters') or {}),
             "mock":True, "source":"demo_process_parameters",

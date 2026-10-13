@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Safely push HEAD to GitLab and GitHub 20260909 without rewriting history."""
+"""Safely push HEAD to GitLab and GitHub ytbz without rewriting history."""
 import argparse
 import subprocess
 import sys
 
-BRANCH = "20260909"
+BRANCH = "ytbz"
 REMOTE = "gitlab"
 GITHUB_REMOTE = "origin"
 EXPECTED_PUSH_URLS = {
@@ -42,7 +42,7 @@ def main():
     targets = args.only or list(EXPECTED_PUSH_URLS)
     if git("branch", "--show-current").stdout.strip() != BRANCH:
         sys.exit(f"错误：只允许从 {BRANCH} 推送。")
-    if git("status", "--porcelain").stdout.strip():
+    if git("status", "--porcelain", "--untracked-files=no").stdout.strip():
         sys.exit("错误：工作区不干净，请先提交本任务修改。")
     head = git("rev-parse", "HEAD").stdout.strip()
     for remote, expected in EXPECTED_PUSH_URLS.items():
