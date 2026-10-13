@@ -179,6 +179,7 @@
         state.plan = data.plan;
         state.validation = data.validation;
         state.coverage = data.coverage;      // 已有工艺 / 缺失工艺，由后端本地比对得出
+        state.sections = data.sections || [];
       } else {
         state.costScope = data.source?.cost_scope || "";
         state.analysis = data.analysis;
@@ -272,6 +273,7 @@
         state.plan = result.plan;
         state.validation = result.validation;
         state.coverage = result.coverage;
+        state.sections = result.sections || [];
       } else {
         state.costScope = result.source?.cost_scope || state.costScope || "";
         state.analysis = result.analysis;
@@ -338,6 +340,7 @@
         state.plan = data.plan;
         state.validation = data.validation;
         state.coverage = data.coverage;
+        state.sections = data.sections || [];
       } else {
         state.analysis = data.analysis;
         state.summary = data.summary;
@@ -425,7 +428,12 @@
       + `<div class="inline-process-stack">`;
 
     html += `<section class="inline-card"><div class="inline-card-title">工序明细</div><div class="inline-steps">`;
-    (plan.steps || []).forEach((step, index) => { html += processStep(step, index, state.editing); });
+    const processContext = {
+      packaging: plan.part_class === 'packaging' || String(plan.sop_version || '').startsWith('packaging-')
+        || !!state.coverage?.process_origin?.includes('packaging') || !!state.coverage?.sections,
+      coverage: state.coverage, sections: state.sections || state.sectionResults || [],
+    };
+    (plan.steps || []).forEach((step, index) => { html += processStep(step, index, state.editing, processContext); });
     html += `</div></section>`;
 
     html += `<section class="inline-card"><div class="inline-card-title">工艺方案</div>`;
@@ -460,7 +468,7 @@
     const references = coverage.reference_routes || [];
     let referenceHtml = '';
     if (references.length) {
-      referenceHtml = `<details class="inline-row"><summary>相似件工艺借鉴 · ${references.length} 个参考（未审核）</summary>${references.map(ref => `<div class="inline-row"><b>${esc(ref.reference_name || ref.header?.name || '库内参考件')}</b> ${esc(ref.reference_code || '')}<div>${esc((ref.steps || []).map(step => step.operation_name).join(' → '))}</div><div>按本件要求调整；不继承参考工时与价格${ref.similarity_score == null ? '' : ' · 检索得分 '+esc(ref.similarity_score)}</div></div>`).join('')}</details>`;
+      referenceHtml = `<details class="inline-row"><summary>相似件工艺借鉴 · ${references.length} 个参考</summary>${references.map(ref => processRecommendationHtml({kind:'reference',references:[ref],reason:'按本件要求调整；不继承参考工时与价格'})).join('')}</details>`;
     }
     const { reused = [], missing = [] } = coverage;
     const row = (item, kind) =>
@@ -478,14 +486,23 @@
       ? reused.map(item => row(item, "reused")).join("")
       : `<div class="inline-hint">没有可沿用的库内工序。</div>`;
     if (missing.length) {
-      html += `<div class="inline-cov-split">以下是本件建议工序，尚未确认可直接沿用库内标准：</div>`;
+      html += `<div class="inline-cov-split">以下是本件推荐工序，请结合参考件与本件要求使用：</div>`;
       html += missing.map(item => row(item, "missing")).join("");
     }
     return referenceHtml + html + `</section>`;
   }
 
-  function processStep(step, index, editing) {
+  function processRecommendation(step, context = {}) {
+    return window.PackagingProcessPresentation.resolve(step, context);
+  }
+
+  function processRecommendationHtml(item) {
+    return window.PackagingProcessPresentation.render(item);
+  }
+
+  function processStep(step, index, editing, context = {}) {
     const confidence = Number(step.confidence || 0);
+    const recommendation = processRecommendation(step, context);
     if (editing) {
       const options = TYPES.map(type => `<option value="${type}" ${type === step.type ? "selected" : ""}>${TYPE_LABEL[type]}</option>`).join("");
       return `<div class="inline-step ${confClass(confidence)}" id="inline-step-${attr(step.step_no)}" data-inline-step data-i="${index}"><div class="inline-sno">${esc(step.step_no)}</div><div class="inline-sbody"><div class="inline-edit-grid">` +
@@ -503,7 +520,8 @@
         `</div></div></div>`;
     }
     const kv = (key, value) => value ? `<div><span class="inline-key">${key}:</span> ${esc(value)}</div>` : "";
-    return `<div class="inline-step ${confClass(confidence)}" id="inline-step-${attr(step.step_no)}"><div class="inline-sno">${esc(step.step_no)}</div><div class="inline-sbody"><div class="inline-step-title">${esc(step.name || "")}<span class="inline-type">${TYPE_LABEL[step.type] || esc(step.type)}</span>${confidence > 0 ? `<span class="inline-confidence">置信 ${Math.floor(confidence * 100)}%</span>` : ""}</div>` +
+    return `<div class="inline-step ${recommendation ? '' : confClass(confidence)}" id="inline-step-${attr(step.step_no)}"><div class="inline-sno">${esc(step.step_no)}</div><div class="inline-sbody"><div class="inline-step-title">${esc(step.name || "")}<span class="inline-type">${TYPE_LABEL[step.type] || esc(step.type)}</span>${!recommendation && confidence > 0 ? `<span class="inline-confidence">置信 ${Math.floor(confidence * 100)}%</span>` : ""}</div>` +
+      processRecommendationHtml(recommendation) +
       (step.description ? `<div class="inline-description">${esc(step.description)}</div>` : "") +
       `<div class="inline-step-grid">${kv("设备", step.equipment)}${kv("工装", step.fixture)}${kv("刀具/量具", step.tooling)}${kv("参数", step.params)}${kv("质量", step.quality)}${step.duration_min != null ? `<div><span class="inline-key">工时:</span> ${esc(step.duration_min)} 分</div>` : ""}</div>` +
       ((step.depends_on || []).length ? `<div class="inline-dep">前序依赖：工序 ${step.depends_on.join("、")}</div>` : "") +

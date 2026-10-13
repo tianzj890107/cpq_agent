@@ -140,6 +140,7 @@ class ProcessStep(BaseModel):
     standard_seconds: Optional[float] = None
     time_source: Optional[str] = None
     source_ref: Optional[str] = None
+    recommendation: Optional[dict] = None  # 包装展示来源；不是审批或成本依据
 
     @model_validator(mode="before")
     @classmethod

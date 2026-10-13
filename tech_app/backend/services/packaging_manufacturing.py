@@ -24,6 +24,24 @@ def _validate_names(steps):
         raise ValueError('packaging_process_incompatible')
 
 
+def _reference_evidence(route, lookup):
+    header = route.get('header') or {}
+    score = route.get('similarity_score')
+    # Only an actual feature ranking may supply similarity, never approval/name identity.
+    candidate = next((c for c in (lookup.get('similarity') or {}).get('candidates', [])
+        if c.get('code') and c.get('code') == route.get('reference_code')), {})
+    if score is None:
+        score = candidate.get('score')
+    if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score) or not 0 <= score <= 1:
+        score = None
+    return {'reference_name': route.get('reference_name') or header.get('name') or '库内参考件',
+            'reference_code': route.get('reference_code') or header.get('product_item_code') or '',
+            'similarity_score': score, 'scores': route.get('scores') or candidate.get('scores') or {},
+            'missing_features': route.get('missing_features') or candidate.get('missing_features') or [],
+            'match_method': route.get('match_method') or lookup.get('match_method') or '',
+            'steps': route.get('steps') or []}
+
+
 def outline(part, *, lookup=None, note='', attachments=None, run=None):
     lookup = lookup or {}
     if lookup.get('status') == 'external':
@@ -65,7 +83,9 @@ def outline(part, *, lookup=None, note='', attachments=None, run=None):
                 original_step_no=row['line_number'],standard_seconds=seconds,
                 time_source='approved_standard' if seconds is not None else 'unknown',
                 source_ref='DA_CLM_PG:'+header_id+':'+str(row.get('md_clm_process_routing_operation_id') or row['line_number']),
-                note='本件路线已批准' if approved else '数据库参照工序，需按本件审核；未继承参照件工时',confidence=.7))
+                note='数据库参考工序；已有审批记录保留' if approved else '数据库参照工序，需按本件审核；未继承参照件工时',confidence=0,
+                recommendation={'kind':'reference','reason':'来自库内参考件路线，按当前零件要求使用',
+                    'references':[_reference_evidence(route, lookup)]}))
         source = 'approved_da_packaging_route' if approved else 'da_packaging_reference'
         if not approved:
             questions.append(OpenQuestion(field=part.part_id,reason='参照路线需核对本件的工序适用性与标准工时'))
@@ -85,7 +105,9 @@ def outline(part, *, lookup=None, note='', attachments=None, run=None):
             steps.append(ProcessStep(step_no=(index+1)*10,name=item.name,type=item.type,description=item.name,
                 equipment=item.equipment,duration_min=None,standard_seconds=None,
                 time_source='unknown',
-                depends_on=[index*10] if index else [],note='模型建议，未审核为标准工时'))
+                depends_on=[index*10] if index else [],note='模型建议，未审核为标准工时',confidence=0,
+                recommendation={'kind':'ai','reason':result.summary or '根据当前零件材料、尺寸及用途编制；未提供逐工序推荐理由',
+                    'references':[_reference_evidence(ref,lookup) for ref in references]}))
         questions=list(result.open_questions)
         if references:
             source = 'packaging_analogical_recommendation'
@@ -93,7 +115,7 @@ def outline(part, *, lookup=None, note='', attachments=None, run=None):
     _validate_names(steps)
     plan = ProcessPlan(part_id=part.part_id,part_name=part.name,part_class='packaging',
         material=part.material.spec if part.material else None,steps=steps,open_questions=questions,
-        summary='按本件包装证据编制工序',overall_note='已批准路线' if approved else '包装工艺建议，标准工时及适用性仍须审核',sop_version='packaging-manufacturing/1')
+        summary='按本件包装证据编制工序',overall_note='库内参考件工艺；已有审批记录保留' if approved else '包装工艺建议，标准工时及适用性仍须审核',sop_version='packaging-manufacturing/1')
     if references:
         plan.overall_note += '；相似件工艺借鉴：' + '；'.join(
             str(ref.get('reference_name') or (ref.get('header') or {}).get('name') or '库内参考件')

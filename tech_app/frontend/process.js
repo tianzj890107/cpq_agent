@@ -35,6 +35,7 @@ const PART = qs.get("part");
 
 let part = null;       // 零件信息(来自 IR)
 let plan = null;       // 当前工艺路线
+let processCoverage = null, processSections = [];
 let validation = null;
 let editing = false;
 
@@ -75,7 +76,7 @@ async function init() {
 async function loadPlan() {
   try {
     const d = await fetch(`${API}/api/projects/${PID}/parts/${PART}/process`).then(r => r.json());
-    plan = d.plan; validation = d.validation;
+    plan = d.plan; validation = d.validation; processCoverage = d.coverage; processSections = d.sections || [];
   } catch { plan = null; }
   if (plan) {
     $("btnGen").textContent = "🔄 重新生成";
@@ -106,7 +107,7 @@ $("btnGen").onclick = async () => {
     const sd = await sub.json();
     if (!sub.ok) throw new Error(sd.detail || sub.status);
     const res = await pollTask(sd.task_id);
-    plan = res.plan; validation = res.validation;
+    plan = res.plan; validation = res.validation; processCoverage = res.coverage; processSections = res.sections || [];
     editing = false;
     $("btnGen").textContent = "🔄 重新生成";
     $("btnEdit").disabled = false;
@@ -141,7 +142,7 @@ $("btnSave").onclick = async () => {
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || r.status);
-    plan = d.plan; validation = d.validation;
+    plan = d.plan; validation = d.validation; processCoverage = d.coverage; processSections = d.sections || [];
     editing = false; $("btnSave").style.display = "none"; $("btnEdit").style.display = "";
     render();
     status("已保存。");
@@ -234,7 +235,12 @@ function vflow(steps) {
 }
 
 function stepCard(s, i) {
-  const cls = confClass(s.confidence || 0);
+  const recommendation = window.PackagingProcessPresentation.resolve(s, {
+    packaging: plan?.part_class === 'packaging' || String(plan?.sop_version || '').startsWith('packaging-')
+      || !!processCoverage?.process_origin?.includes('packaging') || !!processCoverage?.sections,
+    coverage: processCoverage, sections: processSections,
+  });
+  const cls = recommendation ? '' : confClass(s.confidence || 0);
   if (editing) {
     const opts = TYPES.map(t => `<option value="${t}" ${t === s.type ? "selected" : ""}>${TYPE_LABEL[t]}</option>`).join("");
     return `<div class="step ${cls}" id="step-${esc(s.step_no)}" data-i="${i}"><div class="sno">${esc(s.step_no)}</div><div class="sbody">` +
@@ -255,7 +261,8 @@ function stepCard(s, i) {
   const kv = (k, v) => v ? `<div><span class="k">${k}:</span> ${esc(v)}</div>` : "";
   return `<div class="step ${cls}" id="step-${esc(s.step_no)}"><div class="sno">${esc(s.step_no)}</div><div class="sbody">` +
     `<div class="stitle">${esc(s.name)}<span class="stype">${TYPE_LABEL[s.type] || s.type}</span>` +
-    `<span class="sconf">置信 ${((s.confidence || 0) * 100 | 0)}%</span></div>` +
+    (recommendation ? '' : `<span class="sconf">置信 ${((s.confidence || 0) * 100 | 0)}%</span>`) + '</div>' +
+    window.PackagingProcessPresentation.render(recommendation) +
     (s.description ? `<div class="sdesc">${esc(s.description)}</div>` : "") +
     `<div class="sgrid">` +
     kv("设备", s.equipment) + kv("工装", s.fixture) + kv("刀具/量具", s.tooling) +
