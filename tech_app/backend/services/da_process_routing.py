@@ -1,5 +1,9 @@
 """DA routing evidence via CPQ's authenticated read-only bridge."""
+import copy
 import json
+import os
+import threading
+import time
 import urllib.parse
 import urllib.request
 from . import cpq_kb_client
@@ -8,7 +12,92 @@ from .packaging_part_route_match import is_external_part, normalize_part_name, r
 _EXTERNAL_NOTICE = '外购/采购件：无工艺路线，不参与路线推荐'
 
 
+def _ttl_default():
+    """进程内 TTL 缓存秒数（Spec `packaging-process-batch-concurrency-and-cache.md` §2 C4）。
+
+    默认 300 秒；`DA_ROUTING_CACHE_TTL_SECONDS=0` 表示每次都重新读。批量跑工艺时同一个
+    (编号, 名称) 与候选集会反复命中，逐组成重复打桥接；这里把**成功**的读取结果缓存住。
+    """
+    try:
+        value = float(os.getenv("DA_ROUTING_CACHE_TTL_SECONDS", ""))
+        return value if value >= 0 else 300.0
+    except (TypeError, ValueError):
+        return 300.0
+
+
+CACHE_TTL_SECONDS = _ttl_default()
+_CACHE_MAX = 512
+_cache_lock = threading.Lock()
+_cache = {}
+# 缓存是**显式开启**的：只有进了 `cache_scope()`（单个工艺请求的处理期间）才生效。
+# 这样直接调用 `for_row` 的读侧/测试不会被跨调用记忆污染（同一入参的两次读取仍各自读桥）。
+_scope_lock = threading.Lock()
+_scope_depth = 0
+
+
+class _CacheScope:
+    """`with cache_scope():` 期间启用进程内 TTL 缓存（可重入；进程级计数，覆盖并发组成线程）。"""
+
+    def __enter__(self):
+        global _scope_depth
+        with _scope_lock:
+            _scope_depth += 1
+        return self
+
+    def __exit__(self, *exc):
+        global _scope_depth
+        with _scope_lock:
+            if _scope_depth > 0:
+                _scope_depth -= 1
+        return False
+
+
+def cache_scope():
+    return _CacheScope()
+
+
+def cache_enabled():
+    with _scope_lock:
+        return _scope_depth > 0
+
+
+def clear_cache():
+    """清空进程内缓存（测试与运维用；不改任何读取口径）。"""
+    with _cache_lock:
+        _cache.clear()
+
+
+def _cache_get(key):
+    if not cache_enabled():
+        return None
+    with _cache_lock:
+        item = _cache.get(key)
+        if item is None:
+            return None
+        expires_at, value = item
+        if time.monotonic() >= expires_at:
+            _cache.pop(key, None)
+            return None
+    return copy.deepcopy(value)
+
+
+def _cache_put(key, value):
+    if not cache_enabled():
+        return
+    ttl = CACHE_TTL_SECONDS
+    if ttl <= 0:
+        return
+    with _cache_lock:
+        if len(_cache) >= _CACHE_MAX:
+            _cache.clear()
+        _cache[key] = (time.monotonic() + ttl, value)
+
+
 def _fetch(product_item_code, name):
+    key = ('route', str(product_item_code or ''), str(name or ''))
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
     query=urllib.parse.urlencode({'product_item_code':product_item_code,'name':name})
     req=urllib.request.Request(cpq_kb_client._base()+'/wf/tech/process-routing?'+query,
         headers={cpq_kb_client.INTERNAL_TOKEN_HEADER:cpq_kb_client._internal_token(),
@@ -17,15 +106,21 @@ def _fetch(product_item_code, name):
         payload=json.load(response)
     if not isinstance(payload,dict) or not payload.get('ok'):
         raise ValueError('invalid bridge response')
+    _cache_put(key, payload)
     return payload
 
 def _fetch_candidates():
+    key = ('candidates',)
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
     req=urllib.request.Request(cpq_kb_client._base()+'/wf/tech/process-routing?mode=packaging_candidates',
         headers={cpq_kb_client.INTERNAL_TOKEN_HEADER:cpq_kb_client._internal_token(),'Accept':'application/json'})
     with urllib.request.urlopen(req,timeout=cpq_kb_client.CPQ_KB_TIMEOUT_SECONDS) as response:
         payload=json.load(response)
     if not isinstance(payload,dict) or not payload.get('ok'):
         raise ValueError('invalid candidate bridge response')
+    _cache_put(key, payload)
     return payload
 
 

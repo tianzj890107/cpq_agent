@@ -1842,48 +1842,75 @@ async function runPackagingBusinessProcessBatch(project, ready, skipped) {
       throw error;
     } finally { clearTimeout(timer); }
   };
+  // 有界并发（Spec `packaging-process-batch-concurrency-and-cache.md` §2 C1）：默认 3，
+  // 正好吃满后端 `TASK_WORKERS=4` 里的多数额度；并发只让提交/轮询重叠，不改变每件的既有判定。
+  // 默认 3；可用 `window.PACKAGING_PROCESS_BATCH_CONCURRENCY` 覆盖（1 = 回到串行）。
+  const requestedConcurrency = (typeof window !== "undefined" && window)
+    ? Number(window.PACKAGING_PROCESS_BATCH_CONCURRENCY) : NaN;
+  const concurrency = (Number.isFinite(requestedConcurrency) && requestedConcurrency >= 1)
+    ? Math.min(8, Math.floor(requestedConcurrency)) : 3;
+  // 轮询退避（§2 C2）：600ms 起、×1.5 退避、封顶 1200ms；终态判据与超时上限一字不动。
+  const pollBase = 600;
+  const pollCeiling = 1200;
   let failures = 0;
   publish();
+  // 单件全流程（读已有 → 起任务 → 轮询终态）；返回即表示这一件已定论（跳过 / 完成 / 失败）。
+  const runOne = async (item) => {
+    if (project !== currentProject) throw new Error('项目已切换，停止提交后续工艺任务');
+    const base = `${API}/api/projects/${encodeURIComponent(project)}/requirement/packaging-business-parts/${encodeURIComponent(item.code)}/process`;
+    try {
+      detail.status = 'running';
+      detail.progress = `${item.code}：正在读取已有工艺`;
+      detail.log.push(detail.progress); publish();
+      const existing = await read(base);
+      if (existing.plan?.steps?.length && !existing.business_stale && !existing.stale) {
+        detail.log.push(`${item.code}：已有有效工艺，保留并跳过`);
+        publish(); return;
+      }
+      if (project !== currentProject) throw new Error('项目已切换');
+      detail.status = 'running'; detail.progress = `${item.code}：生成工艺推荐`;
+      detail.log.push(detail.progress); publish();
+      const submitted = await read(base, {method: 'POST', body: new FormData()});
+      if (!submitted.task_id) throw new Error('工艺任务没有返回task_id');
+      let cursor = 0;
+      let delay = pollBase;
+      for (let attempt = 0; attempt < 1500; attempt++) {
+        await sleep(delay);
+        delay = Math.min(pollCeiling, Math.round(delay * 1.5));
+        if (project !== currentProject) throw new Error('项目已切换；已提交任务继续后台运行');
+        const task = await read(`${API}/api/projects/${encodeURIComponent(project)}/tasks/${encodeURIComponent(submitted.task_id)}`);
+        const logs = task.progress_log || [];
+        detail.log.push(...logs.slice(cursor).map(line => `${item.code}：${line}`)); cursor = logs.length;
+        detail.progress = `${item.code}：${task.progress || task.status}`; publish();
+        if (task.status === 'failed') throw new Error(task.error || '工艺生成失败');
+        if (['succeeded', 'partial'].includes(task.status)) {
+          if (!task.result?.plan?.steps?.length) throw new Error('任务完成但未返回工序');
+          if (task.status === 'partial') failures++;
+          detail.log.push(`${item.code}：${task.status === 'partial' ? '部分完成' : '已完成'}，${task.result.plan.steps.length}道工序`);
+          break;
+        }
+        if (attempt === 1499) throw new Error('工艺任务等待超时，后台状态待核对');
+      }
+    } catch (error) {
+      // 项目切换属于**整批**收尾（interrupted），不能被记成单件失败。
+      if (String(error.message || '').indexOf('项目已切换') >= 0) throw error;
+      failures++; detail.log.push(`${item.code}：失败，${error.message}`); publish();
+    }
+  };
   try {
     for (const row of skipped) detail.log.push(`${row.part_code}：跳过，${row.reason}`);
-    for (const item of ready) {
-      if (project !== currentProject) throw new Error('项目已切换，停止提交后续工艺任务');
-      const base = `${API}/api/projects/${encodeURIComponent(project)}/requirement/packaging-business-parts/${encodeURIComponent(item.code)}/process`;
-      try {
-        detail.status = 'running';
-        detail.progress = `${item.code}：正在读取已有工艺`;
-        detail.log.push(detail.progress); publish();
-        const existing = await read(base);
-        if (existing.plan?.steps?.length && !existing.business_stale && !existing.stale) {
-          detail.log.push(`${item.code}：已有有效工艺，保留并跳过`);
-          publish(); continue;
+    const queue = ready.slice();
+    const workers = [];
+    const width = Math.max(1, Math.min(concurrency, queue.length || 1));
+    for (let index = 0; index < width; index += 1) {
+      workers.push((async () => {
+        while (queue.length) {
+          const item = queue.shift();
+          await runOne(item);
         }
-        if (project !== currentProject) throw new Error('项目已切换');
-        detail.status = 'running'; detail.progress = `${item.code}：生成工艺推荐`;
-        detail.log.push(detail.progress); publish();
-        const submitted = await read(base, {method: 'POST', body: new FormData()});
-        if (!submitted.task_id) throw new Error('工艺任务没有返回task_id');
-        let cursor = 0;
-        for (let attempt = 0; attempt < 1500; attempt++) {
-          await sleep(1200);
-          if (project !== currentProject) throw new Error('项目已切换；已提交任务继续后台运行');
-          const task = await read(`${API}/api/projects/${encodeURIComponent(project)}/tasks/${encodeURIComponent(submitted.task_id)}`);
-          const logs = task.progress_log || [];
-          detail.log.push(...logs.slice(cursor).map(line => `${item.code}：${line}`)); cursor = logs.length;
-          detail.progress = `${item.code}：${task.progress || task.status}`; publish();
-          if (task.status === 'failed') throw new Error(task.error || '工艺生成失败');
-          if (['succeeded', 'partial'].includes(task.status)) {
-            if (!task.result?.plan?.steps?.length) throw new Error('任务完成但未返回工序');
-            if (task.status === 'partial') failures++;
-            detail.log.push(`${item.code}：${task.status === 'partial' ? '部分完成' : '已完成'}，${task.result.plan.steps.length}道工序`);
-            break;
-          }
-          if (attempt === 1499) throw new Error('工艺任务等待超时，后台状态待核对');
-        }
-      } catch (error) {
-        failures++; detail.log.push(`${item.code}：失败，${error.message}`); publish();
-      }
+      })());
     }
+    await Promise.all(workers);
     detail.status = failures || skipped.length ? 'partial' : 'succeeded';
     detail.progress = `工艺推荐结束：失败${failures}件，跳过${skipped.length}件`; publish();
   } catch (error) {
@@ -3969,11 +3996,14 @@ function renderPackagingBusinessTree(tree, rows) {
     // 尺寸另起一行、状态一行 —— 三行文字装进一个 `.part-body` 文本容器（对照视觉 IR 那条
     // 路的 `.part-info`），靠容器排版，不再把四个块平铺在单行 flex 里挤成一行；容器上给完整
     // 「编号 件名 + 尺寸」的 title，行再窄也 hover 得到全文（`esc()` 不管引号，这里补一层）。
-    const displayCode = String(row.display_code || code);
-    const rowTitle = `${displayCode} ${partName} ${size}`.replace(/\s+/g, " ").trim();
+    // 可见编号只认**稳定身份码**（Spec `packaging-business-part-visible-identity-code.md` §2 C1）：
+    // 版面顺序号 `display_code` 与工艺/URL/落库用的 `business_part_code` 是两套编号，
+    // 列表用后者才能与工艺面板头（`part_id · 件名`）逐字对上。
+    const visibleCode = String(row.business_part_code || code);
+    const rowTitle = `${visibleCode} ${partName} ${size}`.replace(/\s+/g, " ").trim();
     line.innerHTML = `<div class="part-icon part-icon-box" aria-hidden="true"></div>`
       + `<div class="part-body" title="${esc(rowTitle).replace(/"/g, "&quot;")}">`
-      + `<div class="part-name">${esc(displayCode)} ${esc(partName)}</div>`
+      + `<div class="part-name">${esc(visibleCode)} ${esc(partName)}</div>`
       + (row.scheme_id ? `<div class="part-meta">${esc(row.scheme_title || '方案 '+row.scheme_id)}</div>` : '')
       + `<div class="part-meta">${esc(size)}</div>`
       + (material ? `<div class="part-material">${esc(material)}</div>` : "")
@@ -4455,7 +4485,7 @@ function openPackagingBusinessPart(code, requestedCandidateIndex) {
   showPackagingPartPane();
   markSelection(wanted);
   const title = $("packagingPartTitle");
-  if (title) title.textContent = `${row.display_code || wanted} ${String(row.name || "")}`.trim();
+  if (title) title.textContent = `${row.business_part_code || wanted} ${String(row.name || "")}`.trim();
   const binding = row.geometry_binding || {};
   const autoBlockReason = packagingAutoSelectionReason(binding);
   const candidates = Array.isArray(binding.candidates) ? binding.candidates : [];

@@ -4,9 +4,27 @@ from __future__ import annotations
 import copy
 import hashlib
 import math
+import os
 from typing import Any, Callable
 
 MAX_SECTIONS = 64
+
+
+def _workers_default():
+    """各组成并行推荐的并发度（Spec `packaging-process-batch-concurrency-and-cache.md` §2 C3）。
+
+    组成之间互相独立（各自建 IR 件、各自查 DA、各自发一次模型），原语是纯函数 + IO，
+    可以并行；合并时按输入顺序重排，保证与串行逐字一致。默认 4，可用
+    `PACKAGING_SECTION_WORKERS` 覆盖（1 = 串行）。
+    """
+    try:
+        value = int(os.getenv("PACKAGING_SECTION_WORKERS", ""))
+        return max(1, min(16, value))
+    except (TypeError, ValueError):
+        return 4
+
+
+SECTION_RECOMMEND_WORKERS = _workers_default()
 
 
 def positive(value: Any):
@@ -314,17 +332,40 @@ def compute_material(inputs, calculate: Callable):
             'gap':{'code':'section_cost_incomplete','section_ids':[r['section_id'] for r in missing]} if missing else None}
 
 
+def _section_recommendation(section, recommend, note, attachments):
+    """单个组成的推荐（**并发单元**；不写共享状态，返回的记录由调用方按顺序合并）。"""
+    from . import packaging_parts, da_process_routing
+    part = packaging_parts.business_as_ir_part(section['row'])
+    grounding = '\n'.join([section['grounding'],
+        '组成：'+section['name']+'；用量：'+str(section['quantity'])+'；CAD 图元：'+','.join(section['entity_ids']),note])
+    da_lookup = da_process_routing.for_row(section['row'])
+    grounding += '\n' + da_process_routing.grounding(da_lookup)
+    plan, coverage = recommend(part, overall=None, geom=None, note=grounding, attachments=attachments or [],lookup=da_lookup)
+    payload = plan.model_dump() if hasattr(plan,'model_dump') else dict(plan)
+    return {'section':section,'lookup':da_lookup,'payload':payload,'coverage':coverage}
+
+
 def recommend_process(inputs, recommend, *, note='', attachments=None):
-    from . import packaging_parts, process, da_process_routing
+    from . import process
+    sections = inputs.get('sections') or []
+    computed = []
+    workers = max(1, min(SECTION_RECOMMEND_WORKERS, len(sections) or 1))
+    if len(sections) > 1 and workers > 1:
+        # 组成间并行（Spec `packaging-process-batch-concurrency-and-cache.md` §2 C3）：
+        # **首个组成先在调用线程里跑**（保证首个调用的顺序稳定，也省掉小 N 时的线程开销），
+        # 其余组成并行；`pool.map` 按输入顺序返回，合并仍按输入顺序重排。
+        first = _section_recommendation(sections[0], recommend, note, attachments)
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='section') as pool:
+            rest = list(pool.map(
+                lambda section: _section_recommendation(section, recommend, note, attachments), sections[1:]))
+        computed = [first] + rest
+    else:
+        computed = [_section_recommendation(section, recommend, note, attachments) for section in sections]
     results, steps, questions, warnings, reused, missing = [], [], [], [], 0, 0
-    for section in inputs['sections']:
-        part = packaging_parts.business_as_ir_part(section['row'])
-        grounding = '\n'.join([section['grounding'],
-            '组成：'+section['name']+'；用量：'+str(section['quantity'])+'；CAD 图元：'+','.join(section['entity_ids']),note])
-        da_lookup = da_process_routing.for_row(section['row'])
-        grounding += '\n' + da_process_routing.grounding(da_lookup)
-        plan, coverage = recommend(part, overall=None, geom=None, note=grounding, attachments=attachments or [],lookup=da_lookup)
-        payload = plan.model_dump() if hasattr(plan,'model_dump') else dict(plan)
+    for item in computed:
+        section, da_lookup = item['section'], item['lookup']
+        payload, coverage = item['payload'], item['coverage']
         warnings.extend(section['name']+'：'+w for w in process.compute(payload)['warnings'])
         results.append({'section_id':section['section_id'],'section_name':section['name'],'lookup':da_lookup,
             'entity_ids':section['entity_ids'],'quantity':section['quantity'],'plan':payload,'coverage':coverage})

@@ -9619,28 +9619,32 @@ async def packaging_business_part_process(
         # 复用既有工艺链路（`process.outline_process()` 只吃 Part）：业务件与图纸零件走
         # **同一个**模型口径，区别只在输入 —— 这里没有整体 IR、没有几何，只有清单原文。
         from .services import da_process_routing
-        da_lookup = da_process_routing.for_row(row) if not inputs.get('sections') else {
-            'status': 'per_section', 'notice': '各组成独立检索，不沿用父件路线'}
-        tasks.report_progress('DA 工艺路线：' + str(da_lookup.get('notice') or da_lookup.get('status')))
-        sections = []
-        def recommend(part, **kwargs):
-            if automatic_demo:
-                child=next((s for s in row.get('sections') or [] if s.get('section_id') and part.part_id.endswith('::'+s['section_id'])),None)
-                demo_inputs=(child or {}).get('poc_inputs') or row.get('poc_inputs') or {}
-                return packaging_demo_inputs.demo_process_plan(part,kwargs.get('lookup') or {},demo_inputs,allow_fallback=True,
-                    note=kwargs.get('note') or '',attachments=kwargs.get('attachments') or [])
-            return process.outline_process(part,**kwargs)
-        if inputs.get('sections'):
-            from .services import packaging_sections
-            plan_dict, coverage, sections = packaging_sections.recommend_process(
-                inputs, recommend, note=note, attachments=atts)
-            da_lookup['sections'] = [{'section_id': section['section_id'],
-                                      'lookup': section.get('lookup') or {}} for section in sections]
-        else:
-            plan, coverage = recommend(
-                part, overall=None, geom=None,
-                note=_packaging_business_part_process_note(inputs, note) + '\n' + da_process_routing.grounding(da_lookup), attachments=atts,lookup=da_lookup)
-            plan_dict = plan.model_dump() if hasattr(plan,'model_dump') else dict(plan)
+        # DA 桥接缓存（Spec `packaging-process-batch-concurrency-and-cache.md` §2 C4）：
+        # 只在这一个工艺请求的处理期间开启 —— 各组成/多次读取共享同一份路线与候选集，
+        # 直接调用 `for_row` 的其它读侧不受影响。进程级计数，覆盖组成并行的工作线程。
+        with da_process_routing.cache_scope():
+            da_lookup = da_process_routing.for_row(row) if not inputs.get('sections') else {
+                'status': 'per_section', 'notice': '各组成独立检索，不沿用父件路线'}
+            tasks.report_progress('DA 工艺路线：' + str(da_lookup.get('notice') or da_lookup.get('status')))
+            sections = []
+            def recommend(part, **kwargs):
+                if automatic_demo:
+                    child=next((s for s in row.get('sections') or [] if s.get('section_id') and part.part_id.endswith('::'+s['section_id'])),None)
+                    demo_inputs=(child or {}).get('poc_inputs') or row.get('poc_inputs') or {}
+                    return packaging_demo_inputs.demo_process_plan(part,kwargs.get('lookup') or {},demo_inputs,allow_fallback=True,
+                        note=kwargs.get('note') or '',attachments=kwargs.get('attachments') or [])
+                return process.outline_process(part,**kwargs)
+            if inputs.get('sections'):
+                from .services import packaging_sections
+                plan_dict, coverage, sections = packaging_sections.recommend_process(
+                    inputs, recommend, note=note, attachments=atts)
+                da_lookup['sections'] = [{'section_id': section['section_id'],
+                                          'lookup': section.get('lookup') or {}} for section in sections]
+            else:
+                plan, coverage = recommend(
+                    part, overall=None, geom=None,
+                    note=_packaging_business_part_process_note(inputs, note) + '\n' + da_process_routing.grounding(da_lookup), attachments=atts,lookup=da_lookup)
+                plan_dict = plan.model_dump() if hasattr(plan,'model_dump') else dict(plan)
         steps_total = len(plan_dict.get("steps") or [])
         library = (coverage or {}).get("summary") or {}
         tasks.report_progress(

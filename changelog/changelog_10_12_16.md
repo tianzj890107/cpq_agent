@@ -223,3 +223,14 @@
 - 2cd99b7已双推并部署34；原FI1回传已成功，原报价9864c5fea7bd进入3、SM1已领取，财务任务4006756526441108922真实关闭。页面因20秒同步回执误报超时并把已完成成本卡标中断；新实际失败前端行为红测后将三个去向动作改为deferred，真实终态按动作名自报，待发布复验。
 - 销售续验发现常规cost_to_quote只保存产品行、丢失包装包，导致第3步误报未取得成本。两项实际失败红测后保留包装快照；同一已交接命令只补确实缺失的包装分区，不覆盖已有内容、不新增任务/消息、不回退步骤，待发布复验。
 - 去向进度/终态单列动作名，不再共用costStep污染已完成成本卡；实际失败红测转绿。快照补齐及deferred续修相关8模块226项通过，JS语法及diff检查通过。
+
+## 2026-10-13 一键生成工艺推荐并发与缓存 · 业务件可见编号（本地）
+
+- 两处新Spec与红测：`packaging-process-batch-concurrency-and-cache`、`packaging-business-part-visible-identity-code`。新增红测 `test_packaging_process_batch_concurrency_red`（11项，A组用node真跑前端并发/退避，C/D组真跑后端并行与真实HTTP读取）、`test_packaging_business_part_identity_code_red`（3项）。
+- 提速（不改任何工艺判定/门禁/成本口径）：前端「一键生成全部工艺推荐」由严格串行改为**有界并发3**（吃满后端 `TASK_WORKERS=4`），轮询由固定1200ms改为**600ms起、×1.5退避、封顶1200ms**；各件既有判定（已有有效工艺跳过、stale 才重跑、失败计 failures、`succeeded/partial/interrupted` 终态）逐字不变。
+- 后端 `packaging_sections.recommend_process` 对**各组成并行**调用模型（默认4，`PACKAGING_SECTION_WORKERS` 可覆盖），按输入顺序确定性重排，合并 steps/warnings/open_questions/coverage 与串行逐字一致。
+- `da_process_routing` 加**进程内 TTL 缓存**（默认300s，`DA_ROUTING_CACHE_TTL_SECONDS` 覆盖）：只在 `cache_scope()` 内生效，作用域由单个工艺请求处理期进入、进程级计数覆盖组成并行工作线程；作用域外直接调用 `for_row`/`_fetch` 仍各自读桥（不跨调用记忆），只缓存成功结果，`clear_cache()` 可清空。
+- 可见编号取稳定身份码：业务件列表行与面板标题改取 `business_part_code`，不再取版面顺序号 `display_code`；一件一个号（列表号 == 工艺面板头号 == URL 号）。身份码、排序、落库、下游绑定一律未动。
+- 并发度可关：前端批量并发可用 `window.PACKAGING_PROCESS_BATCH_CONCURRENCY` 覆盖（1 = 回到逐件串行，峰值并发 1）；组成并行用 `PACKAGING_SECTION_WORKERS` 覆盖（1 = 串行）。
+- 验证：两新测 14项全绿。护栏未回归：`test_packaging_batch_real_execution_red`、`test_packaging_layout_first_auto_selection_red`、`test_packaging_route_feature_similarity_red`、`test_packaging_analogical_process_red`、`test_da_process_routing_live_red`、`test_packaging_part_route_constrained_match_red`、`test_drawing_board_two_column_parts_and_3d_red`、`test_drawing_flow_frontend_wiring_red`（119项 OK）。读 app.js 的50个模块672项中仅7项失败，经 `git stash` 复核均为本批改动前既有失败，本批新增0失败。
+- 未提交、未推送、未部署；未改任何测试期望值，未动并行会话的实现。
