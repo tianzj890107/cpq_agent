@@ -786,8 +786,10 @@ def requirement_precheck(project_id: str, doc: RequirementDoc) -> dict:
     for label, fields, ok_message in checks:
         missing = [field for field in fields if not is_filled(data.get(field, dynamic_values.get(field)))]
         if label.endswith("图纸与技术资料") or label.startswith("七、"):
-            if not meta.get("source_filename"):
+            if not meta.get("source_filename") and not meta.get('quote_task_id'):
                 missing.append("source")
+            elif not meta.get("source_filename"):
+                ok_message = '报价需求已承接，图纸将在2.1解析步骤上传'
         if missing:
             items.append({"item": label, "status": "need_info",
                           "detail": f"待补充：{', '.join(missing)}", "missing": list(missing)})

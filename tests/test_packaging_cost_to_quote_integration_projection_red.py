@@ -12,7 +12,8 @@ Spec：`docs/specs/packaging-cost-to-quote-integration-projection.md`
     「请先完成整机成本测算，再写入数据库或发送至报价」拦死，报价侧收不到这次技术结果。
 
 本批只补这一条投影：包装项目的整机成本 = 同一份包装账（不重算、不复制算法、
-不覆盖已存在的人工/模型测算）。
+原批次不覆盖已有人工/模型测算；2026-10-14统一回传契约明确改为当前包装账优先，
+旧人工/模型结果留审计，不再作为包装项目的第二套对外成本。
 
 夹具复用既有冻结测试模块 `tests.test_packaging_cost_engine_red`（`CostCase`），
 不复制常量、不连线上库、不调模型。
@@ -77,8 +78,8 @@ class A包装账投影(ProjectionCase):
         self.assertEqual("packaging_ledger", str((result.get("source") or "")),
                          "投影必须写明自己是包装账的投影，别让人以为是另一次测算")
 
-    def test_a3_existing_integration_cost_is_never_overwritten(self):
-        self.built_ledger()
+    def test_a3_current_packaging_ledger_wins_and_old_cost_is_audited(self):
+        view=self.built_ledger()
         plan = integration.load_plan(PID)
         plan.cost = CostAnalysis(part_id=integration.ASSEMBLY_PART_ID, part_name="人工测算",
                                  quantity=1, summary="已有人工测算",
@@ -86,8 +87,10 @@ class A包装账投影(ProjectionCase):
                                          "amount": 99.0}])
         integration.save_plan(PID, plan, "FI1")
         again = cost_flow.integration_ready_cost(PID)
-        self.assertEqual(99.0, cost_model.breakdown(again.cost.model_dump())["material"],
-                         "已有整机成本不许被包装账投影覆盖")
+        self.assertAlmostEqual(view['final']['material'],cost_model.breakdown(again.cost.model_dump())['material'])
+        records=store.list_audit(PID)
+        updates=[r for r in records if r.get('action')=='packaging_cost_projection_updated']
+        self.assertTrue(any(((r.get('detail') or {}).get('previous_cost') or {}).get('summary')=='已有人工测算' for r in updates))
 
     def test_a4_stale_or_missing_packaging_ledger_is_still_refused(self):
         self.prepare()

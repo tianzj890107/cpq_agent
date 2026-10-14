@@ -1274,7 +1274,9 @@ def _check_workflow_input_change(project_id: str, user: dict) -> dict:
     report = store.load_process_report(project_id) or {}
     if report.get("status") in {"in_review", "approved", "published"}:
         raise HTTPException(409, "评估报告已送审或发布；已发布报告请先创建新版本，再变更输入资料")
-    if status == "approved" and user.get("role") not in auth.MANAGER_ROLES:
+    # 报价任务已审核需求后的首次图纸上传，是计划内2.1输入，不是替换权威图纸。
+    first_quote_drawing = bool((store.load_meta(project_id) or {}).get('quote_task_id')) and not store.source_path(project_id)
+    if status == "approved" and not first_quote_drawing and user.get("role") not in auth.MANAGER_ROLES:
         raise HTTPException(403, "已审批需求的输入修订须由工艺技术经理或管理员发起")
     return requirement
 
@@ -1292,6 +1294,38 @@ def _reset_approved_requirement_after_input_change(
         return {}
     return requirement_service.create_revision_for_authoritative_drawing(
         project_id, note=reason, user=user, reason=reason)
+
+
+@app.post('/api/quote-tasks/{task_id}/accept')
+def accept_quote_task(task_id:str,request:Request,user:dict=Depends(current_user)):
+    """先由报价工作流核对任务权限，再读原附件；不相信客户端任务快照。"""
+    _require(user,auth.WRITE_ROLES,'需要工程师及以上权限')
+    import urllib.request,urllib.error,base64
+    from .services import quote_task_intake
+    from .config import CPQ_AUTH_BASE_URL
+    token=_sso_token(request)
+    def fetch(path):
+        req=urllib.request.Request(CPQ_AUTH_BASE_URL+path,headers={'Authorization':'Bearer '+token})
+        try:
+            with urllib.request.urlopen(req,timeout=30) as response:return json.load(response)
+        except urllib.error.HTTPError as exc:raise HTTPException(exc.code,'报价任务权限或附件读取失败') from exc
+        except (OSError,ValueError) as exc:raise HTTPException(503,'报价任务暂时读取失败，请重试') from exc
+    import urllib.parse
+    query=urllib.parse.urlencode({'task_id':task_id})
+    task=fetch('/wf/task?'+query)['task']
+    files=fetch('/wf/task/files?'+query).get('files') or []
+    decoded=[]
+    try:
+        if len(files)>20:raise ValueError('任务附件超过20份')
+        for file in files:
+            if len(file.get('data') or '')>16*1024*1024*4//3+8:raise ValueError('任务附件超过16MB')
+            raw=base64.b64decode(file['data'],validate=True)
+            import hashlib
+            if hashlib.sha256(raw).hexdigest()!=file['sha256']:raise ValueError('附件完整性校验失败')
+            decoded.append({'name':file['name'],'data':raw})
+        return quote_task_intake.accept_task(task,user,attachments=decoded)
+    except (ValueError,requirement_service.RequirementSaveError) as exc:
+        raise HTTPException(400,str(exc)) from exc
 
 
 @app.post("/api/projects")
@@ -1494,13 +1528,14 @@ async def replace_project_source(
     if not store.load_meta(project_id):
         raise HTTPException(404, "项目不存在")
     requirement = _check_workflow_input_change(project_id, user)
+    first_quote_drawing = bool((store.load_meta(project_id) or {}).get('quote_task_id')) and not store.source_path(project_id)
     content = await _read_upload_limited(file, label="需求图纸")
     if not content:
         raise HTTPException(400, "空文件")
     store.replace_source(project_id, file.filename or "source.png", content, user.get("username", "system"))
     # 换掉权威图纸 = 一次需求修订：审批前要先解析（Spec §3.3），审批后必须建修订版，
     # 不许静默拒绝字段写回，也不许覆盖已审批快照。
-    revision = _reset_approved_requirement_after_input_change(
+    revision = {} if first_quote_drawing else _reset_approved_requirement_after_input_change(
         project_id, requirement, user, "替换原始图纸 %s" % (file.filename or "source.png"))
     return {"source_filename": (store.load_meta(project_id) or {}).get("source_filename"),
             "requirement_revision": revision}

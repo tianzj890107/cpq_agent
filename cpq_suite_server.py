@@ -721,13 +721,43 @@ class Handler(BaseHTTPRequestHandler):
                 d = self._read_json()
                 card = cpq_wf.start_step(d.get("session_id", ""), d.get("step_no"), user)
                 self._send_json(200, {"ok": True, "card": card})
+            elif path == "/wf/card/cost-apply" and m == "POST":
+                import cpq_cost_receive
+                d=self._read_json()
+                self._send_json(200,cpq_cost_receive.apply(d.get('session_id',''),d.get('task_id',''),user))
             elif path == "/wf/card/step-done" and m == "POST":
                 d = self._read_json()
                 out = cpq_wf.complete_step(d.get("session_id", ""), d.get("step_no"), user,
                                            d.get("snapshot", ""))
                 self._send_json(200, {"ok": True, **out})
+            elif path == "/wf/quote-files" and m == "POST":
+                import cpq_quote_files
+                if int(self.headers.get('Content-Length') or 0)>24*1024*1024:
+                    self._send_json(413,{'ok':False,'error':'附件请求过大，单文件上限16MB'})
+                    return True
+                d=self._read_json()
+                if d.get('bind'):
+                    files=cpq_quote_files.bind(d.get('session_id',''),d.get('refs') or [],user)
+                    self._send_json(200,{'ok':True,'files':files})
+                else:
+                    ref=cpq_quote_files.save(d.get('name'),d.get('data'),user,d.get('session_id') or '')
+                    self._send_json(200,{'ok':True,'file':ref})
+            elif path == "/wf/quote-files/content" and m == "GET":
+                import cpq_quote_files
+                self._send_json(200,{'ok':True,'file':cpq_quote_files.read_file(arg('session_id'),arg('file_id'),user)})
+            elif path == "/wf/quote-files" and m == "GET":
+                import cpq_quote_files
+                self._send_json(200,{'ok':True,'files':cpq_quote_files.list_session(arg('session_id'),user)})
+            elif path == "/wf/task/files" and m == "GET":
+                import cpq_quote_files
+                task=cpq_wf.task_detail(arg('task_id'),user)
+                self._send_json(200,{'ok':True,'files':cpq_quote_files.task_files(task,user)})
             elif path == "/wf/task/send" and m == "POST":
                 d = self._read_json()
+                if d.get('task_kind')==cpq_wf.TASK_KIND_TECH_NEW:
+                    import cpq_quote_files
+                    d['payload']=dict(d.get('payload') or {})
+                    d['payload']['attachment_refs']=cpq_quote_files.list_session(d.get('session_id',''),user)
                 out = cpq_wf.send_task(d.get("session_id", ""), user, d.get("target_type", ""),
                                        d.get("target_role_code", ""), d.get("target_user_id", ""),
                                        d.get("note", ""),

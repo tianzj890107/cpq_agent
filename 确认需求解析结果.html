@@ -862,7 +862,7 @@
             <i class="ti ti-plus"></i>
           </button>
           <input id="chatFileInput" type="file" multiple hidden
-            accept=".doc,.docx,.pdf,.xls,.xlsx,.csv,.md,.txt,.json,.png,.jpg,.jpeg">
+            accept=".dwg,.dxf,.step,.stp,.stl,.sat,.sldprt,.doc,.docx,.pdf,.xls,.xlsx,.csv,.md,.txt,.json,.png,.jpg,.jpeg">
           <textarea class="chat-input" id="chatInput" rows="1" placeholder="输入您的消息…（Enter 发送，Shift+Enter 换行）"></textarea>
           <button class="chat-send" id="chatSend" onclick="sendFromInput()">
             <i class="ti ti-send"></i>
@@ -1014,7 +1014,7 @@
   <script src="cpq_auth.js"></script>
   <!-- 快速报价面板（批 1 建、批 3 追加四列对比表 renderDiffTable）。
        同源相对路径：8010 根上没有这个文件时会按既有规则转发给 tech_app 前端。 -->
-  <script src="quick-quote-panel.js?v=qqp2"></script>
+  <script src="quick-quote-panel.js?v=20261014-continuity1"></script>
   <!-- 包装报价面板（Spec packaging-quote-draft-and-card-visibility §3.2）：图纸项目回传的整包
        （快照里的 packaging_package）由它定价，并渲染第 3–5 步四段分区（草稿/正式的分界在服务端）。 -->
   <script src="packaging-quote-panel.js?v=pqp1"></script>
@@ -2993,6 +2993,16 @@
     /* ================= 聊天附件上传（PDF / Word / Excel / 文本 均可解析） ================= */
     // 文本类浏览器直接读；PDF/Word/Excel 交后端 /api/extract 提取文字；其它类型只带文件名。
     let chatFiles = []; // { name, text|null, status:'parsing'|'ok'|'err', err, truncated }
+    async function restoreQuoteFiles(bindPending) {
+      if (bindPending) {
+        const refs = JSON.parse(sessionStorage.getItem('cpq:quoteFileRefs') || '[]');
+        if (refs.length) await wfApi('/wf/quote-files', {method:'POST',body:{bind:true,session_id:currentSessionId,refs}});
+        sessionStorage.removeItem('cpq:quoteFileRefs');
+      }
+      const result = await wfApi('/wf/quote-files?session_id='+encodeURIComponent(currentSessionId));
+      chatFiles = (result.files || []).map(ref => ({name:ref.name,ref,text:null,status:'ok',err:null}));
+      renderAttachChips();
+    }
     const TEXT_EXT = /\.(txt|md|csv|tsv|json|log)$/i;   // 浏览器可直接读
     const DOC_EXT = /\.(pdf|docx|xlsx)$/i;               // 交后端提取
     const MAX_EMBED = 200000;
@@ -3006,6 +3016,13 @@
       });
     }
     async function extractFileText(file) {
+      let ref;
+      try {
+        const saved = await wfApi('/wf/quote-files', {method:'POST',body:{name:file.name,data:await fileToBase64(file),session_id:currentSessionId}});
+        if (!saved.file) throw new Error(saved.error || '原文件保存失败');
+        ref = saved.file;
+      } catch (e) { return {text:null,err:e.message || '原文件保存失败'}; }
+      if (/\.(dwg|dxf|step|stp|stl|sat|sldprt|png|jpg|jpeg)$/i.test(file.name)) return {text:null,err:null,ref};
       if (TEXT_EXT.test(file.name)) {
         try { return { text: (await file.text()).slice(0, MAX_EMBED), err: null }; }
         catch (e) { return { text: null, err: '读取失败' }; }
@@ -3039,7 +3056,7 @@
         chip.querySelector('span').textContent = f.name;
         chip.title = f.status === 'parsing' ? (f.name + '（解析中…）')
           : f.status === 'err' ? (f.name + '（' + (f.err || '解析失败') + '）')
-          : (f.name + '（已解析 ' + (f.text ? f.text.length : 0) + ' 字' + (f.truncated ? '，已截断' : '') + '）');
+          : (f.name + (f.text ? '（已解析 '+f.text.length+' 字）' : '（原文件已保存，随项目交接）'));
         chip.querySelector('.rm').onclick = () => { chatFiles.splice(i, 1); renderAttachChips(); };
         box.appendChild(chip);
       });
@@ -3054,7 +3071,8 @@
         renderAttachChips();
         const res = await extractFileText(file);
         entry.text = res.text; entry.err = res.err; entry.truncated = res.truncated;
-        entry.status = res.text ? 'ok' : 'err';
+        entry.ref = res.ref;
+        entry.status = res.err ? 'err' : 'ok';
         renderAttachChips();
       }
       $('chatFileInput').value = '';
@@ -3067,7 +3085,7 @@
       for (const f of chatFiles.filter(f => f.text)) {
         msg += '\n--- 文件《' + f.name + '》内容' + (f.truncated ? '（内容较长，已截断）' : '') + ' ---\n' + f.text + '\n--- 文件结束 ---\n';
       }
-      const failed = chatFiles.filter(f => !f.text);
+      const failed = chatFiles.filter(f => f.status === 'err');
       if (failed.length) {
         msg += '\n（以下附件未能提取文字：' +
           failed.map(f => f.name + (f.err ? '（' + f.err + '）' : '')).join('、') +
@@ -3695,7 +3713,8 @@
       const code = result.code || result.product_code || result.box_type_code;
       if (code) bits.push('成品/盒型编码：' + code);
       if (result.name) bits.push('名称：' + result.name);
-      if (result.price !== undefined && result.price !== '') bits.push('价格：' + result.price);
+      const unitCost = result.unit_cost ?? result.packaging_package?.cost?.total_cost ?? result.cost?.total_cost ?? result.cost?.total;
+      if (unitCost !== undefined && unitCost !== null) bits.push('单件成本：' + unitCost);
       const rows = result.products || result.products_rows || [];
       if (rows.length) bits.push('产品行：' + rows.length + ' 条');
       if (result.techparams_row) bits.push('技术参数：1 行');
@@ -3746,7 +3765,15 @@
         }).then(r => r.json());
         finance = (norm && norm.cost) || null;
       } catch (e) { finance = null; }
-      const rows = result.products || result.products_rows || [];
+      let rows = result.products || result.products_rows || [];
+      const packageData = result.packaging_package || (result.industry === 'packaging' ? result : null);
+      if (!rows.length && packageData && finance && finance.unit_cost != null) {
+        const req = packageData.requirement || {}, box = packageData.box_type || {};
+        rows = [{'产品系列':'包装','成品编码':box.confirmed_box_type || req.box_type || '',
+          '成品描述':req.packaging_product_name || result.product_name || '',
+          '数量':finance.quantity,'基础成本':finance.unit_cost,'币种':finance.currency,
+          '成本指纹':finance.cost_fingerprint,'成本状态':finance.provisional ? '暂估' : '正式'}];
+      }
       const params = result.techparams_row || result.techparams || null;
       const targets = [];
       if (rows.length) targets.push(['s1_products', Object.assign({}, rows[0])]);
@@ -3755,9 +3782,7 @@
         addErrorBubble('工艺回传结果里没有可写入的产品行或技术参数，未做任何改动。');
         return false;
       }
-      if (result.price !== undefined && result.price !== '' && targets[0][0] === 's1_products') {
-        targets[0][1]['价格'] = String(result.price);   // 价格来源注明为工艺回传
-      }
+      // 成本回传只更新基础成本，不能把成本/主数据单位成本当成销售售价。
       // 财务回传的单位成本落成**基础成本**（第 3 步门禁认的就是这一列的正数），
       // 并带上暂估标记与缺口数：有缺口时按 POC 允许流转，但绝不能标成正式成本（Spec §3 / §4）。
       if (finance && finance.unit_cost != null && targets[0][0] === 's1_products') {
@@ -3776,6 +3801,10 @@
       const conflicts = [];
       targets.forEach(([sid, row]) => {
         const cur = extractSectionRows(sid)[0] || {};
+        if (packageData && sid === 's1_products') {
+          // 只更新成本，不改变销售已有售价/毛利/加价；其余产品信息也保留。
+          Object.keys(cur).forEach(key => { if (!(key in row)) row[key]=cur[key]; });
+        }
         Object.keys(row || {}).forEach(k => {
           const before = cur[k];
           if (String(before == null ? '' : before).trim() && String(before) !== String(row[k])) {
@@ -3787,17 +3816,23 @@
           !confirm('以下单元格已有值，确认用工艺回传结果替换？\n\n' + conflicts.join('\n'))) {
         return false;
       }
-      targets.forEach(([sid, row]) => {
-        const f = FORMS.find(x => x.section_id === sid);
-        if (!f || !row) return;
-        renderTableSection({
-          action: 'render_table', step: f.step, section_id: sid,
-          title: f.title, editable: f.editable, columns: f.columns || [], rows: [row],
+      try {
+        const received=await wfApi('/wf/card/cost-apply',{method:'POST',body:{session_id:currentSessionId,task_id:task.task_id}});
+        if (received.products && received.products.length) {
+          const form=FORMS.find(f=>f.section_id==='s1_products');
+          if(form)renderTableSection({action:'render_table',step:form.step,section_id:'s1_products',title:form.title,editable:form.editable,columns:form.columns || [],rows:received.products});
+        }
+        targets.filter(([sid])=>sid!=='s1_products').forEach(([sid,row])=>{
+          const f=FORMS.find(x=>x.section_id===sid);
+          if(f)renderTableSection({action:'render_table',step:f.step,section_id:sid,title:f.title,editable:f.editable,columns:f.columns || [],rows:[row]});
         });
-      });
+      } catch(error) {
+        addErrorBubble('成本接收未完成，原报价数据保留，请重试：'+error.message);
+        return false;
+      }
       const bubble = document.getElementById('wfTechResultBubble');
       if (bubble) bubble.remove();
-      addAiBubble('✅ 已按你的确认把工艺回传结果写入报价单（产品信息与技术参数，价格来源：工艺回传）。'
+      addAiBubble('✅ 已把工艺回传成本保存到原报价的产品基础成本，原销售售价、毛利和加价保留。'
         + '请核对右侧内容后继续下一步。');
       return true;
     }
@@ -3807,10 +3842,13 @@
       if (!wfUser() || !currentSessionId) return false;
       try {
         const d = await wfApi('/wf/tasks');
+        const receipt=await wfApi('/wf/card/step-data?session_id='+encodeURIComponent(currentSessionId)+'&step_no=1');
+        const received=((receipt || {}).data || {}).finance_cost || {};
         for (const t of ((d && d.tasks) || [])) {
           const payload = (t && t.payload) || {};
           if (payload.needs_confirmation !== true || !payload.tech_result) continue;
-          if (payload.quote_session_id && payload.quote_session_id !== currentSessionId) continue;
+          if ((payload.quote_session_id || t.session_id) !== currentSessionId) continue;
+          if (String(received.received_task_id || '') === String(t.task_id)) continue;
           return renderTechResultCard(t);
         }
       } catch (e) { /* 未登录 / 接口不可用：静默跳过，不影响主流程 */ }
@@ -3830,6 +3868,7 @@
         error: f.err || '',
       }));
       return {
+        attachment_refs: (chatFiles || []).filter(f => f.ref).map(f => f.ref),
         requirement_text: (WF.lastRequirementText || '').slice(0, 8000),
         // 第 1 步已填好的四个非产品分区（基本信息/目的地/付款/物流）+ 技术参数表
         requirement_form: collectStepData(1) || null,
@@ -5331,6 +5370,8 @@
       // 以卡片为准纠正步骤（交接过来的卡片，会话 JSON 里的 step 可能还停在上一步），
       // 再按该步骤重算我的操作权限、决定是否询问「开始本步骤」
       await wfRefresh(true);
+      await restoreQuoteFiles(false);
+      await checkTechResultHandoff();
       return true;
       } finally {
         if (opened) QUOTE_RESUME_KEY = (currentSessionId || '') + '#' + currentStep;
@@ -5612,6 +5653,7 @@
           if (mine.indexOf(nw.id) < 0) { mine.push(nw.id); localStorage.setItem('cpq:mySessions', JSON.stringify(mine.slice(-200))); }
         } catch (e) {}
         await wfSyncCard(1);   // 登录后：新会话登记为一张报价卡片（创建人=当前用户）
+        await restoreQuoteFiles(true);
         await wfRefresh();     // 先匹配角色：第 1 步归谁做、我能不能做（决定下面是否自动开工）
         await checkTechResultHandoff();   // 工艺回传的待确认结果：登录后自动渲染（Spec §2.4）
       } catch (error) {

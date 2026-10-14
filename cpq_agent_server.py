@@ -3842,7 +3842,8 @@ from cpq_quote_gate import _gate_num, _packaging_cost_evidence_problem, quote_st
 
 def _identity_query(sql: str, args=()):
     """只读查身份表（参数化；连不上抛出去，由调用方兜底成可读错误）。"""
-    conn = cpq_db.connect(readonly=True)
+    import cpq_auth
+    conn = cpq_auth._connect()
     try:
         with conn.cursor() as cur:
             cur.execute(sql, args)
@@ -3926,6 +3927,9 @@ def normalize_finance_handoff(payload, *, session_id: str = "") -> dict:
     record = {}
     for name in FINANCE_HANDOFF_FIELDS:
         record[name] = cost.get(name, raw.get(name))
+    from cpq_cost_contract import cost_fields
+    if cost.get('packaging_package') or isinstance(cost.get('cost'),dict):
+        record.update(cost_fields(cost))
     if not record.get("quote_session_id") and session_id:
         record["quote_session_id"] = session_id
     gaps = _gate_num(record.get("gap_count"))
@@ -4584,6 +4588,10 @@ def _handle_quick_quote_session_transfer(session_id: str, body, *, user=None) ->
     if not quote:
         return _qq_error("quote_required", "还没有可转出的快速报价：先算价再转。", 409)
     try:
+        import cpq_quote_files
+        quote = dict(quote)
+        quote['attachment_refs'] = cpq_quote_files.list_session(session_id, user)
+        quote['business_case_id'] = (cpq_wf.get_card(session_id) or {}).get('business_case_id') or ''
         result = cpq_quick_quote_price.transfer_to_precise(quote, user=user,
                                                            session_id=_qq_text(session_id))
     except Exception as exc:                                    # noqa: BLE001

@@ -539,12 +539,21 @@ def ensure_packaging_params(project_id: str, plan=None) -> Optional[object]:
 def integration_ready_cost(project_id: str, *, author: str = "system"):
     """取出可以对外的 2.2 结果。成本没算完就不该往主数据和报价里送。
 
-    包装项目多一条兜底：包装账已经算齐（`built` 且不过期）而集成计划里从来没有整机成本
-    时，把这份账**投影**成整机成本再往下走 —— 否则"包装账有值、整机成本为空"会让
-    回传销售永远停在"请先完成整机成本测算"。已存在的整机成本（人工或模型算的）优先，
-    投影只在空位补。
+    包装项目始终采用当前有效包装账；旧整机投影留审计，不再优先于新账。
+    非包装项目仍使用原整机成本。
     """
     plan = integration.load_plan(project_id)
+    if ((store.load_requirement(project_id) or {}).get('data') or {}).get('industry') == 'packaging':
+        projection=packaging_cost_projection(project_id)
+        if projection is None:raise CostFlowError('包装成本账缺失或已过期，请按当前图纸与数量重算；不沿用旧整机成本')
+        current=CostAnalysis(**projection)
+        if plan.cost != current or plan.quantity != current.quantity:
+            store.audit(project_id,'packaging_cost_projection_updated',{
+                'previous_cost':plan.cost.model_dump() if plan.cost else None,
+                'current_cost':current.model_dump(),'by':author})
+            plan.cost=current;plan.quantity=current.quantity
+            integration.save_plan(project_id,plan,author or 'system')
+        return plan
     if not (plan.cost and plan.cost.items):
         projection = packaging_cost_projection(project_id)
         if projection is None:
@@ -710,6 +719,18 @@ def integration_quote_result(project_id: str, plan, title: str,
     package = _packaging_package_of(project_id)
     if package:
         result["packaging_package"] = package
+        from cpq_cost_contract import cost_fields
+        fields=cost_fields(result);result.update(fields)
+        result['cost']=result['cost_breakdown']={
+            'material':fields['material_cost'],'processing':fields['processing_cost'],
+            'others':fields['other_cost'],'total':fields['unit_cost'],
+            'source':'packaging_ledger','estimate_id':(package.get('cost') or {}).get('estimate_id')}
+        result['result_version']=fields['cost_result_version']+':'+fields['cost_fingerprint']
+        if result.get('material'):
+            result['material']['recorded_unit_price']=result['material']['unit_price']
+            result['material']['unit_price']=fields['unit_cost']
+    elif ((requirement.get('data') or {}).get('industry'))=='packaging':
+        raise CostFlowError('包装成本交接包读取失败，请重试；不发送旧整机成本')
     return result
 
 

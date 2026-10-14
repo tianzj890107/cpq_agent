@@ -852,6 +852,23 @@ $("loginForm").onsubmit = async (e) => {
 $("btnUpload").onclick = async () => {
   const f = $("fileInput").files[0];
   if (!f) { status("请先选择图片"); return; }
+  if (currentProject) {
+    const source = new FormData();source.append('file', f);
+    try {
+      status('正在补充当前项目图纸…',true);
+      const response=await fetch(`${API}/api/projects/${currentProject}/source`,{method:'POST',body:source});
+      const result=await response.json();
+      if(!response.ok)throw new Error(result.detail || '图纸上传失败');
+      const extra = Array.from($("attachInput").files || []);
+      if(extra.length){
+        const attachments=new FormData();extra.forEach(file=>attachments.append('files',file));
+        const attached=await fetch(`${API}/api/projects/${currentProject}/attachments`,{method:'POST',body:attachments});
+        if(!attached.ok)throw new Error('图纸已保存，补充附件上传失败，请重试');
+      }
+      await openProject(currentProject);status('图纸已保存，可以开始解析。');
+    } catch(error){status(error.message);}
+    return;
+  }
   status("上传中...", true);
   const fd = new FormData();
   fd.append("file", f);
@@ -5998,6 +6015,7 @@ async function openProject(pid) {
     currentRequirementSourceFilename = (typeof requirementSourceFilename === "function")
       ? requirementSourceFilename(data)
       : String((data && data.meta && data.meta.source_filename) || "").trim();
+    if ($('btnUpload')) $('btnUpload').textContent = '保存项目图纸';
     currentIR = data.ir;
     currentGeometry = data.geometry;
     currentDrawings = data.drawings;
@@ -6012,7 +6030,8 @@ async function openProject(pid) {
     // 走哪条链路由 renderDrawingEntry() 一处判定；这里只把结论翻译成界面事实。
     const entry = renderDrawingEntry(fname);
     currentDrawingEntry = entry;
-    const blockedReason = (entry === "vision" || entry === "drawing_flow") ? ""
+    const blockedReason = !fname ? "报价需求已承接，请在本步骤上传图纸后开始解析。"
+      : (entry === "vision" || entry === "drawing_flow") ? ""
       : entry === "blocked_3d"
         ? `这是 3D 模型导入项目（${fname}）：几何已由原始实体生成，无需也不应再按图纸重建。`
         : `「${fname}」既不是位图也不是 DWG / DXF。2.1 支持 PNG / JPG / WEBP / GIF / BMP（走视觉模型）`
@@ -6033,6 +6052,23 @@ async function openProject(pid) {
         const d = document.createElement("div");
         d.className = "placeholder";
         d.textContent = blockedReason;
+        if (!fname) {
+          const pick=document.createElement('input');pick.type='file';pick.hidden=true;
+          pick.accept='image/*,.pdf,.dwg,.dxf,.step,.stp,.sldprt,.stl,.sat';
+          const upload=document.createElement('button');upload.type='button';upload.className='inline-action';upload.textContent='上传项目图纸';
+          upload.onclick=()=>pick.click();
+          pick.onchange=async()=>{
+            if(!pick.files.length)return;
+            upload.disabled=true;
+            try{
+              const form=new FormData();form.append('file',pick.files[0]);
+              const response=await fetch(`${API}/api/projects/${pid}/source`,{method:'POST',body:form});
+              const saved=await response.json();if(!response.ok)throw new Error(saved.detail || '上传失败');
+              await openProject(pid);status('图纸已保存，可以开始解析。');
+            }catch(error){status(error.message);}finally{upload.disabled=false;}
+          };
+          d.appendChild(upload);d.appendChild(pick);
+        }
         wrap.appendChild(d);
       }
     }

@@ -1333,7 +1333,7 @@
             <i class="ti ti-upload"></i>
             <span id="uploadLabel">上传文件</span>
             <input id="fileInput" type="file" multiple hidden
-              accept=".doc,.docx,.pdf,.xls,.xlsx,.csv,.md,.txt,.png,.jpg,.jpeg">
+              accept=".dwg,.dxf,.step,.stp,.doc,.docx,.pdf,.xls,.xlsx,.csv,.md,.txt,.png,.jpg,.jpeg">
           </div>
           <!-- 技术工艺：图纸 / 需求文档 分开上传（仅 tech 模式显示） -->
           <div class="upload-section" id="techUploadDraw" style="display:none">
@@ -1464,7 +1464,7 @@
         <div class="pj-upload-row">
           <button type="button" class="modal-btn secondary" id="pjUploadBtn"><i class="ti ti-upload"></i> 上传文档</button>
           <input id="pjFileInput" type="file" multiple hidden
-            accept=".doc,.docx,.pdf,.xls,.xlsx,.csv,.md,.txt,.json,.png,.jpg,.jpeg">
+            accept=".dwg,.dxf,.step,.stp,.doc,.docx,.pdf,.xls,.xlsx,.csv,.md,.txt,.json,.png,.jpg,.jpeg">
           <span class="hint" id="pjFiles" style="margin-top:0">未上传文档</span>
         </div>
         <div class="hint" id="pjMsg"></div>
@@ -1591,7 +1591,7 @@
   <!-- 批次 10 / ## 139：首页唯一口径模块（三页签 + 待办口径 + 卡片渲染口径），必须在业务脚本之前加载 -->
   <script src="tech-home-board.js?v=b11"></script>
   <script src="packaging-quote-panel.js?v=20261010-styles"></script>
-  <script src="quick-quote-panel.js?v=qqp1"></script>
+  <script src="quick-quote-panel.js?v=20261014-continuity1"></script>
   <script src="cpq_auth.js"></script>
   <script>
     // 导航展开/收起
@@ -2202,6 +2202,8 @@
     const techArchivedFilterEl = document.getElementById('techArchivedFilter');
     let pickedFiles = [];       // 文件名
     let pickedContents = [];    // { name, text, truncated } —— 提取出的文字，带到工作台
+    let pickedQuoteRefs = [];
+    let quoteUploadError = '';
     let homeParsing = false;    // 附件解析进行中
     const TEXT_EXT_H = /\.(txt|md|csv|tsv|json|log)$/i;
     const DOC_EXT_H = /\.(pdf|docx|xlsx)$/i;
@@ -2216,6 +2218,14 @@
     }
     // 文本类浏览器直接读；PDF/Word/Excel 交后端 /api/extract 提取文字。
     async function extractHomeFile(file) {
+      if (currentMode === 'quote') {
+        try {
+          const saved = await window.cpqAuth.api('/wf/quote-files', {method:'POST', body:{name:file.name,data:await fileToBase64(file)}});
+          if (!saved.file) throw new Error(saved.error || '原文件保存失败');
+          pickedQuoteRefs.push(saved.file);
+          sessionStorage.setItem('cpq:quoteFileRefs', JSON.stringify(pickedQuoteRefs));
+        } catch (e) { quoteUploadError = e.message || '原文件保存失败'; alert(quoteUploadError); return {}; }
+      }
       if (TEXT_EXT_H.test(file.name)) {
         try { return { text: (await file.text()).slice(0, 200000) }; } catch (e) { return {}; }
       }
@@ -2241,6 +2251,7 @@
         if (uploadLabel) uploadLabel.textContent = pickedFiles.length
           ? (pickedFiles.length === 1 ? '解析中…' : `解析 ${pickedFiles.length} 个文件…`) : '上传文件';
         pickedContents = [];
+        pickedQuoteRefs = []; quoteUploadError = '';
         homeParsing = true;
         for (const file of files) {
           const res = await extractHomeFile(file);
@@ -3153,6 +3164,8 @@
     }
 
     function goToAssistant(intent, requirement, files) {
+      if (intent === 'quote' && (homeParsing || quoteUploadError)) { alert(quoteUploadError || '附件保存中，请稍候'); return; }
+      if (intent === 'quote') sessionStorage.setItem('cpq:quoteFileRefs', JSON.stringify(files && files.length ? pickedQuoteRefs : []));
       const page = PAGES[intent];
       if (!page) { alert('「' + MODES[intent].tag + '」页面正在开发中，敬请期待。'); return; }
       try {
@@ -3180,6 +3193,7 @@
     /* 新 Spec packaging-quote-workspace-render-routing：先建实例再跳专属页面，
        匹配/改参数/出价只在实例页执行，不进入六步精准 Agent。 */
     async function submitQuickQuoteRequirement(text) {
+      if (homeParsing || quoteUploadError) { alert(quoteUploadError || '附件保存中，请稍候'); return null; }
       if (quickQuoteCreating) return null;
       const panel = quickQuotePanelApi();
       const raw = String(text || '');
@@ -3212,6 +3226,12 @@
         return opened;
       }
       rememberQuickQuoteSession(sid);
+      if (pickedQuoteRefs.length) {
+        try {
+          await window.cpqAuth.api('/wf/quote-files', {method:'POST',body:{bind:true,session_id:sid,refs:pickedQuoteRefs}});
+          sessionStorage.removeItem('cpq:quoteFileRefs');
+        } catch (e) { alert('附件绑定失败：'+e.message); return null; }
+      }
       try { sessionStorage.setItem('cpq:quickRequirement:' + sid, raw); } catch (e) {}
       navigateQuickQuoteWorkspace(sid);
       return opened;

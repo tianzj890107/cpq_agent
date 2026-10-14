@@ -943,6 +943,16 @@ def _technical_result(project_id: str, title: str) -> dict:
     """回传用的技术结果：参数、工艺、零件与组装成本。复用 2.3 的同一份口径。"""
     from . import cost_flow, integration
 
+    requirement = store.load_requirement(project_id) or {}
+    if (requirement.get('data') or {}).get('industry') == 'packaging':
+        package=cost_flow._packaging_package_of(project_id)
+        if not package or (package.get('cost') or {}).get('stale'):
+            raise ReportWorkflowError('当前包装成本账不可用，请重算后回传；不使用旧整机成本',409)
+        from . import packaging_handoff
+        result=packaging_handoff.bridge_result(package)
+        result.update(product_name=title,assembly_name=title)
+        return result
+
     try:
         plan = integration.load_plan(project_id)
     except Exception:

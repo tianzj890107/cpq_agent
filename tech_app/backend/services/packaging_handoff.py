@@ -131,7 +131,8 @@ def result_version_of(cost: dict) -> str:
     quantity = cost.get("quote_quantity")
     quantity_text = "" if quantity in (None, "") else str(quantity)
     total = _num(cost.get("total_cost")) or 0.0
-    return "pkgcost-v1:%s:%.6f" % (quantity_text, total)
+    from cpq_cost_contract import cost_fields
+    return "pkgcost-v2:%s:%.6f:%s" % (quantity_text,total,cost_fields({'cost':cost})['cost_fingerprint'])
 
 
 # --------------------------------------------------------------------------- #
@@ -322,6 +323,8 @@ def bridge_result(package: dict) -> dict:
     result = dict(package or {})
     result["industry"] = _text(result.get("industry")) or INDUSTRY
     result["packaging_package"] = package
+    from cpq_cost_contract import cost_fields
+    result.update(cost_fields(result))
     return result
 
 

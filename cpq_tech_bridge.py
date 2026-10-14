@@ -486,6 +486,9 @@ def _fill_row(columns, values: dict, norm) -> dict:
 
 def _step2_snapshot(result: dict) -> dict:
     """把整机结论摊成 {s2_products: {数据: [行]}, s2_techparams: {数据: [行]}}。"""
+    package=result.get('packaging_package') or {}
+    if isinstance(package,dict) and package.get('industry')=='packaging':
+        return packaging_snapshot(result)
     forms, norm = _forms()
     if not forms:
         return {}
@@ -990,6 +993,9 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
         returned_sections = sorted(fresh.keys())
         snapshot = cpq_wf._snapshot_dict(
             cpq_wf.step_snapshot(quote_session_id, TECH_CONFIRM_STEP, conn=conn))
+        if fresh.get('packaging_package') and (fresh.get('s2_products') or {}).get('数据'):
+            from cpq_cost_receive import merge_product_rows
+            fresh['s2_products']['数据']=merge_product_rows((snapshot.get('s2_products') or {}).get('数据') or [],fresh['s2_products']['数据'][0])
         snapshot.update(fresh)
         current_step = int(card.get("current_step") or 1)
         if handoff_kind in _HANDOFF_ADVANCE_KINDS and current_step <= TECH_CONFIRM_STEP:
@@ -1119,7 +1125,7 @@ def _commit_card_steps(conn, card, user) -> dict:
 
 
 #: 包装第 2 步快照的栏目（Spec §4.3）：盒型 / 参数 / BOM / 路线 / 成本不能丢。
-PACKAGING_SNAPSHOT_SECTIONS = ("s2_packaging", "s2_packaging_cost", "packaging_package")
+PACKAGING_SNAPSHOT_SECTIONS = ("s2_products", "s2_packaging", "s2_packaging_cost", "packaging_package")
 
 
 def _packaging_package_of(result: dict) -> dict:
@@ -1222,13 +1228,26 @@ def packaging_snapshot(result: dict) -> dict:
         "成本档位": str(cost.get("cost_profile") or ""),
         "是否含缺口": bool(cost.get("has_gaps")),
     }
+    from cpq_cost_contract import cost_fields
+    fields=cost_fields({'packaging_package':package})
+    if cost.get('cost_profile')=='detail_sheet/1':
+        cost_row={
+            '单件总成本': '%.2f' % fields['unit_cost'] if fields['unit_cost'] is not None else None,
+            '材料':'%.2f' % fields['material_cost'] if fields['material_cost'] is not None else None,
+            '加工':'%.2f' % fields['processing_cost'] if fields['processing_cost'] is not None else None,
+            '其他费用':'%.2f' % fields['other_cost'] if fields['other_cost'] is not None else None,
+            '报价数量':fields['quantity'],'整单成本':fields['order_total_cost'],
+            '币种':fields['currency'],'成本结果版本':fields['cost_result_version'],
+            '成本指纹':fields['cost_fingerprint'],'缺口数':fields['gap_count'],
+            '成本状态':fields['cost_status'],'成本档位':fields['cost_profile']}
     return {
         "s2_products": {"kind": "table", "title": "包装产品信息", "数据": [{
-            "产品系列": "包装", "产品型号": box_code, "成品编码": box_code,
+            "产品系列": "包装", "产品型号": box_code, "成品编码": (result.get('material') or {}).get('number') or box_code,
             "成品描述": requirement.get("packaging_product_name") or requirement.get("title") or "包装产品",
-            "数量": requirement.get("quote_quantity") or cost.get("quote_quantity"),
+            "数量": fields['quantity'],
             "币种": requirement.get("currency") or cost.get("currency") or "",
-            "基础成本": cost.get("total_cost"), "是否成本测算": "是",
+            "基础成本": fields['unit_cost'], "是否成本测算": "是",
+            "成本指纹":fields['cost_fingerprint'],"成本状态":fields['cost_status'],
             "成本结果版本": source.get("result_version") or package.get("result_version") or "",
             "成本有缺口": bool(cost.get("has_gaps") or gaps),
         }]},

@@ -255,7 +255,7 @@
   /* ------------------------------------------------------------------ 建单 */
   async function create() {
     const file = modelFiles[0];
-    if (!file) { toast('请先上传至少一份模型图纸，再创建工艺需求。', true); return; }
+    if (!file) { await acceptQuoteTask(); return; }
     const description = document.getElementById('ttNote').value.trim();
     const industry = industryChoice();
     const button = document.getElementById('ttCreate');
@@ -352,7 +352,23 @@
       renderError('该任务不是「新增工艺」任务，请回报价工作台处理。');
       return;
     }
-    render();
+    try { await acceptQuoteTask(); }
+    catch (error) {
+      renderError(error.message || '承接报价需求失败');
+      const retry=document.createElement('button');retry.className='tt-primary';retry.textContent='重试承接需求';
+      retry.onclick=start;host().appendChild(retry);
+    }
+  }
+
+  async function acceptQuoteTask() {
+    host().innerHTML='<p class="tt-loading">正在承接报价需求与附件，无需重新创建需求…</p>';
+    const result=await api('/api/quote-tasks/'+encodeURIComponent(taskId)+'/accept',{method:'POST',body:'{}'});
+    setProject(result.project_id);
+    const page=result.page || 'requirement-confirm';
+    if (window.TechEmbed && window.TechEmbed.embedded) {
+      window.TechEmbed.requestNavigate(page,result.project_id,taskId);return;
+    }
+    location.replace((page === 'drawing' ? 'index' : page)+'.html?project='+encodeURIComponent(result.project_id)+'&tech_task='+encodeURIComponent(taskId));
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);

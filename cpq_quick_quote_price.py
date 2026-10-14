@@ -534,6 +534,10 @@ def transfer_to_precise(quote, *, user=None, session_id="") -> dict:
                               "否则技术工艺侧要重新问一遍）" % "、".join(missing), 400,
                               "quick_quote_incomplete")
     payload = {
+        "industry": "packaging",
+        "attachment_refs": copy.deepcopy(quote.get('attachment_refs') or []),
+        "business_case_id": quote.get('business_case_id') or '',
+        "quote": {"session_id": session_id, "industry": "packaging", "business_case_id": quote.get('business_case_id') or ''},
         "quick_quote": copy.deepcopy(quote),
         "requirement": requirement,
         "baseline_case": copy.deepcopy(quote.get("baseline_case") or {}),

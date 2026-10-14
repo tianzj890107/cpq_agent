@@ -85,7 +85,7 @@ def sync_geometry(project_id: str) -> None:
 def source_path(project_id: str) -> Optional[Path]:
     """对外服务/读取原图的本地路径(S3 后端下必要时回源拉取)。"""
     meta = load_meta(project_id)
-    if not meta:
+    if not meta or not meta.get('source_path'):
         return None
     return _blob().local_path(f"{project_id}/{meta['source_path']}")
 
@@ -134,6 +134,16 @@ def create_project(
     _meta().put_meta(project_id, meta)
     audit(project_id, "create_project", {"source": source_filename, "owner": owner})
     return project_id
+
+
+def create_requirement_project(note='', owner='system', owner_display_name=''):
+    """报价任务先承接需求；没有图纸就没有source，不伪造空DWG/占位图。"""
+    pid=uuid.uuid4().hex[:12]
+    _meta().put_meta(pid,{'project_id':pid,'source_filename':'','source_path':'','note':note,
+        'owner':owner,'owner_display_name':owner_display_name or owner,'attachments':[],
+        'input_revision':1,'created_at':_now(),'stages':{'requirement_received':_now()}})
+    audit(pid,'create_requirement_project',{'owner':owner})
+    return pid
 
 
 def rename_project(project_id: str, name: str, author: str = "system") -> dict:

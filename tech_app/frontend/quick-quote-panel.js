@@ -952,7 +952,15 @@
         resolve(comma >= 0 ? text.slice(comma + 1) : text);   // 去掉 data:…;base64, 前缀
       };
       reader.readAsDataURL(file);
-    }).then(function (b64) {
+    }).then(async function (b64) {
+      if (quickQuoteSessionId() && !options.originalSaved) {
+        var saved = await apiFetch('/wf/quote-files', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({name:file.name,data:b64,session_id:quickQuoteSessionId()})
+        });
+        var savedData = await saved.json();
+        if (!saved.ok || !savedData.file) throw new Error(savedData.error || '图纸原文件保存失败');
+      }
       return apiFetch(agentBase() + PARSE_PATH, {
         method: "POST",
         headers: {"Content-Type": "application/json"},
@@ -995,6 +1003,36 @@
     holder.setAttribute("data-qq-parse-result", "");
     if (state) holder.appendChild(renderParse(state, options));
     box.appendChild(holder);
+
+    // 首页上传的原件与刷新后附件，都从持久化报价附件读取；复用同一解析入口。
+    if (quickQuoteSessionId()) {
+      var session = quickQuoteSessionId();
+      apiFetch('/wf/quote-files?session_id='+encodeURIComponent(session)).then(function(r){
+        if (!r.ok) throw new Error('已上传附件读取失败');
+        return r.json();
+      }).then(function(result){
+        if (session !== quickQuoteSessionId()) return;
+        (result.files || []).forEach(function(ref){
+          var button = el('button','qq-action','解析已上传图纸 · '+ref.name);
+          button.type='button';
+          button.addEventListener('click',async function(){
+            button.disabled=true;
+            try {
+              var response=await apiFetch('/wf/quote-files/content?session_id='+encodeURIComponent(session)+'&file_id='+encodeURIComponent(ref.file_id));
+              var payload=await response.json();
+              if (!response.ok || !payload.file) throw new Error(payload.error || '原文件读取失败');
+              var raw=global.atob(payload.file.data), bytes=new Uint8Array(raw.length);
+              for(var i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);
+              var parsed=await parseFile(new global.File([bytes],ref.name),Object.assign({},options,{originalSaved:true}));
+              lastParseView=quickQuoteParseView(parsed);holder.innerHTML='';holder.appendChild(renderParse(lastParseView,options));
+              if(parsed.ok && options.onParsed)await options.onParsed(parsed);
+            } catch(exc){holder.appendChild(el('p','qq-error',String(exc)));}
+            finally{button.disabled=false;}
+          });
+          head.appendChild(button);
+        });
+      }).catch(function(exc){holder.appendChild(el('p','qq-error',String(exc)));});
+    }
 
     input.addEventListener("change", function () {
       var file = input.files && input.files[0];
