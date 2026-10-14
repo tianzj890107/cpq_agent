@@ -2999,9 +2999,15 @@
         if (refs.length) await wfApi('/wf/quote-files', {method:'POST',body:{bind:true,session_id:currentSessionId,refs}});
         sessionStorage.removeItem('cpq:quoteFileRefs');
       }
-      const result = await wfApi('/wf/quote-files?session_id='+encodeURIComponent(currentSessionId));
-      chatFiles = (result.files || []).map(ref => ({name:ref.name,ref,text:null,status:'ok',err:null}));
-      renderAttachChips();
+      try {
+        const result = await wfApi('/wf/quote-files?session_id='+encodeURIComponent(currentSessionId));
+        chatFiles = (result.files || []).map(ref => ({name:ref.name,ref,text:null,status:'ok',err:null}));
+        renderAttachChips();
+      } catch(error) {
+        chatFiles=[];renderAttachChips();
+        if(bindPending)throw error;
+        addErrorBubble('报价进度已恢复，但原附件暂时无法读取：'+error.message+'。不会新建或覆盖原报价。');
+      }
     }
     const TEXT_EXT = /\.(txt|md|csv|tsv|json|log)$/i;   // 浏览器可直接读
     const DOC_EXT = /\.(pdf|docx|xlsx)$/i;               // 交后端提取

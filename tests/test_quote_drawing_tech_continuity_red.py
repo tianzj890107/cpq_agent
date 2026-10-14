@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import asyncio
 import io
+import subprocess
 from unittest.mock import patch
 from tests.test_packaging_cost_engine_red import CostCase
 from tech_app.backend.storage import store
@@ -120,6 +121,14 @@ class QuoteFiles(unittest.TestCase):
         with self.assertRaises(Exception):self.files.read_file('QUOTE1',ref['file_id'],self.user)
 
 class FrontendContinuity(unittest.TestCase):
+    def test_attachment_denial_does_not_break_existing_quote_restore(self):
+        source=(ROOT/'确认需求解析结果.html').read_text()
+        function=source.split('async function restoreQuoteFiles(bindPending)',1)[1].split('const TEXT_EXT',1)[0]
+        function='async function restoreQuoteFiles(bindPending)'+function
+        script="let chatFiles=[];let reported=false;const currentSessionId='Q1';const wfApi=async()=>{throw Error('附件无权读取')};const renderAttachChips=()=>{};const addErrorBubble=()=>{reported=true};"+function+"\nrestoreQuoteFiles(false).then(()=>{if(!reported)throw Error('读取失败必须披露')}).catch(error=>{console.error(error);process.exitCode=1});"
+        result=subprocess.run(['node','-e',script],capture_output=True,text=True)
+        self.assertEqual(0,result.returncode,result.stderr)
+
     def test_task_entry_accepts_existing_quote_and_goes_to_confirmation(self):
         js=(ROOT/'tech_app/frontend/tech-task.js').read_text()
         self.assertIn('/api/quote-tasks/',js)
