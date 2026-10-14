@@ -37,7 +37,7 @@ class CalculationDialogTests(unittest.TestCase):
         self.assertTrue('function crCostDetailHtml' in JS)
         fn='function crCostDetailHtml'+JS.split('function crCostDetailHtml',1)[1].split('function crOpenCostDetail',1)[0]
         script=r'''const esc=x=>String(x??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));const crMoney=x=>String(x);const crData={packaging_cost:{quote_quantity:1000}};'''+fn+r'''
-const html=crCostDetailHtml({id:'P',name:'<script>',quantity:1,has_cost:true,unit_cost:3.919,subtotal:3.919,breakdown:{material:.665,processing:3.254},calculation_details:[{category:'material',inputs:{rate:0},expression:'<script>',unit_amount:.665,amount:1,amount_with_loss:1,loss_rate:0}]});
+const html=crCostDetailHtml({id:'P',name:'<script>',quantity:1,has_cost:true,unit_cost:3.919,subtotal:3.919,breakdown:{material:.665,processing:3.254},calculation_details:[{category:'material',inputs:{rate:0},expression:'<script>',note:'<script>',unit_amount:.665,amount:1,amount_with_loss:1,loss_rate:0}]});
 if(html.includes('<script>')||!html.includes('&lt;script&gt;')||!html.includes('未舍入')||!html.includes('0.665'))throw Error('Unsafe or rounded evidence');
 if(!crCostDetailHtml({id:'M',quantity:1,has_cost:false,calculation_details:[]}).includes('没有已保存'))throw Error('invented missing evidence');
 '''
@@ -52,6 +52,37 @@ if(!crCostDetailHtml({id:'M',quantity:1,has_cost:false,calculation_details:[]}).
         self.assertEqual({},detail['inputs'])
         self.assertTrue(detail['inputs_error'])
         self.assertEqual(1,detail['unit_amount'])
+
+    def test_formula_and_nested_parameters_display_chinese_without_changing_inputs(self):
+        fn='function crCostDetailHtml'+JS.split('function crCostDetailHtml',1)[1].split('function crOpenCostDetail',1)[0]
+        script=r'''const esc=x=>String(x??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));const crMoney=x=>String(x);const crData={packaging_cost:{quote_quantity:1000}};'''+fn+r'''
+const row={id:'P',quantity:1,has_cost:true,unit_cost:1,subtotal:1,calculation_details:[{category:'material',cost_category:'material',expression:'MAX(cut_length*cut_width*gsm/1000000,minimum_charge/quote_quantity)',inputs:{cut_length:100,cut_width:80,gsm:225,minimum_charge:100,quote_quantity:1000,nested:{mystery_rate:0},gsm_source:'poc_mock'},assumptions:['quote_quantity=默认=1000'],unit_amount:1}]};
+const original=JSON.stringify(row),html=crCostDetailHtml(row);
+for(const raw of ['cut_length','cut_width','gsm','quote_quantity','minimum_charge','mystery_rate','poc_mock'])if(html.includes(raw))throw Error('English field leaked: '+raw);
+for(const cn of ['开料长','开料宽','克重','最低收费','模拟参考','未命名参数'])if(!html.includes(cn))throw Error('Missing Chinese label: '+cn);
+if(!html.includes('MAX(')||html.includes('取最大值'))throw Error('MAX must remain MAX');
+if(JSON.stringify(row)!==original)throw Error('Changed stored inputs');
+'''
+        p=subprocess.run(['node','-e',script],capture_output=True,text=True)
+        self.assertEqual(p.returncode,0,p.stderr)
+
+    def test_all_registered_rule_expression_variables_have_chinese_labels(self):
+        rules=json.loads((ROOT/'tech_app/agent_knowledge/rules/packaging_cost_rules.json').read_text())
+        variables=set()
+        def walk(value):
+            if isinstance(value,dict):
+                expression=value.get('expression')
+                if isinstance(expression,str):variables.update(re.findall(r'\b[a-z_][a-z0-9_]*\b',expression))
+                for child in value.values():walk(child)
+            elif isinstance(value,list):
+                for child in value:walk(child)
+        walk(rules)
+        fn='function crCostDetailHtml'+JS.split('function crCostDetailHtml',1)[1].split('function crOpenCostDetail',1)[0]
+        script="const esc=x=>String(x??'');const crMoney=x=>String(x);const crData={};"+fn
+        script+="const inputs="+json.dumps(dict.fromkeys(sorted(variables),0))+";"
+        script+="const html=crCostDetailHtml({quantity:1,has_cost:true,calculation_details:[{category:'material',inputs,expression:Object.keys(inputs).join('+')}]});if(html.includes('未命名参数'))throw Error('Registered variable untranslated');for(const key of Object.keys(inputs))if(html.includes(key))throw Error('English variable: '+key);"
+        p=subprocess.run(['node','-e',script],capture_output=True,text=True)
+        self.assertEqual(p.returncode,0,p.stderr)
 
     def test_real_browser_row_dialog_and_recalculate_event_separation(self):
         chrome=pathlib.Path('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')

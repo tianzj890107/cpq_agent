@@ -47,7 +47,7 @@ def _owner_part_code(code, codes, item):
 
 def _calculation_evidence(item, amount_with_loss, quantity):
     """只投影同一公式账的依据，不执行公式、不查新的价格。"""
-    from .packaging_cost import COST_CATEGORIES
+    from .packaging_cost import COST_CATEGORIES, LINE_VARIABLES
     raw = item.get('inputs_json')
     try:
         inputs = json.loads(raw) if isinstance(raw, str) and raw else (raw or {})
@@ -62,6 +62,7 @@ def _calculation_evidence(item, amount_with_loss, quantity):
         'rate_code', 'content_code', 'unit', 'unit_price', 'quantity_basis')}
     detail.update(category='material' if item.get('cost_category') == 'material' else 'processing',
                   category_label=dict(COST_CATEGORIES).get(item.get('cost_category'), item.get('cost_category') or '费用'),
+                  display_labels={key: LINE_VARIABLES[key] for key in inputs if key in LINE_VARIABLES},
                   inputs=inputs, inputs_error=inputs_error,
                   amount_with_loss=amount_with_loss, quantity_divisor=quantity,
                   unit_amount=amount_with_loss / quantity if amount_with_loss is not None else None,
