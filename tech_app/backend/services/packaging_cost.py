@@ -2332,7 +2332,12 @@ def compute_project(project_id: str, requirement_no: str = "", *,
             return req_loss, None
         return loss_rate_detail(material_text, rows=factor_rows, material=material)
 
-    def loss_rate_for(material_text: str) -> Optional[float]:
+    def loss_rate_for(material_text: str, part_code=None) -> Optional[float]:
+        if req_loss is None and part_code:
+            matched=[r for r in lines if r.get('cost_category')=='material' and r.get('part_code')==part_code]
+            if matched and matched[0].get('loss_rate') is not None and all(
+                    r.get('loss_rate')==matched[0]['loss_rate'] for r in matched):
+                return matched[0]['loss_rate']
         return loss_rate_with_source(material_text)[0]
 
     def evaluate_line(category, variables=None, **kwargs):
@@ -2563,7 +2568,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         if line['amount'] is not None:
             line['amount'] *= usage
         line.update(_trace_fields(entry, result=result, snapshot=rule_version))
-        rate = loss_rate_for(name)
+        rate = loss_rate_for(name, step.get('part_code'))
         if rate is None and line["amount"] is not None:
             gaps.append({"code": "loss_rate_missing", "where": name,
                          "detail": "工序「%s」取不到损耗率，损耗按 0 计（金额保留）" % name})
@@ -2654,7 +2659,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         elif line['amount'] is not None:
             line['amount'] *= usage
         line.update(_trace_fields(entry_labor, result=result, snapshot=rule_version))
-        rate = None if assembly_step else loss_rate_for(name)
+        rate = None if assembly_step else loss_rate_for(name, step.get('part_code'))
         if not assembly_step and rate is None and amount is not None:
             gaps.append({"code": "loss_rate_missing", "where": name,
                          "detail": "工序「%s」取不到损耗率，损耗按 0 计（金额保留）" % name})

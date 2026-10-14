@@ -128,6 +128,21 @@ class DetailRules(unittest.TestCase):
 
 
 class DetailProject(CostCase):
+    def test_manufacturing_process_uses_its_part_loss_rate(self):
+        from tech_app.backend.services import packaging_assembly
+        self.prepare()
+        part=next(r for r in cost.da_repo.load_packaging_bom(PID,REQ_NO) if r['bom_category']=='box_part')
+        code=part.get('part_code') or part['item_key']
+        step={'step_no':1,'part_code':code,'step_name':'模切','formula_code':'PKG-C-DIE-CUT',
+              'usage_qty':1,'cost_parameters':{'imposition_count':1}}
+        with patch.object(cost.da_repo,'load_packaging_route_steps',return_value=[step]), \
+             patch.object(packaging_assembly,'route_drift',return_value=''):
+            result=cost.compute_project(PID,REQ_NO)
+        material=next(r for r in result['items'] if r['cost_category']=='material' and r['part_code']==code)
+        process=next(r for r in result['items'] if r['formula_code']=='PKG-D-DIE-CUT')
+        self.assertIsNotNone(material['loss_rate'])
+        self.assertEqual(material['loss_rate'],process['loss_rate'])
+
     def test_handoff_profile_and_minimum_policy_follow_the_saved_cost(self):
         from tech_app.backend.services import packaging_handoff
         self.prepare();self.build_cost()
