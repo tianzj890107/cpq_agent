@@ -62,6 +62,7 @@ if(!crCostDetailHtml({id:'M',quantity:1,has_cost:false,calculation_details:[]}).
 const esc=v=>String(v??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const crMoney=v=>String(v);let recalculated=0;
 const crData={packaging_cost:{quote_quantity:1000},parts:[{id:'P',name:'左盖面纸',quantity:1,has_cost:true,unit_cost:3.919,subtotal:3.919,breakdown:{material:.665,processing:3.254},calculation_details:[{category:'material',expression:'area*rate',inputs:{area:1,rate:.665},unit_amount:.665,amount:.665,amount_with_loss:.665,quantity_divisor:1}]}]};
+crData.parts[0].calculation_details=Array.from({length:12},()=>crData.parts[0].calculation_details[0]);
 '''
         script+='\n'.join(js_function(source,name) for name in ('crCostDetailHtml','crOpenCostDetail','crBindCostDetails'))
         script+=r'''
@@ -69,11 +70,14 @@ const crData={packaging_cost:{quote_quantity:1000},parts:[{id:'P',name:'左盖�
  const row=document.querySelector('[data-cr-cost-detail]'),button=document.getElementById('recalc');button.onclick=()=>recalculated++;
  crBindCostDetails();row.click();const opened=document.querySelector('dialog')?.open===true;
  const box=document.querySelector('dialog').getBoundingClientRect();
+ const content=document.querySelector('.cr-cost-details-body');
+ const fullWorkspace=box.left>=7&&box.top>=7&&box.width>=innerWidth-17&&box.height>=innerHeight-17;
+ const internalScroll=content.scrollHeight>content.clientHeight;
  document.querySelector('[data-cr-detail-close]').click();await new Promise(r=>setTimeout(r,40));
  button.click();const independent=!document.querySelector('dialog')&&recalculated===1;
  row.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));const keyboard=document.querySelector('dialog')?.open===true;
  document.querySelector('dialog').close();await new Promise(r=>setTimeout(r,40));
- document.getElementById('probe').textContent=JSON.stringify({opened,independent,keyboard,focusRestored:document.activeElement===row,insideViewport:box.left>=0&&box.right<=innerWidth});
+ document.getElementById('probe').textContent=JSON.stringify({opened,independent,keyboard,fullWorkspace,internalScroll,focusRestored:document.activeElement===row,insideViewport:box.left>=0&&box.right<=innerWidth});
 })();
 '''
         css='\n'.join((ROOT/'tech_app/frontend'/name).read_text() for name in ('workbench.css','inline-analysis.css','cost-review.css'))
