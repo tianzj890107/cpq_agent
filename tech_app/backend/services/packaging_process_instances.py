@@ -40,7 +40,12 @@ def fingerprint(records):
     return hashlib.sha256(json.dumps(records,sort_keys=True,ensure_ascii=False,
                                     default=str).encode()).hexdigest()
 
-def expand(records):
+def expand(records, *, templates=None, box_type_code=""):
+    """一条工艺结论 → 受控计费步（Spec `packaging-process-instances`）。
+
+    给了 `templates` 才对**库内对不上**的件补缺工时（Spec
+    `packaging-cost-estimate-missing-params.md` §2.3）：精确命中的件、已有时工的步一字不改。
+    """
     steps=[]
     for record in records:
         if not is_whole_part_process(record):
@@ -71,6 +76,11 @@ def expand(records):
                       'source_ref':record.get('record_hash') or fingerprint(record),
                       'depends_on':steps[-1]['step_no'] if steps else None}
                 step.update(billing(step))
+                if templates:
+                    from . import packaging_process_estimate
+                    packaging_process_estimate.fill_step(
+                        step, name=name, lookup=record.get('lookup'), templates=templates,
+                        box_type_code=box_type_code, part_code=record.get('part_code') or '')
                 step['needs_standard_time']=(step['formula_code']=='PKG-C-LABOR' and step['standard_seconds'] is None)
                 steps.append(step)
     return steps

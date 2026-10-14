@@ -871,7 +871,11 @@ def build_route(project_id: str, requirement_no: str = "") -> dict:
     if instances['active']:
         from . import packaging_assembly
         try:
-            unified_steps = packaging_assembly.append_operations(project_id,packaging_process_instances.expand(instances['records']))
+            # 库内**对不上**的件（相似命中/没命中）按相似件补缺工时（Spec
+            # `packaging-cost-estimate-missing-params.md` §2.3）：精确命中与已有时工的步一字不改。
+            unified_steps = packaging_assembly.append_operations(project_id,
+                packaging_process_instances.expand(instances['records'],
+                    templates=kb_repo.packaging_process_templates(), box_type_code=box_code))
         except ValueError as exc:
             raise RouteError(str(exc),409,'assembly_inputs_changed') from exc
         known_seconds = [_num(s.get('standard_seconds')) for s in unified_steps

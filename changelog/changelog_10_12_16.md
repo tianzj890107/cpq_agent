@@ -384,3 +384,11 @@
 - 部署前补红测修正两个剩余出口：包装账回传整机成本投影、报价正文均按材料/加工/其他费用显示，不再沿用人工/工装/运输的旧明细行；旧报价历史展示保留。专项增至15项，相关118项通过。
 - 第一轮双推部署a6e9348、PG新规则9条导入（kb_version=9，已有备份），Chrome真实页面/刷新/全区详情无脚本错误。验收副本6188307449f5暴露未知组装12步各30秒、人工3.60元，新增实际失败红测后改为整盒共享30秒估算预算；真实工时保留，旧路线不覆盖，输入保留原工时和预算证据，工时政策变更需显式重算。交接包/记录的规则档位和最低收费来源同步跟随新账。
 - 追加修正后902项相关回归：901通过、1跳过，专项18项；JS语法、Python编译及diff检查通过，旧阶段2项基线失败保持披露。最终线上重算与报价验证待部署后执行。
+
+## 2026-10-14 包装成本：缺的参数按相似件估计（不需要 approved）
+
+- 新Spec `packaging-cost-estimate-missing-params`及实际失败后落地的红测22项：成本公式与费率一行不改，只把**库内对不上**的件（相似命中 / 没命中）缺的标准工时估出来，逐条标 `similarity_estimate`，不再被"没有 approved 就算不出人工费"卡住。
+- 只读实测：`master_data.md_clm_process_routing_operation` 124 行 `man_time`/`machine_time`/`setup_time` 全为 NULL，所以相似路线本身给不出工时；能给出工时的是 `cpq_kb.kb_packaging_process_template`（同工序名，如 `V槽围边`→`V 槽开槽`15秒、`围边裱贴`→`机裱`18秒、`纸张印刷覆膜`→`面纸印刷`15秒、`灰板与面纸模切`→`面纸模切`8秒）。
+- 判据顺序固定：相似路线同名工序工时 → 相似工序模板同名工时（同盒型优先，缺工时的同行跳过、不当 0） → 兜底口径 30 秒；三档都在 `estimate.origin` 里如实标注，不冒充标准工时、不写 `approved`、不写回 DA。桥不可用（unavailable）不编工时。
+- 落点：新增纯模块 `packaging_process_estimate`；`packaging_process_instances.expand()` 加两个可选入参（不给 templates 时行为一字不变）；`packaging_route.build_route()` 才传模板。精确命中的件、已有时工的步、成本公式与费率都不动。
+- 本机：新专项22项通过；相关保护网 `part_route_constrained_match`/`analogical_process`/`process_route`/`unified_route_cost`/`cost_engine`/`cost_red_closure`/`demo_native_and_analogy` 通过；`multipart_sections_complete`(4) 与 `whole_part_process_unit`(1) 的失败与 `demo_flow_end_to_end` a5 在改动前同样失败（已 stash 复核），非本批引入。
