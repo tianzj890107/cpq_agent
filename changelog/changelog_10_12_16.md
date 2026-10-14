@@ -1,5 +1,15 @@
 # 2026-10-12 至 2026-10-16
 
+## 2026-10-14 包装演示 mock 锚定酒盒实际 BOM 取低值
+
+- 用户指出演示 mock 不该按名字关键字猜材质族，要先看「这些材料与酒盒实际 BOM 里最接近的材料」。落地规则：每条 `MAT-PKG-*` 演示材料先用 `packaging_material_match.score_candidate` 锚到 `master_data.md_clm_material_base_info` 的 `YT-JW-XR21-700ML-*`（JW XR21 700ML 酒盒，22 件、`desc` 里有「材料：…；工艺：…」）里最接近的一条，再由**锚到的材料**定材质族，最后取 报价逻辑-0903 与 成本测算明细 同族吨价的**低值**；锚不到对口（衬纸/特种纸/纸管）保持现值并写明「BOM 无对口，保持」。
+- 逐件复核锚点与最优分一致（0 处不一致）：灰板类（双灰/富业灰/滑灰/对裱/`350G玖龙粉灰`/`1.8MM双灰裱…`）→ greyboard 3950 元/吨 = **3.95 元/kg**；铜版类（`225G/255G太阳铜版底PET光银`）→ face_paper 0903!N2 6300 = **6.30**；白卡类（`325G白卡底PET光银` 及 `+3层300G白卡+225G铜版底PET光银`、`235G白卡底PET光银+A9（E坑）`）按**承印基材**进 white_card，取 0903!N4 6700 = **6.70**。EVA/磁铁/衬纸/特种纸/纸管保持现值。
+- 相比同日先前的「按关键字取族」（`packaging_demo_20261014_lower_of`），本批修正 8 条：`GREY350` 12.0→3.95、`BOARD-SILVER`/`BOARD18SUN` 12.8→3.95（承印基材是双灰板）、`FACE325`/`WHITE325`/`LAMINATED`/`LAMINATEDWHITE`/`CORRUGATED` 12.8/6.3→6.7（白卡底PET光银不再按 PET 关键字进面纸族）。其余 15 条同值，跳过不重复追加。
+- PG `cpq_kb`：只追加 `source_name='packaging_demo_20261014_bom_anchor'`、`valid_from='2026-10-14 12:00:00'`；`changed=8`、`kb_version 7→8`，备份 `/tmp/cpq-demo-kb-before-20261014-bom-anchor.json`；重跑 `changed=0`、版本仍 8（幂等）。历史价格行、`kb_cost_rate`、`kb_packaging_*` 权威表、成本公式一律未动。34 与本地共用同一 PG（`172.16.5.181:32444/metabase`），数据已即时生效。
+- 新增 Spec `docs/specs/packaging-demo-mock-lower-of.md`（含取代说明）、红测 `tests/test_packaging_demo_mock_lower_of_red.py`（14 项全绿：锚点==最优分、族/工序留痕、三族低值、无对口保持、幂等）、脚本 `scripts/packaging_demo_kb_relower.py`（默认只打印，写入需 `--apply --backup`）。
+- 工艺（覆膜/热烫/啤切）本批不动：两张工作簿只差「要不要机台工时」，共用数值逐字一致（膜 1.7 元/㎡、膜 18g×18.5 元/kg、辅助 0.15、烫金 8.5、保底 200/150/100），酒盒 BOM 的工序只给工艺描述（如「19um即涂防刮花哑胶(佳泓)」）没有独立单价；机台工时参数只出现在 0903，且被 `test_packaging_cost_engine_red` 的 `复膜=1.376611258004827` 逐值锁死。本轮只把每条材料的 **BOM 锚点 + 工序**写进留痕。
+- 回归：`test_packaging_demo_mock_lower_of_red` 14 OK、`test_packaging_demo_kb_fill_red`、`test_packaging_demo_native_and_analogy_red`、`test_packaging_material_similarity_and_demo_inputs_red`、`test_packaging_cost_engine_red`、`test_packaging_cost_red_closure_red`、`test_packaging_cost_minimum_charge_red`、`test_packaging_cost_rule_routing_red`、`test_packaging_sheet_cut_cost_allocation_red` 全过。唯一失败 `test_packaging_demo_flow_end_to_end_red` 的 `a5`（`labor_total=0`）来自**并行会话未提交的** `packaging_cost.py`/`packaging_cost_ledger.py` 改动，与本批无关，未触碰。
+
 ## 2026-10-14 成本详情中文显示发布
 
 - 用户授权本次提交、GitLab/GitHub双推并部署34的ytbz精确提交。发布前9模块104项通过，包含中文变量/嵌套参数/枚举、MAX保留、数据不变、弹卡/排模布局及刷新恢复；JS语法、Python编译、diff检查通过。
