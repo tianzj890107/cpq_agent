@@ -548,6 +548,8 @@ function crCostDetailHtml(row) {
     groove_unit_fee:'V槽单次加工费（元）',glue_area_mm2:'实际涂胶面积（平方毫米）',
     formula_source_ref:'公式来源单元格',calculation_profile:'计算口径',die_cut_variant:'啤切费率变体',
     machine_size_source:'上机尺寸来源',order_quote_quantity:'订单报价数量（只）',
+    route_standard_seconds:'原路线估算工时（秒）',assembly_estimate_budget_seconds:'整盒估算工时预算（秒）',
+    assembly_estimated_step_count:'共享预算的组装工序数',assembly_time_policy:'组装工时分配规则',
     material_price:'材料单价',units_per_pack:'每包数量',bag_unit_price:'胶袋单价',loss_uplift:'损耗上浮系数',yield_divisor:'良率除数',
     ink_thickness_mm:'墨层厚度（微米）',ink_unit_price:'油墨单价',overhead_seconds:'制造费用工时（秒）',overhead_rate:'制造费用费率',
     tooling_cost:'工装成本',tooling_lifetime:'模具寿命',committed_volume:'项目承诺总量',amortized_quantity:'本单分摊量',
@@ -569,7 +571,9 @@ function crCostDetailHtml(row) {
     pet_oil:'环保吸塑油',visidi_uv:'视高迪紫外处理',texture:'压纹',emboss_deboss:'击凹凸',
     folding:'折页装订',auto_mount:'机贴盒',double_tape:'双面胶',other:'其他',
     legacy_allowance_0_5mm:'旧版长余量0毫米、宽余量5毫米',demo_process_parameters:'模拟工序参数',part_route_parameters:'零件工艺参数',
-    material_price:'材料单价',gsm_source:'克重来源',kg:'千克',mm:'毫米',CNY:'人民币'};
+    material_price:'材料单价',gsm_source:'克重来源',kg:'千克',mm:'毫米',CNY:'人民币',
+    'detail_sheet/1':'成本测算明细口径','whole_box_estimate/1':'整盒共享估算工时',
+    assembly_budget_estimate:'整盒工时预算分配'};
   const knownText = (value, extra={}) => String(value ?? '').replace(/\b[A-Za-z_][A-Za-z0-9_]*\b/g,
     word => extra[word] || labels[word] || words[word] || word);
   const valueText = (value, dictionary=labels, unnamed=new Map()) => {

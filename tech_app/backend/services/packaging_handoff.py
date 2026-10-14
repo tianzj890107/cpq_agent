@@ -182,7 +182,7 @@ def handoff_package(project_id: str, requirement_no: str = "", *,
         "handoff_kind": HANDOFF_KIND,
         "industry": INDUSTRY,
         "industry_label": INDUSTRY_LABEL,
-        "cost_profile": COST_PROFILE,
+        "cost_profile": _text(cost.get('cost_profile')) or COST_PROFILE,
         "pricing_profile": PRICING_PROFILE,
         "result_version": version,
         "requirement": copy.deepcopy(data),
@@ -264,7 +264,12 @@ def _publish_gate(pid: str, package: dict, cost: dict) -> dict:
             source_versions_unavailable = {"code": "packaging_flow_versions_unavailable",
                                            "reason": type(exc).__name__}
     try:
-        policy = packaging_cost.minimum_charge_policy()
+        if cost.get('cost_profile')==packaging_cost.CURRENT_PROFILE:
+            policy={'status':'chosen','chosen':packaging_cost.CURRENT_PROFILE,
+                    'policy':packaging_cost.CURRENT_PROFILE,'source':'成本测算明细.xlsx/报价-行业标准',
+                    'decided_by':'用户授权采用明细规则','decided_at':'2026-10-14','unavailable_reason':''}
+        else:
+            policy = packaging_cost.minimum_charge_policy()
     except Exception as exc:                            # noqa: BLE001 - 读不到要披露，不许炸
         policy = _unavailable_policy(type(exc).__name__)
     return {"publishable": _text((gates_brief.get("quote_publish") or {}).get("status")) == "open",
@@ -637,7 +642,7 @@ def send_to_quote(project_id: str, requirement_no: str = "", *, scenario: Option
         "engine_version": ENGINE_VERSION,
         "handoff_version": HANDOFF_VERSION,
         "handoff_kind": HANDOFF_KIND,
-        "cost_profile": COST_PROFILE,
+        "cost_profile": _text(package.get('cost_profile')) or COST_PROFILE,
         "pricing_profile": PRICING_PROFILE,
         "cost_result_version": _text(source.get("result_version")),
         "package_fingerprint": fingerprint,

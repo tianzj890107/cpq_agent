@@ -7,6 +7,19 @@ from ..models.process import ProcessPlan, ProcessStep, ProcessType
 from . import packaging_layout
 
 SCOPE = 'assembly_delta/1'
+TIME_POLICY = 'whole_box_estimate/1'
+ESTIMATE_BUDGET_SECONDS = 30.0
+
+
+def estimated_labor_seconds(steps):
+    """整盒缺依据的估算工时预算；真实标准工时不改，不按拆步数量扩张。"""
+    unknown=[s for s in steps if s.get('scope')=='project' and
+             s.get('time_source') in ('poc_mock','assembly_budget_estimate')]
+    if not unknown:return {}
+    seconds=ESTIMATE_BUDGET_SECONDS/len(unknown)
+    result={s['step_no']:seconds for s in unknown}
+    result[unknown[-1]['step_no']]=ESTIMATE_BUDGET_SECONDS-seconds*(len(unknown)-1)
+    return result
 SYSTEM = '''你是包装组装工艺工程师。只推荐本次方案中不同完整零件之间新增的连接、裱合、装盒及最终检验工序。
 零件制造工序已经完成，禁止复制开料、印刷、覆膜、烫金、V槽、模切等单件工序。
 每道工序part_codes必须填当前方案中至少两个不同的业务零件编码；不得使用组成编码、其他方案或编造编码。
@@ -98,16 +111,18 @@ def prepare(project_id, actor, *, run=None, force=False, note='', automatic=Fals
                 recommendation={'kind':'rule','reason':'模型不可用，基础装配估算：'+type(exc).__name__})] if len(ids)>1 else [])
     result.part_id=integration.ASSEMBLY_PART_ID
     result.part_class='packaging'
+    unknown=[s for s in result.steps if s.standard_seconds is None]
     for step in result.steps:
         step.scope='project'
         step.formula_code='PKG-C-LABOR'
         if not step.recommendation:step.recommendation={'kind':'ai','reason':'根据当前零件构成编制新增组装工序，不重复单件制造工序'}
         if automatic:
             if step.standard_seconds is None:
-                step.standard_seconds=30.;step.duration_min=.5;step.time_source='poc_mock'
+                step.standard_seconds=ESTIMATE_BUDGET_SECONDS/len(unknown)
+                step.duration_min=step.standard_seconds/60;step.time_source='assembly_budget_estimate'
             step.cost_parameters={**step.cost_parameters,'labor_seconds':step.standard_seconds,
                                   'labor_rate':36.,'mock':True,'source':'assembly_estimate'}
-            step.note=(step.note or '')+'；未知工时/人工费率采用估算，来源保留'
+            step.note=(step.note or '')+'；未知工时按整盒30秒预算分配，人工费率采用估算，来源保留'
         else:step.time_source=step.time_source or 'unknown'
     plan.process=result;plan.packaging_assembly_scope=SCOPE
     plan.packaging_assembly_input_hash=input_hash(doc,records)

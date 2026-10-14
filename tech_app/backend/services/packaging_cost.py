@@ -1378,6 +1378,10 @@ def with_current_expense_policy(result):
     if result.get('built') and (result.get('source_versions') or {}).get('calculation_profile') != CURRENT_PROFILE:
         result['stale'] = True
         result['stale_reasons'] = list(dict.fromkeys(list(result.get('stale_reasons') or []) + ['calculation_profile_changed']))
+    from . import packaging_assembly
+    if result.get('built') and (result.get('source_versions') or {}).get('assembly_time_policy') != packaging_assembly.TIME_POLICY:
+        result['stale'] = True
+        result['stale_reasons'] = list(dict.fromkeys(list(result.get('stale_reasons') or []) + ['assembly_time_policy_changed']))
     return result
 
 
@@ -2574,6 +2578,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     overhead_row = _rate_row("RATE-PKG-OVERHEAD")
     overhead_rate = _num(overhead_row.get("value")) if overhead_row else 0.0
     entry_labor = resolve_formula("PKG-C-LABOR", rows=formula_rows)
+    estimated_seconds = packaging_assembly.estimated_labor_seconds(steps)
     for step in steps:
         name = _text(step.get("step_name"))
         decision = packaging_process_instances.billing(step)
@@ -2588,11 +2593,18 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                          'detail':'人工工序「%s」没有工时费率编码' % name})
             continue
         seconds = _num(step.get("standard_seconds"))
+        route_seconds=seconds
+        if step.get('step_no') in estimated_seconds:seconds=estimated_seconds[step['step_no']]
         step_no = _text(step.get("step_no"))
         rate_row = {'value':36,'minimum_charge':0} if demo_step else _rate_row(rate_code)
         variables = {"labor_seconds": seconds, "labor_rate": None,
                      "overhead_seconds": 0.0, "overhead_rate": overhead_rate or 0.0,
                      "quote_quantity": quantity, "step_no": step_no}
+        if step.get('step_no') in estimated_seconds:
+            variables.update(route_standard_seconds=route_seconds,
+                assembly_estimate_budget_seconds=packaging_assembly.ESTIMATE_BUDGET_SECONDS,
+                assembly_estimated_step_count=len(estimated_seconds),
+                assembly_time_policy=packaging_assembly.TIME_POLICY)
         if seconds is None:
             gaps.append({"code": "step_time_missing:%s" % name, "where": rate_code,
                          "detail": "工序「%s」待补工时，人工行不出金额" % name})
@@ -2759,6 +2771,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         # 就必须在读接口那一刻**不再重取**（读侧的比对见 `load_cost()`）。
         "source_versions": {
             "calculation_profile": CURRENT_PROFILE,
+            "assembly_time_policy": packaging_assembly.TIME_POLICY,
             "detail_source_sha256": packaging_detail_cost.MANIFEST['source_sha256'],
             "retained_formula_sources": packaging_detail_cost.MANIFEST['retained_sources'],
             "expense_policy":EXPENSE_POLICY,

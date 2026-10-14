@@ -7,6 +7,15 @@ from tech_app.backend.services import packaging_cost as cost
 
 
 class DetailRules(unittest.TestCase):
+    def test_unknown_assembly_time_has_one_whole_box_budget(self):
+        from tech_app.backend.services import packaging_assembly
+        rows=[{'step_no':i,'scope':'project','standard_seconds':30,'time_source':'poc_mock'} for i in range(12)]
+        self.assertTrue(hasattr(packaging_assembly,'estimated_labor_seconds'))
+        allocated=packaging_assembly.estimated_labor_seconds(rows)
+        self.assertAlmostEqual(30,sum(allocated.values()))
+        rows.append({'step_no':99,'scope':'project','standard_seconds':120,'time_source':'provided_standard'})
+        self.assertNotIn(99,packaging_assembly.estimated_labor_seconds(rows))
+
     def test_quote_document_preserves_three_cost_groups_and_same_price(self):
         import cpq_packaging_quote as quote
         from tests.test_packaging_quote_close_loop_red import package_fixture
@@ -119,6 +128,25 @@ class DetailRules(unittest.TestCase):
 
 
 class DetailProject(CostCase):
+    def test_handoff_profile_and_minimum_policy_follow_the_saved_cost(self):
+        from tech_app.backend.services import packaging_handoff
+        self.prepare();self.build_cost()
+        package=packaging_handoff.handoff_package(PID,REQ_NO)
+        self.assertEqual('detail_sheet/1',package['cost_profile'])
+        self.assertEqual('detail_sheet/1',package['minimum_charge_policy']['chosen'])
+
+    def test_actual_assembly_cost_does_not_grow_with_mock_step_count(self):
+        from tech_app.backend.services import packaging_assembly
+        self.prepare()
+        steps=[{'step_no':i,'scope':'project','part_code':'ASSY','part_codes':['A','B'],
+                'step_name':'整盒组装','formula_code':'PKG-C-LABOR','standard_seconds':30,
+                'time_source':'poc_mock','usage_qty':1} for i in range(12)]
+        with patch.object(cost.da_repo,'load_packaging_route_steps',return_value=steps), \
+             patch.object(packaging_assembly,'route_drift',return_value=''), \
+             patch.object(cost,'_rate_row',return_value={'value':36,'minimum_charge':0}):
+            result=cost.compute_project(PID,REQ_NO)
+        self.assertAlmostEqual(.3,result['labor_total'])
+
     def test_cost_handoff_projection_has_three_groups(self):
         from tech_app.backend.services import cost_flow
         self.prepare();self.build_cost()
