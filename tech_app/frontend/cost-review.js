@@ -473,13 +473,17 @@ function crBreakdownRow(breakdown) {
 }
 
 function crPackagingBreakdown(breakdown) {
-  const labels = {material:'材料', labor:'人工'};
-  const extras = {processing:'加工费', tooling:'模具摊销', packaging:'包装费', freight:'运输费', other:'其他费用'};
+  const labels = {material:'材料', processing:'加工'};
+  const historical = typeof crData !== 'undefined' && crData?.packaging_cost?.built
+    && crData?.expense_policy !== 'material_processing_assembly_other_no_tooling_freight/2';
+  const extras = {labor:historical?'历史人工（待重算）':'组装人工', packaging:'包装费', other:'其它项目费用'};
   const main = Object.entries(labels).map(([key,label]) =>
     `<span class="cr-part"><i>${label}</i>${crMoney(breakdown[key])}</span>`).join('');
   return main + `<details class="inline-row"><summary>其他费用 ${crMoney(breakdown.others)}</summary>`
     + Object.entries(extras).map(([key,label]) =>
-      `<span class="cr-part"><i>${label}</i>${crMoney(breakdown[key])}</span>`).join('') + '</details>';
+      `<span class="cr-part"><i>${label}</i>${crMoney(breakdown[key])}</span>`).join('')
+    + (historical && (Number(breakdown.tooling)||Number(breakdown.freight))
+      ? `<span class="cr-part"><i>旧口径额外费用（待重算）</i>${crMoney((Number(breakdown.tooling)||0)+(Number(breakdown.freight)||0))}</span>` : '') + '</details>';
 }
 
 function crPackagingPartBreakdown(breakdown) {
@@ -539,6 +543,11 @@ function crCostDetailHtml(row) {
     equipment_rate:'设备费率',labor_rate:'人工费率',times:'加工次数',film_price:'覆膜材料单价',
     film_thickness_um:'膜厚（微米）',film_kg_price:'膜重价（元/千克）',hot_area_mm2:'烫金面积（平方毫米）',foil_price:'箔价',
     glue_unit_price:'胶水单价',length_mm:'包材长（毫米）',width_mm:'包材宽（毫米）',height_mm:'包材高（毫米）',
+    auxiliary_fee:'覆膜固定辅助费（元/模）',stamping_auxiliary_fee:'烫金固定辅助费（元/模）',
+    mounting_rate:'裱纸千平方英寸费率',die_cut_unit_fee:'啤切单模加工费（元）',
+    groove_unit_fee:'V槽单次加工费（元）',glue_area_mm2:'实际涂胶面积（平方毫米）',
+    formula_source_ref:'公式来源单元格',calculation_profile:'计算口径',die_cut_variant:'啤切费率变体',
+    machine_size_source:'上机尺寸来源',order_quote_quantity:'订单报价数量（只）',
     material_price:'材料单价',units_per_pack:'每包数量',bag_unit_price:'胶袋单价',loss_uplift:'损耗上浮系数',yield_divisor:'良率除数',
     ink_thickness_mm:'墨层厚度（微米）',ink_unit_price:'油墨单价',overhead_seconds:'制造费用工时（秒）',overhead_rate:'制造费用费率',
     tooling_cost:'工装成本',tooling_lifetime:'模具寿命',committed_volume:'项目承诺总量',amortized_quantity:'本单分摊量',
@@ -575,7 +584,7 @@ function crCostDetailHtml(row) {
   let html = `<div class="inline-hint">按当前已保存公式账查看，打开详情不重算。批量 ${esc(crData?.packaging_cost?.quote_quantity ?? '未取得')} 只；每套用量 ${esc(row.quantity ?? '未取得')} 件。</div>`;
   if (!row.has_cost) html += `<div class="inline-warn">${row.cost_stale ? '当前为历史成本，依据已变化，需重算后使用。' : '当前成本尚未完整测算，以下仅展示已保存依据。'}</div>`;
   html += `<div class="inline-totals"><span>材料 ${precise(totalsAvailable ? row.breakdown?.material : null)}</span><span>实际加工费 ${precise(totalsAvailable ? row.breakdown?.processing : null)}</span><span>单件 ${precise(totalsAvailable ? row.unit_cost : null)}</span><span>每套小计 ${precise(totalsAvailable ? row.subtotal : null)} 元</span></div>`
-    + '<div class="inline-hint">面板显示两位小数；单件合计使用未舍入金额相加后再舍入，不能用已显示的两项两位小数反推合计。独立人工和出货包材在整单成本，不在此重复计费。</div>';
+    + '<div class="inline-hint">面板显示两位小数；单件合计使用未舍入金额相加后再舍入，不能用已显示的两项两位小数反推合计。制造人工计入对应零件加工；组装人工与出货包材归整单其他费用，不重复计费。</div>';
   const details = row.calculation_details || [];
   if (!details.length) return html + '<div class="inline-empty">没有已保存的逐项计算依据；请完成测算后查看，系统不会编造公式。</div>';
   for (const category of ['material','processing']) {
@@ -596,6 +605,8 @@ function crCostDetailHtml(row) {
       if (inputs.length) html += '<table class="inline-cost-table"><thead><tr><th>参数</th><th>取值</th></tr></thead><tbody>'
         + inputs.map(([key,value])=>`<tr><td>${esc(name(key))}</td><td>${esc(valueText(value,dictionary,unnamed))}</td></tr>`).join('')+'</tbody></table>';
       else html += `<div class="inline-hint">${esc(item.inputs_error || '历史明细未保存输入参数')}</div>`;
+      if (item.inputs?.allocation_rule === 'shared_sheet_process_area/1') html +=
+        `<div class="inline-hint">共版加工只计一次：整张加工费 × 用纸张数 ÷ 订单数量 × 本件分摊比例，再按每套用量换算单件；不重复收整张最低收费。</div>`;
       html += `<div class="inline-row">原公式金额 ${precise(item.amount)} 元 → 按账内损耗口径 ${precise(item.amount_with_loss)} 元 ÷ 每套用量 ${precise(item.quantity_divisor ?? row.quantity)} = ${precise(item.unit_amount)} 元/件。</div>`
         + `<div class="inline-hint">损耗率：${precise(item.loss_rate)}；只有原账规则适用的类别计损耗。${item.min_charge_applied?'最低收费已应用，批量摊销参数见上表。':''}</div>`
         + `<div class="inline-hint">费率编号：${esc(item.rate_code || '未保存')} · 来源：${esc(knownText(item.source_ref || item.source || '未保存',dictionary))} ${esc(knownText(item.note || '',dictionary))}</div>`;
@@ -641,7 +652,7 @@ function crRenderAssembly() {
   if (!row) return `<div class="inline-empty">还没有整机方案。</div>`;
   let html = `<section class="inline-card"><div class="inline-card-title">${crData?.packaging_cost ? '整单成本' : '组装成本'} · ${esc(row.name)}</div>`
     + `<div class="inline-hint">${crData?.packaging_cost
-      ? '单件与整单来自同一份公式成本明细；零件仅材料与实际加工，独立人工、组装和出货包材在整件归集，已含人工的加工费不重复加人工。'
+      ? '材料与工艺加工费单列；其他费用仅组装人工、出货包材和其它项目费用。制造人工归零件加工，已含人工的加工公式不重复计费。'
       : '整机成本已包含零件成本，再加组装人工与费用，不与零件合计重复相加。'}</div>`;
   if (!row.has_cost) {
     html += `<div class="inline-warn">⚠ ${crData?.packaging_cost ? '整单成本待测算或已过期，请刷新同一份公式成本账。' : '还没算过整机成本，请先算零件再算整机。'}</div>`;
@@ -671,21 +682,21 @@ function crRenderTotal() {
     + `<div class="inline-hint">`
     + `${esc(scopeText)}</div>`
     + `<div class="inline-cost-table-wrap"><table class="inline-cost-table"><thead><tr>`
-    + (packaging ? `<th>口径</th><th>材料</th><th>人工</th><th>其他费用</th><th>合计</th>`
+    + (packaging ? `<th>口径</th><th>材料</th><th>加工</th><th>其他费用</th><th>合计</th>`
       : `<th>口径</th><th>材料</th><th>人工</th><th>制造费用</th><th>加工费用</th><th>合计</th>`)
     + `</tr></thead><tbody>`
     + `<tr><td>零件成本合计（${counts.parts_costed || 0}/${counts.parts || 0} 件）</td>`
-    + (packaging ? ['material', 'labor', 'others', 'total'] : ['material', 'labor', 'overhead', 'machining', 'total'])
+    + (packaging ? ['material', 'processing', 'others', 'total'] : ['material', 'labor', 'overhead', 'machining', 'total'])
         .map(key => `<td><span class="number">${crMoney(partsTotal[key])}</span></td>`).join('')
     + `</tr><tr class="cr-final"><td><b>${esc(finalLabel)}</b></td>`
-    + (packaging ? ['material', 'labor', 'others', 'total'] : ['material', 'labor', 'overhead', 'machining', 'total'])
+    + (packaging ? ['material', 'processing', 'others', 'total'] : ['material', 'labor', 'overhead', 'machining', 'total'])
         .map(key => `<td><span class="number">${crMoney(final[key])}</span></td>`).join('')
     + `</tr></tbody></table></div>`;
   if (packaging) {
-    html += `<div class="inline-hint">成本版本：${esc(crData.estimate_id || '未测算')} · 报价批量 ${esc(packaging.quote_quantity || '—')}</div>`
+    html += `<div class="inline-hint">成本版本：${esc(crData.estimate_id || '未测算')} · 报价批量 ${esc(packaging.quote_quantity || '—')} · 计算口径：${packaging.cost_profile==='detail_sheet/1'?'成本测算明细（材料与加工）；印刷及包材保留原规则':'历史规则（重算后采用成本测算明细）'}</div>`
       + `<div class="inline-totals"><span>整件单只成本 <strong>${crMoney(crData.unit_cost)}</strong> 元/只</span><span>订单成本合计 <strong>${crMoney(crData.order_total_cost)}</strong> 元</span></div>`
       + `<div class="inline-row"><b>项目级费用（未归集至零件）</b>${crPackagingBreakdown(crData.project_expenses || {})}</div>`
-      + `<div class="inline-row"><b>整单其他费用明细</b>${crPackagingBreakdown(final)}</div>`;
+      + `<div class="inline-row"><b>整单费用分类</b>${crPackagingBreakdown(final)}</div>`;
     if (crData.quantity_mismatch) html += `<div class="inline-warn">成本按 ${esc(crData.cost_quote_quantity)} 只测算，当前需求为 ${esc(crData.quote_quantity)} 只；请按需求批量重算，不能把每盒用量当成订单数量。</div>`;
     const audit=crData.cost_audit;
     const auditLabels={quote_quantity:'批量(只)',usage_qty:'每盒用量',cut_length:'开料长(mm)',cut_width:'开料宽(mm)',
@@ -933,9 +944,9 @@ function crRenderOps() {
     nameInput.value = crData.assembly.name;
   }
   if (final.total) {
-    box.innerHTML = Object.keys(CR_COST_LABEL)
+    box.innerHTML = (crData?.packaging_cost ? crPackagingBreakdown(final) : Object.keys(CR_COST_LABEL)
       .map(key => `<span><i>${CR_COST_LABEL[key]}</i>${crMoney(final[key])}</span>`).join('')
-      + `<span class="total"><i>合计</i>${crMoney(final.total)} 元/台</span>`;
+      ) + `<span class="total"><i>合计</i>${crMoney(final.total)} ${crData?.packaging_cost?'元/只':'元/台'}</span>`;
   } else {
     box.textContent = '完成测算后显示成品成本';
   }

@@ -87,7 +87,7 @@ class UnifiedIntegration(CostCase):
             confirmed=route.confirm_route(PID,REQ_NO,actor=self.actor())
             self.assertFalse(confirmed['stale'])
             result=cost.compute_project(PID,REQ_NO)
-            items=[i for i in result['items'] if i['formula_code']=='PKG-C-DIE-CUT']
+            items=[i for i in result['items'] if i['formula_code']=='PKG-D-DIE-CUT']
             self.assertEqual(len(items),3)
             self.assertEqual([i['part_code'] for i in items],['A','A','B'])
             self.assertTrue(all(i['amount'] is not None for i in items))

@@ -35,6 +35,7 @@ from typing import Any, Optional
 from . import industry_templates, packaging_match
 from . import packaging_formula
 from ..storage import da_db, da_repo, kb_repo, store
+from . import packaging_detail_cost
 
 
 # --------------------------------------------------------------------------- #
@@ -43,6 +44,8 @@ from ..storage import da_db, da_repo, kb_repo, store
 ENGINE_VERSION = "packaging_cost_v1"
 COST_PROFILE = "packaging_v1"
 GENERIC_PROFILE = "generic_v1"
+CURRENT_PROFILE = packaging_detail_cost.PROFILE
+EXPENSE_POLICY = 'material_processing_assembly_other_no_tooling_freight/2'
 PACKAGING_INDUSTRY = "packaging"
 
 #: 0903 常量（工作簿可见 Sheet）：包材公式里的固定系数。
@@ -107,6 +110,7 @@ LINE_VARIABLES = {
     "pallet_freight": "托盘/整车单托运费", "units_per_pallet": "每托装数",
     "loading_rate": "装载率（文本）",
 }
+LINE_VARIABLES.update(packaging_detail_cost.EXTRA_LABELS)
 
 #: 工装涉及工序（与第 5 批 `TOOLING_KEYWORDS` 同源）。
 TOOLING_PROCESSES = ("烫金", "丝印", "击凹凸", "模切", "装配线")
@@ -1056,12 +1060,13 @@ def resolve_formula(formula_code: str, *, rows=None) -> dict:
       绝不静默回退到内置目录。
     """
     code = _text(formula_code)
-    if code not in FORMULA_CATALOG:
+    detail = code in packaging_detail_cost.CATALOG
+    if code not in FORMULA_CATALOG and not detail:
         raise CostError("没有内置公式 %s" % code, 404, "unknown_formula:%s" % code)
-    base = dict(FORMULA_CATALOG[code])
-    base["defaults"] = dict(FORMULA_CATALOG[code].get("defaults") or {})
+    base = packaging_detail_cost.entry(code) if detail else dict(FORMULA_CATALOG[code])
+    base["defaults"] = dict(base.get("defaults") or {})
     base["formula_source"] = "builtin"
-    base["formula_version"] = "1.0"
+    base["formula_version"] = CURRENT_PROFILE if detail else "1.0"
     if rows is None:
         try:
             rows = kb_repo._table("kb_packaging_cost_formula")
@@ -1095,6 +1100,8 @@ def resolve_formula(formula_code: str, *, rows=None) -> dict:
     base["source"] = "kb"
     base["formula_source"] = "kb"
     base["formula_version"] = _text(row.get("formula_version")) or "1.0"
+    if detail:
+        base['source_ref'] = _text(row.get('source_ref')) or base['source_ref']
     base["note"] = "source=kb:%s" % code
     return base
 
@@ -1109,7 +1116,7 @@ def _merge_variables(entry: dict, variables: dict) -> tuple:
     for name, value in defaults.items():
         merged[name] = value
         if name != "times":
-            assumptions.append("%s=0903=%s" % (name, value))
+            assumptions.append("%s=%s=%s" % (name, '成本测算明细' if entry.get('formula_code') in packaging_detail_cost.CATALOG else '0903', value))
     for name, value in _IMPLICIT_DEFAULTS.items():
         merged.setdefault(name, value)
         assumptions.append("%s=默认=%s" % (name, value))
@@ -1122,7 +1129,7 @@ def _merge_variables(entry: dict, variables: dict) -> tuple:
 
 def compute_line(category: str, variables: Optional[dict] = None, *,
                  formula_code: Optional[str] = None, amount: Any = None,
-                 rows=None) -> dict:
+                 rows=None, cost_profile: str = COST_PROFILE) -> dict:
     """算一行成本（Spec §4.5 / §2.6 / §2.7；修复第 1 批 §3.1 起走唯一入口）。
 
     · 显式给 `amount` → 直接采用、`source="human"`、不取整；
@@ -1153,10 +1160,15 @@ def compute_line(category: str, variables: Optional[dict] = None, *,
                 "rule_snapshot_version": rule_snapshot_version(),
                 "gap": {"code": "no_formula:%s" % (_text(formula_code) or category),
                         "where": category, "detail": "该类别没有公式，需要人工录入金额"}}
+    if cost_profile == CURRENT_PROFILE and code not in packaging_detail_cost.CATALOG:
+        code = packaging_detail_cost.select(category, inputs) or code
     entry = resolve_formula(code, rows=rows)
     trace = {"formula_source": _text(entry.get("formula_source")) or "builtin",
              "formula_version": _text(entry.get("formula_version")) or "1.0",
              "rule_snapshot_version": rule_snapshot_version()}
+    if code in packaging_detail_cost.CATALOG:
+        trace.update(source_ref=entry['source_ref'], calculation_profile=CURRENT_PROFILE,
+                     policy={'policy':CURRENT_PROFILE,'source':'成本测算明细.xlsx'})
     expression = entry["expression"]
     names = expression_variables(expression)
     allowed = set(LINE_VARIABLES)
@@ -1167,6 +1179,9 @@ def compute_line(category: str, variables: Optional[dict] = None, *,
         raise CostError("表达式引用了白名单外变量：%s" % "、".join(unknown), 409,
                         "unknown_variable:%s" % unknown[0])
     merged, assumptions = _merge_variables(entry, inputs)
+    if code in packaging_detail_cost.CATALOG:
+        merged['formula_source_ref'] = entry['source_ref']
+        merged['calculation_profile'] = CURRENT_PROFILE
     bound = {_canon(key) for key in merged}
     missing = [name for name in names if _canon(name) not in bound]
     if missing:
@@ -1196,9 +1211,13 @@ def compute_line(category: str, variables: Optional[dict] = None, *,
     threshold = (minimum_charge / quantity) if (minimum_charge and quantity
                                                 and quantity > 0) else 0.0
     applied = bool(minimum_charge and threshold > value)
+    if code in packaging_detail_cost.CATALOG:
+        embedded = packaging_detail_cost.minimum_amount(entry, merged)
+        applied = applied or bool(embedded and abs(value-embedded) < 1e-9)
+    final_amount = max(threshold, value) if minimum_charge else value
     out = {"cost_category": category, "formula_code": entry["formula_code"],
            "expression": expression, "inputs": merged,
-           "amount": threshold if applied else value, "min_charge_applied": applied,
+           "amount": final_amount, "min_charge_applied": applied,
            "minimum_charge": minimum_charge, "expression_value": value,
            "source": "formula", "assumptions": assumptions, "policy": policy}
     out.update(trace)
@@ -1342,8 +1361,27 @@ def summarize(lines, *, packaging: Any = 0.0, freight: Any = 0.0, tooling=None,
 
 
 # --------------------------------------------------------------------------- #
-# 工装 / 刀模
+# 当前项目费用政策 / 历史账失效提示
 # --------------------------------------------------------------------------- #
+def assembly_labor_total(lines, loss_base_scope=DEFAULT_LOSS_BASE_SCOPE):
+    """最终新增组装人工；制造人工保留在加工费，不按关联件数再乘。"""
+    return sum(float(row.get('amount_with_loss') if row.get('amount_with_loss') is not None
+                     else apply_loss(row.get('amount') or 0, row.get('loss_rate'), category='labor', loss_base_scope=loss_base_scope))
+               for row in lines or [] if row.get('cost_category') == 'labor' and row.get('scope') == 'project')
+
+
+def with_current_expense_policy(result):
+    result = dict(result)
+    if result.get('built') and (result.get('source_versions') or {}).get('expense_policy') != EXPENSE_POLICY:
+        result['stale'] = True
+        result['stale_reasons'] = list(dict.fromkeys(list(result.get('stale_reasons') or []) + ['expense_policy_changed']))
+    if result.get('built') and (result.get('source_versions') or {}).get('calculation_profile') != CURRENT_PROFILE:
+        result['stale'] = True
+        result['stale_reasons'] = list(dict.fromkeys(list(result.get('stale_reasons') or []) + ['calculation_profile_changed']))
+    return result
+
+
+# 历史工装 / 刀模独立验算，不进入新项目成本。
 def compute_tooling(rule: Optional[dict], *, quote_quantity: Any,
                     amortized_quantity: Any = None, committed_volume: Any = None,
                     cumulative_quantity: Any = None) -> dict:
@@ -2293,12 +2331,15 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     def loss_rate_for(material_text: str) -> Optional[float]:
         return loss_rate_with_source(material_text)[0]
 
+    def evaluate_line(category, variables=None, **kwargs):
+        return compute_line(category, variables, cost_profile=CURRENT_PROFILE, **kwargs)
+
     lines: list = []
     tooling_lines: list = []
 
     # 1) 部件 × 材料 -------------------------------------------------------- #
     materials = _material_rows()
-    entry_material = resolve_formula("PKG-C-MATERIAL", rows=formula_rows)
+    entry_material = resolve_formula("PKG-D-MATERIAL", rows=formula_rows)
     machine_length = _num(data.get("machine_length"))
     machine_width = _num(data.get("machine_width"))
     imposition = _num(data.get("imposition_count")) or 1.0
@@ -2353,7 +2394,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
             if _text(row.get('bom_category')) == 'optional_part':
                 result={'amount':2.5,'expression':'POC外购件演示单价2.5元/件'}
             else:
-                result=compute_line('material',variables,rows=formula_rows)
+                result=evaluate_line('material',variables,rows=formula_rows)
             assumptions.append('POC mock：'+part_name+'；'+str(demo_input.get('note') or ''))
         elif length is None or width is None:
             gaps.append({"code": "part_size_missing", "where": part_code,
@@ -2371,7 +2412,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
             gaps.append({"code": "material_gsm_missing", "where": part_code,
                          "detail": "材料「%s」解析不到克重，材料行不出金额" % material_text})
         else:
-            result = compute_line("material", variables, rows=formula_rows)
+            result = evaluate_line("material", variables, rows=formula_rows)
         if unit_status == "unit_missing" and price is not None:
             # advisory：不拦算（Spec §C2 / §6.3），只让"单位没核对过"显形。
             gaps.append({"code": "material_price_unit_missing", "where": part_code,
@@ -2407,7 +2448,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
 
     gaps.extend(packaging_sheet_cost.apply_layout_costs(demo_doc.get('layout_rows') or [],
                 [dict(row,part_code=_text(row.get('part_code') or row.get('item_key'))) for row in bom_rows],
-                lines,quantity,compute_line,formula_rows))
+                lines,quantity,evaluate_line,formula_rows))
 
     # 2) 工序类（BOM process 行 + 第 6 批工序） ---------------------------- #
     sheet_length = machine_length
@@ -2428,7 +2469,8 @@ def compute_project(project_id: str, requirement_no: str = "", *,
             gaps.append({"code": "no_formula:%s" % category, "where": name,
                          "detail": "类别 %s 在 0903 里是手填列，本批没有公式" % category})
             continue
-        entry = resolve_formula(decision['formula_code'], rows=formula_rows)
+        selected = packaging_detail_cost.select(category, step.get('cost_parameters'))
+        entry = resolve_formula(selected or decision['formula_code'], rows=formula_rows)
         variables = dict(entry.get("defaults") or {})
         usage = _num(step.get('usage_qty')) if step.get('usage_qty') is not None else 1.0
         if step.get('usage_assumed'):
@@ -2450,11 +2492,14 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                 area = _num(data.get("process_area"))
             variables["hot_area_mm2"] = area
         variables.update(step.get('cost_parameters') or {})
+        layout_parameters = packaging_sheet_cost.process_sheet_parameters(
+            demo_doc.get('layout_rows') or [], step.get('part_code'))
+        variables.update(layout_parameters)
         variables['quote_quantity'] = quantity * usage
         if step.get('part_code'):
             # Unified part route must carry its own imposition evidence, not whole-box defaults.
             for key in ('machine_length','machine_width','imposition_count'):
-                if key not in (step.get('cost_parameters') or {}):
+                if key not in (step.get('cost_parameters') or {}) and key not in layout_parameters:
                     variables.pop(key, None)
         inputs_source = 'part_route_parameters' if step.get('part_code') else 'legacy_project_parameters'
         if step.get('part_code'):
@@ -2498,7 +2543,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                     variables["equipment_rate"] = _num(rate_row.get("value"))
                 else:
                     variables["labor_rate"] = _num(rate_row.get("value"))
-        result = compute_line(category, variables, rows=formula_rows)
+        result = evaluate_line(category, variables, formula_code=entry['formula_code'], rows=formula_rows)
         if result.get("gap"):
             gaps.append(dict(result["gap"], where=result["gap"].get("where") or name))
         line = {"cost_category": category, "part_code": None, "part_name": name,
@@ -2521,6 +2566,10 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         line["loss_rate"] = rate
         lines.append(line)
 
+    gaps.extend(packaging_sheet_cost.apply_layout_process_costs(demo_doc.get('layout_rows') or [],
+        [dict(row,part_code=_text(row.get('part_code') or row.get('item_key'))) for row in bom_rows],
+        lines,quantity,evaluate_line,formula_rows))
+
     # 3) 人工（标准工时 × 工时费率，逐工序一行） --------------------------- #
     overhead_row = _rate_row("RATE-PKG-OVERHEAD")
     overhead_rate = _num(overhead_row.get("value")) if overhead_row else 0.0
@@ -2530,8 +2579,10 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         decision = packaging_process_instances.billing(step)
         if decision['includes_labor'] or decision['formula_code'] != 'PKG-C-LABOR':
             continue
+        assembly_step = step.get('scope') == 'project'
         demo_step = demo_enabled and (step.get('cost_parameters') or {}).get('mock') is True
-        rate_code = STEP_RATE_MAP.get(name) or ('RATE-PKG-LABOR-ASSEMBLY' if name == '包盒' or demo_step else None)
+        rate_code = ('RATE-PKG-LABOR-ASSEMBLY' if assembly_step else
+                     STEP_RATE_MAP.get(name) or ('RATE-PKG-LABOR-ASSEMBLY' if name == '包盒' or demo_step else None))
         if not rate_code:
             gaps.append({'code':'rate_missing','where':str(step.get('step_no')),
                          'detail':'人工工序「%s」没有工时费率编码' % name})
@@ -2570,7 +2621,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         min_applied = bool(result.get("min_charge_applied"))
         minimum_charge = _num(rate_row.get("minimum_charge")) or 0.0
         if amount is not None and minimum_charge and quantity:
-            labor_usage = _num(step.get('usage_qty')) if step.get('usage_qty') is not None else 1.0
+            labor_usage = 1.0 if assembly_step else (_num(step.get('usage_qty')) if step.get('usage_qty') is not None else 1.0)
             threshold = minimum_charge / (quantity * labor_usage) if labor_usage and labor_usage > 0 else 0
             if threshold > amount:
                 amount = threshold
@@ -2581,7 +2632,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                 "inputs": result.get("inputs") or variables, "amount": amount,
                 "min_charge_applied": min_applied, "source": "formula",
                 "source_ref": "step:%s" % step_no, "quantity_basis": "按工时"}
-        usage = _num(step.get('usage_qty')) if step.get('usage_qty') is not None else 1.0
+        usage = 1.0 if assembly_step else (_num(step.get('usage_qty')) if step.get('usage_qty') is not None else 1.0)
         line.update({'part_code':step.get('part_code'), 'section_id':step.get('section_id'),
                      'scope':step.get('scope'),'part_codes':step.get('part_codes') or [],
                      'usage_qty':usage, 'parameter_source':step.get('time_source') or 'legacy_standard_time'})
@@ -2591,36 +2642,14 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         elif line['amount'] is not None:
             line['amount'] *= usage
         line.update(_trace_fields(entry_labor, result=result, snapshot=rule_version))
-        rate = loss_rate_for(name)
-        if rate is None and amount is not None:
+        rate = None if assembly_step else loss_rate_for(name)
+        if not assembly_step and rate is None and amount is not None:
             gaps.append({"code": "loss_rate_missing", "where": name,
                          "detail": "工序「%s」取不到损耗率，损耗按 0 计（金额保留）" % name})
         line["loss_rate"] = rate
         lines.append(line)
 
-    # 4) 工装 / 刀模（项目级，不摊进部件行） ------------------------------- #
-    tooling_rules = {_text(row.get("process_code")): dict(row)
-                     for row in kb_repo.packaging_tooling_rules()}
-    seen_tooling: set = set()
-    for row in bom_rows:
-        if _text(row.get("bom_category")) != "tooling":
-            continue
-        process = _text(row.get("component") or row.get("item_name"))
-        rule = tooling_rules.get(process)
-        if rule is None or process in seen_tooling:
-            if rule is None:
-                gaps.append({"code": "tooling_basis_missing:%s" % process,
-                             "where": process, "detail": "知识库没有 %s 的工装规则" % process})
-            continue
-        seen_tooling.add(process)
-        result = compute_tooling(rule, quote_quantity=quantity,
-                                 amortized_quantity=_num(data.get("tooling_amortize_qty")),
-                                 committed_volume=_num(data.get("committed_volume")),
-                                 cumulative_quantity=_num(data.get("cumulative_quantity")))
-        if result.get("gap"):
-            gaps.append(dict(result["gap"]))
-        result["source_ref"] = _text(rule.get("tooling_code"))
-        tooling_lines.append(result)
+    # 新项目账不计模具摊销；独立验算函数保留用于历史追溯。
 
     # 5) 包材 --------------------------------------------------------------- #
     # 绑定集合的口径**只有一处**（Spec §2.3）：调用方算好传进来；这一版还没有「哪一项用到」
@@ -2652,20 +2681,8 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                                  if _text(entry.get("content_code"))}),
     }
 
-    # 6) 运输 --------------------------------------------------------------- #
-    shipping = _text(data.get("shipping_mode"))
-    rules = [dict(row) for row in kb_repo.packaging_logistics_rules()]
+    # 本次成本口径不计运输；报价端显式商务加价的入口不受影响。
     freight = None
-    if rules:
-        matched = [row for row in rules if shipping and _text(row.get("shipping_mode")) == shipping]
-        chosen = (matched or rules)
-        chosen.sort(key=lambda row: _text(row.get("rule_code")))
-        freight = compute_freight(chosen[0], quote_quantity=quantity)
-        if freight.get("gap"):
-            gaps.append(dict(freight["gap"]))
-        assumptions.extend(freight.get("assumptions") or [])
-    else:
-        gaps.append({"code": "freight_rule_missing", "where": "", "detail": "知识库没有运输规则"})
 
     # 7) MOQ 硬门槛 --------------------------------------------------------- #
     moq = _num(data.get("moq"))
@@ -2681,7 +2698,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                         freight=(freight or {}).get("amount") or 0.0,
                         tooling=tooling_lines)
     material_total = summary["categories"].get("material", 0.0)
-    labor_total = summary["categories"].get("labor", 0.0)
+    labor_total = assembly_labor_total(summary['lines'])
     other_total = summary["categories"].get("other", 0.0)
     process_total = summary["subtotal"] - material_total - labor_total - other_total
     now = da_db.now()
@@ -2713,7 +2730,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         "project_id": project_id, "requirement_no": req_no, "scenario_code": scenario_code,
         "estimate_id": estimate_id, "industry": PACKAGING_INDUSTRY,
         "rule_snapshot_version": rule_version,
-        "engine_version": ENGINE_VERSION, "cost_profile": COST_PROFILE, "currency": "CNY",
+        "engine_version": ENGINE_VERSION, "cost_profile": CURRENT_PROFILE, "currency": "CNY",
         "quote_quantity": float(quantity), "tax_rate": round(tax_factor - 1.0, 6),
         "loss_base_scope": DEFAULT_LOSS_BASE_SCOPE, "quantity_tier": quantity_tier,
         "trial_or_mass_production": trial_or_mass,
@@ -2741,7 +2758,10 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         # 路线版本 / BOM 指纹 / BOM 行数一起落库。字段名说的是"照着哪一版算的"，
         # 就必须在读接口那一刻**不再重取**（读侧的比对见 `load_cost()`）。
         "source_versions": {
-            "expense_policy":"part_material_processing_project_labor_packaging/1",
+            "calculation_profile": CURRENT_PROFILE,
+            "detail_source_sha256": packaging_detail_cost.MANIFEST['source_sha256'],
+            "retained_formula_sources": packaging_detail_cost.MANIFEST['retained_sources'],
+            "expense_policy":EXPENSE_POLICY,
             "sheet_cost_rule_version":packaging_sheet_cost.RULE_VERSION,
             "cut_allowance_fingerprint":packaging_sheet_cost.allowance_fingerprint(data),
             "route_version": _upstream_route_version(project_id, req_no),
@@ -2961,7 +2981,7 @@ def load_cost(project_id: str, requirement_no: str = "", *,
                                  "rule_snapshot_unavailable_reason": _text(rule_detail.get("reason"))},
              "rule_snapshot_source": _text(rule_detail.get("source")),
              "rule_snapshot_unavailable": rule_snapshot_unavailable_of(rule_detail),
-             "cost_profile": COST_PROFILE, "items": [], "gaps": [], "assumptions": [],
+             "cost_profile": CURRENT_PROFILE, "items": [], "gaps": [], "assumptions": [],
              # 还没算过 → 这本账的两个计数给 0（Spec §C3）：不许 null、不许抛错。
              "assumptions_total": 0, "assumptions_0903_total": 0,
              "has_gaps": False, "categories": {code: 0.0 for code, _ in COST_CATEGORIES},
@@ -3015,7 +3035,7 @@ def load_cost(project_id: str, requirement_no: str = "", *,
     if stored.get('cut_allowance_fingerprint') and stored['cut_allowance_fingerprint'] != allowance_now:
         result['stale']=True
         result['stale_reasons']=list(result['stale_reasons'])+['cut_allowance_changed']
-    return _with_readiness(with_current_quote_quantity(result, _requirement_data(project_id)))
+    return _with_readiness(with_current_expense_policy(with_current_quote_quantity(result, _requirement_data(project_id))))
 
 
 def with_current_quote_quantity(result, data):

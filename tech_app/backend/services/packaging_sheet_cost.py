@@ -3,7 +3,7 @@ import math
 import hashlib
 import json
 
-RULE_VERSION='sheet_material_allocation/1'
+RULE_VERSION='sheet_material_process_allocation/2'
 
 
 def allowance_fingerprint(data):
@@ -124,3 +124,87 @@ def apply_layout_costs(layouts, parts, lines, quantity, evaluate, formula_rows):
                 if line.get('cost_category')=='material' and line.get('part_code') in codes:
                     line['amount']=None
     return gaps
+
+
+def apply_layout_process_costs(layouts, parts, lines, quantity, evaluate, formula_rows):
+    """同一排模的共同加工按整张计一次，按展开用量面积分摊回整件。
+
+    仅合并每个关联件都存在且参数一致的加工实例；涂胶区域、不同烫金图案
+    不凭空认定共版。未成立的共同加工保持逐件计费并披露，绝不漏算。
+    """
+    supported={'lamination','mounting','die_cutting','v_groove','print_uv'}
+    indexed={p['part_code']:p for p in parts}
+    gaps=[]
+    groups=[g for g in layouts if len(g.get('part_codes') or [])>1 and
+            (g.get('kind')!='drawing_layout_candidate' or g.get('size_source')=='cad_cut_sheet_dimension')]
+    owners={}
+    for group in groups:
+        for code in group['part_codes']:owners.setdefault(code,[]).append(group)
+    for group in groups:
+        codes=group['part_codes']
+        if any(len(owners[c])!=1 for c in codes):continue
+        for category in supported:
+            by_code={c:[r for r in lines if r.get('part_code')==c and r.get('cost_category')==category]
+                     for c in codes}
+            if not any(by_code.values()):continue
+            if not all(by_code.values()):continue  # 本就只有部分件做此工序，不虚构共版。
+            try:
+                materials={indexed[c].get('material_code') or indexed[c].get('material') for c in codes}
+                if None in materials or len(materials)!=1:raise ValueError('layout_mixed_material_or_rate')
+                if group.get('association_gaps'):raise ValueError('layout_association_incomplete')
+                if group.get('dimension_role') in ('machine_sheet','unclassified'):
+                    raise ValueError('layout_cut_size_role_unconfirmed')
+                count=len(by_code[codes[0]])
+                if any(len(rows)!=count for rows in by_code.values()):raise ValueError('layout_process_instances_differ')
+                allocation=sheet_allocation(group,parts,quantity,1)
+                staged=[]
+                for index in range(count):
+                    entries=[by_code[c][index] for c in codes]
+                    if any(e.get('amount') is None for e in entries):raise ValueError('layout_process_amount_missing')
+                    if len({e.get('formula_code') for e in entries})!=1:raise ValueError('layout_process_formula_differs')
+                    from .packaging_cost import expression_variables
+                    names=set(expression_variables(entries[0].get('expression') or '')) - {
+                        'machine_length','machine_width','imposition_count','quote_quantity'}
+                    if any(any(e['inputs'].get(k)!=entries[0]['inputs'].get(k) for k in names)
+                           or e.get('loss_rate')!=entries[0].get('loss_rate') for e in entries[1:]):
+                        raise ValueError('layout_process_parameters_differ')
+                    machine=group.get('machine_mm') or group['sheet_mm']
+                    variables=dict(entries[0]['inputs'],machine_length=machine[0],
+                        machine_width=machine[1],imposition_count=1,
+                        quote_quantity=allocation['sheet_quantity'])
+                    result=evaluate(category,variables,formula_code=entries[0]['formula_code'],rows=formula_rows)
+                    if result.get('amount') is None:raise ValueError('layout_process_formula_missing')
+                    allocated=sheet_allocation(group,parts,quantity,result['amount'])
+                    staged.append((entries,result,allocated))
+                for entries,result,allocated in staged:
+                    for code,line in zip(codes,entries):
+                        line['amount']=allocated['allocations'][code]
+                        line['expression']=result['expression']
+                        line['min_charge_applied']=result.get('min_charge_applied',False)
+                        line['inputs']=dict(result['inputs'],layout_id=group['entity_id'],
+                            sheet_quantity=allocated['sheet_quantity'],part_counts=allocated['part_counts'],
+                            sheet_total_per_quote_unit=allocated['total_per_quote_unit'],
+                            allocation_weight=allocated['allocation_weights'][code],
+                            allocation_rule='shared_sheet_process_area/1',order_quote_quantity=quantity,
+                            machine_size_source='图纸上机尺寸' if group.get('machine_mm') else '开料纸张尺寸作为上机尺寸估算')
+            except (ValueError,KeyError,TypeError) as exc:
+                gaps.append({'code':'layout_process_allocation_unresolved','where':group.get('entity_id'),
+                             'detail':'共同加工未合并，保留逐件金额：'+str(exc)})
+    return gaps
+
+
+def process_sheet_parameters(layouts, code):
+    groups=[r for r in layouts if code in (r.get('part_codes') or []) and
+            (r.get('kind')!='drawing_layout_candidate' or r.get('size_source')=='cad_cut_sheet_dimension')]
+    if len(groups)!=1:return {}
+    group=groups[0]
+    size=group.get('sheet_mm') or []
+    if group.get('association_gaps') or group.get('dimension_role') in ('machine_sheet','unclassified'):
+        return {}
+    count=(group.get('part_counts') or {}).get(code)
+    if count is None and len(group['part_codes'])==1:count=group.get('n_up')
+    if len(size)!=2 or not all(positive(x) for x in size) or not positive(count):return {}
+    machine=group.get('machine_mm') or size
+    if len(machine)!=2 or not all(positive(x) for x in machine):return {}
+    return {'machine_length':machine[0],'machine_width':machine[1],'imposition_count':count,
+            'machine_size_source':'图纸上机尺寸' if group.get('machine_mm') else '开料纸张尺寸作为上机尺寸估算'}

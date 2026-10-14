@@ -75,7 +75,7 @@ def _guard_characters(text: str) -> None:
     if "**" in text:
         raise FormulaError("不允许幂运算：%r" % text)
     for position, char in enumerate(text):
-        if char in _ALLOWED_CHARS:
+        if char in _ALLOWED_CHARS or char == '.':
             continue
         if char.isalnum():
             continue

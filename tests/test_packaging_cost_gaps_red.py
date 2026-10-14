@@ -206,13 +206,14 @@ class HGuardrails(CostGapCase):
             self.assertIn(code, codes,
                           "包材项在源工作簿里就是空值，缺口不许被降级或静默（Spec §1.1/§4）")
 
-    def test_h4_print_and_tooling_gaps_are_not_patched(self):
+    def test_h4_print_gap_remains_and_cancelled_tooling_is_not_billed(self):
         cost = self.project()
         codes = self.gap_codes(cost)
         self.assertIn("no_formula:print", codes,
                       "print 是手填列：本批不许给它造默认值（Spec §4）")
-        self.assertIn("tooling_basis_missing:T-PKG-DIE-REFUND", codes,
-                      "刀模分摊基数要商务给，本批不许拍（Spec §5）")
+        self.assertFalse(any(code.startswith('tooling_') for code in codes),
+                         "新费用政策不计算模具摊销，也不产生对应缺口")
+        self.assertEqual(0,cost['tooling_total'])
 
     def test_h5_material_rows_keep_their_columns(self):
         module = self.cost_mod()

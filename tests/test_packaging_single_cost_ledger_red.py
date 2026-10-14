@@ -197,9 +197,9 @@ crRunPackagingLedger().then(result => {
         script = '''
 const assert = require('assert'); const crMoney = value => Number(value||0).toFixed(2);
 ''' + source[a:b] + '''
-const html = crPackagingBreakdown({material:14.7,labor:18.23,processing:8.03,tooling:18,freight:3.21,others:29.24});
-assert(html.includes('材料')); assert(html.includes('人工')); assert(html.includes('加工费'));
-assert(html.includes('模具摊销')); assert(html.includes('运输费'));
+const html = crPackagingBreakdown({material:14.7,labor:.3,processing:8.03,packaging:.2,other:0,tooling:0,freight:0,others:.5});
+assert(html.includes('材料')); assert(html.includes('组装人工')); assert(html.split('<details')[0].includes('加工'));
+assert(!html.includes('模具摊销')); assert(!html.includes('运输费'));
 assert(!html.includes('制造费用')); assert(html.includes('<details'));
 '''
         result = subprocess.run(['node','-e',script],capture_output=True,text=True)

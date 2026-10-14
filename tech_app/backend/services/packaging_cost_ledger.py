@@ -17,7 +17,7 @@ def _number(value):
 
 def _breakdown(values):
     result = dict(values)
-    result['others'] = sum(result.get(key, 0) for key in KEYS[2:])
+    result['others'] = sum(result.get(key, 0) for key in KEYS if key not in ('material', 'processing'))
     result['total'] = sum(result.get(key, 0) for key in KEYS)
     # Backwards-compatible API keys, not the packaging UI's expense names.
     result['machining'] = result.get('processing', 0)
@@ -82,6 +82,8 @@ def project(doc, ledger):
         doc = dict(doc or {}, business_parts=[])
     parts = (doc or {}).get('business_parts') or []
     ledger = ledger or {}
+    policy = (ledger.get('source_versions') or {}).get('expense_policy') or 'legacy'
+    current_policy = policy == packaging_cost.EXPENSE_POLICY
     built, stale = bool(ledger.get('built')), bool(ledger.get('stale'))
     totals = {key: _number(ledger.get(field, 0)) for key, field in TOTAL_KEYS.items()}
     errors = []
@@ -115,7 +117,8 @@ def project(doc, ledger):
         if code and not owner and not project_operation:
             errors.append('unknown_part:' + code)
         # Keep source bindings, but only material/manufacturing belongs to a part subtotal.
-        if owner and item.get('cost_category') not in ('labor', 'packaging', 'freight', 'other') and not item.get('tooling_code'):
+        excluded = ('packaging', 'freight', 'other') if current_policy else ('labor', 'packaging', 'freight', 'other')
+        if owner and item.get('cost_category') not in excluded and not item.get('tooling_code'):
             grouped.setdefault(owner, []).append(item)
     rows = []
     allocated = dict.fromkeys(KEYS, 0.0)
@@ -147,6 +150,7 @@ def project(doc, ledger):
                 valid = False
                 continue
             key = ('tooling' if item.get('tooling_code') else
+                   'processing' if current_policy and category == 'labor' else
                    category if category in ('material', 'labor', 'packaging', 'freight', 'other')
                    else 'processing')
             values[key] += amount
@@ -186,14 +190,14 @@ def project(doc, ledger):
     return {'parts': rows, 'parts_total': _breakdown(allocated), 'final': final,
         'unit_cost':final['total'], 'quote_quantity':_number(ledger.get('quote_quantity')),
         'order_total_cost':final['total'] * _number(ledger.get('quote_quantity')) if _number(ledger.get('quote_quantity')) else None,
-        'cost_unit':'元/只', 'expense_policy':'part_material_processing_project_labor_packaging/1',
+        'cost_unit':'元/只', 'expense_policy':policy,
         'cost_audit':{'largest_items':audit_items[:10],
             'minimum_charge_rows':sum(r['min_charge_applied'] for r in audit_items),
             'quantity_basis':'报价数量只用于订单批量分摊；零件用量只表示每盒数量'},
         'assembly': {'id': '__assembly__', 'name': '包装整单成本', 'kind': 'assembly',
             'has_cost': usable, 'quantity': 1, 'unit_cost': final['total'], 'subtotal': final['total'],
             'breakdown': final if built else {}, 'cost_stale': built and stale,
-            'summary': '零件材料与实际加工 + 独立人工、组装、出货包材及项目费用；同一份账汇总，不重复计费', 'open_questions': len(ledger.get('gaps') or [])},
+            'summary': '材料 + 工艺加工费 + 其他费用（组装人工、包装及其它项目费用）；同一份账汇总，不重复计费' if current_policy else '历史成本口径，需重算后使用当前费用分类', 'open_questions': len(ledger.get('gaps') or [])},
         'counts': {'parts': len(rows), 'parts_costed': len(rows) - len(missing),
             'missing': missing, 'zero': zero, 'assembly_costed': usable},
         'ready': bool(rows) and usable and not missing and not zero,

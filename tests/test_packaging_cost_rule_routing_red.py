@@ -454,7 +454,7 @@ class EEndToEndRouting(RoutingCase):
                         "用例前提：礼盒需求必须产生覆膜成本行（否则本用例无意义）")
 
         self.snapshot(kb_packaging_cost_formula=[
-            reviewed_row("PKG-C-LAMINATION", "quote_quantity*0+40")])
+            reviewed_row("PKG-D-LAMINATION", "quote_quantity*0+40")])
         after = module.build_cost(PID, REQ_NO, actor=ACTOR)
         self.assertGreater(after["total_cost"], baseline["total_cost"],
                            "覆膜改成 reviewed 的固定 40 后总额必须变大")

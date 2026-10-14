@@ -1,0 +1,222 @@
+{
+  "rule_set": "detail_sheet/1",
+  "source_file": "成本测算明细.xlsx",
+  "source_sha256": "0c7afac58d28c24681b9521c90f1cdf31c96f74f29d46c32a94616ea2f3981ca",
+  "source_sheets": [
+    "报价-行业标准"
+  ],
+  "retained_sources": {
+    "print_uv": "报价逻辑-0903.xlsx/报价-工费率/U2",
+    "labor": "新增跨零件组装标准工时",
+    "packaging": "报价逻辑-0903.xlsx/包装运输（保留原包材公式）"
+  },
+  "formulas": [
+    {
+      "formula_code": "PKG-D-MATERIAL",
+      "cost_category": "material",
+      "expression": "cut_length*cut_width/1000000*gsm/1000000*ton_price/tax_factor/imposition_count+cut_length*cut_width/1000000*gsm/1000000*ton_price/tax_factor*proof_base/quote_quantity",
+      "defaults": {},
+      "minimum_charge": 0,
+      "minimum_batch_charge": 0,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "成本测算明细.xlsx/报价-行业标准/R2",
+      "source_sheet": "报价-行业标准",
+      "source_cell": "R2",
+      "source_formula": "=J2*K2/1000000*L2/1000000*M2/1.13/I2+J2*K2/1000000*L2/1000000*M2/1.13*P2/Q2",
+      "variable_map": {
+        "cut_length": "J",
+        "cut_width": "K",
+        "gsm": "L",
+        "ton_price": "M",
+        "imposition_count": "I",
+        "proof_base": "P",
+        "quote_quantity": "Q"
+      },
+      "formula_version": "detail_sheet/1",
+      "verbatim": true
+    },
+    {
+      "formula_code": "PKG-D-LAMINATION",
+      "cost_category": "lamination",
+      "expression": "MAX(200/quote_quantity,machine_length*machine_width/1000000*film_price/tax_factor/imposition_count+machine_length*machine_width/1000000*film_thickness_um/1000*film_kg_price/imposition_count+auxiliary_fee/imposition_count)",
+      "defaults": {
+        "film_price": 1.7,
+        "film_thickness_um": 18,
+        "film_kg_price": 18.5,
+        "auxiliary_fee": 0.15
+      },
+      "minimum_charge": 0,
+      "minimum_batch_charge": 200,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "成本测算明细.xlsx/报价-行业标准/U2",
+      "source_sheet": "报价-行业标准",
+      "source_cell": "U2",
+      "source_formula": "=IFERROR(MAX(200/Q2,G2*H2/1000000*1.7/1.13/I2+G2*H2/1000000*18/1000*18.5/I2+0.15/I2),\"\")",
+      "variable_map": {
+        "machine_length": "G",
+        "machine_width": "H",
+        "imposition_count": "I",
+        "quote_quantity": "Q"
+      },
+      "formula_version": "detail_sheet/1",
+      "verbatim": true
+    },
+    {
+      "formula_code": "PKG-D-HOT-STAMP-FLAT",
+      "cost_category": "hot_stamp_flat",
+      "expression": "MAX(150/quote_quantity,hot_area_mm2/1000000*foil_price+stamping_auxiliary_fee/imposition_count)",
+      "defaults": {
+        "foil_price": 8.5,
+        "stamping_auxiliary_fee": 0.3
+      },
+      "minimum_charge": 0,
+      "minimum_batch_charge": 150,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "成本测算明细.xlsx/报价-行业标准/W2",
+      "source_sheet": "报价-行业标准",
+      "source_cell": "W2",
+      "source_formula": "=MAX(150/Q2,(100*75*4)/1000000*8.5+0.3/I2)",
+      "variable_map": {
+        "quote_quantity": "Q",
+        "imposition_count": "I"
+      },
+      "formula_version": "detail_sheet/1",
+      "verbatim": true
+    },
+    {
+      "formula_code": "PKG-D-MOUNTING",
+      "cost_category": "mounting",
+      "expression": "MAX(100/quote_quantity,machine_length/25.4*machine_width/25.4*mounting_rate/1000/imposition_count)",
+      "defaults": {
+        "mounting_rate": 0.56
+      },
+      "minimum_charge": 0,
+      "minimum_batch_charge": 100,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "成本测算明细.xlsx/报价-行业标准/AG13",
+      "source_sheet": "报价-行业标准",
+      "source_cell": "AG13",
+      "source_formula": "=IFERROR(MAX(100/Q13,G13/25.4*H13/25.4*(0.56/1000)/I13),\"\")",
+      "variable_map": {
+        "quote_quantity": "Q",
+        "machine_length": "G",
+        "machine_width": "H",
+        "imposition_count": "I"
+      },
+      "formula_version": "detail_sheet/1",
+      "verbatim": true
+    },
+    {
+      "formula_code": "PKG-D-DIE-CUT",
+      "cost_category": "die_cutting",
+      "expression": "MAX(100/quote_quantity,die_cut_unit_fee/imposition_count)",
+      "defaults": {
+        "die_cut_unit_fee": 0.15
+      },
+      "minimum_charge": 0,
+      "minimum_batch_charge": 100,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "成本测算明细.xlsx/报价-行业标准/AH2",
+      "source_sheet": "报价-行业标准",
+      "source_cell": "AH2",
+      "source_formula": "=IFERROR(MAX(100/Q2,0.15/I2),\"\")",
+      "variable_map": {
+        "quote_quantity": "Q",
+        "imposition_count": "I"
+      },
+      "formula_version": "detail_sheet/1",
+      "verbatim": true
+    },
+    {
+      "formula_code": "PKG-D-DIE-CUT-SOFT",
+      "cost_category": "die_cutting",
+      "expression": "MAX(100/quote_quantity,die_cut_unit_fee/imposition_count)",
+      "defaults": {
+        "die_cut_unit_fee": 0.08
+      },
+      "minimum_charge": 0,
+      "minimum_batch_charge": 100,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "成本测算明细.xlsx/报价-行业标准/AH9",
+      "source_sheet": "报价-行业标准",
+      "source_cell": "AH9",
+      "source_formula": "=IFERROR(MAX(100/Q9,0.08/I9),\"\")",
+      "variable_map": {
+        "quote_quantity": "Q",
+        "imposition_count": "I"
+      },
+      "formula_version": "detail_sheet/1",
+      "verbatim": true
+    },
+    {
+      "formula_code": "PKG-D-V-GROOVE",
+      "cost_category": "v_groove",
+      "expression": "MAX(150/quote_quantity,groove_unit_fee)*times",
+      "defaults": {
+        "groove_unit_fee": 0.15,
+        "times": 1
+      },
+      "minimum_charge": 0,
+      "minimum_batch_charge": 150,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "成本测算明细.xlsx/报价-行业标准/AJ5",
+      "source_sheet": "报价-行业标准",
+      "source_cell": "AJ5",
+      "source_formula": "=MAX(150/Q5,0.15)",
+      "variable_map": {
+        "quote_quantity": "Q"
+      },
+      "formula_version": "detail_sheet/1",
+      "verbatim": true
+    },
+    {
+      "formula_code": "PKG-D-GLUE",
+      "cost_category": "glue",
+      "expression": "machine_length*machine_width/1000000*glue_unit_price/imposition_count",
+      "defaults": {
+        "glue_unit_price": 0.74
+      },
+      "minimum_charge": 0,
+      "minimum_batch_charge": 0,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "成本测算明细.xlsx/报价-行业标准/AM2",
+      "source_sheet": "报价-行业标准",
+      "source_cell": "AM2",
+      "source_formula": "=G2*H2/1000000*0.74/I2",
+      "variable_map": {
+        "machine_length": "G",
+        "machine_width": "H",
+        "imposition_count": "I"
+      },
+      "formula_version": "detail_sheet/1",
+      "verbatim": true
+    },
+    {
+      "formula_code": "PKG-D-GLUE-PATCH",
+      "cost_category": "glue",
+      "expression": "glue_area_mm2/1000000*glue_unit_price",
+      "defaults": {
+        "glue_unit_price": 0.74
+      },
+      "minimum_charge": 0,
+      "minimum_batch_charge": 0,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "成本测算明细.xlsx/报价-行业标准/AM4",
+      "source_sheet": "报价-行业标准",
+      "source_cell": "AM4",
+      "source_formula": "=(104*15*2+60*15*2)/1000000*0.74",
+      "variable_map": {},
+      "formula_version": "detail_sheet/1",
+      "verbatim": true
+    }
+  ]
+}

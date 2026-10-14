@@ -88,6 +88,11 @@ class _Patch:
 def _load_cost(row, *, versions=(), route_error=None, bom_error=None,
                bom_rows=BOM_ROWS):
     """读一次成本；`packaging_route.route_versions()` 是本批唯一的打桩缝（Spec §2.1）。"""
+    if row:
+        row=dict(row)
+        sources=json.loads(row.get('source_versions_json') or '{}')
+        sources.update(expense_policy=cost.EXPENSE_POLICY,calculation_profile=cost.CURRENT_PROFILE)
+        row['source_versions_json']=json.dumps(sources)
     def version_reader(*args, **kwargs):
         if route_error is not None:
             raise route_error

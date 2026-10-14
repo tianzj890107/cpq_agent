@@ -1099,7 +1099,7 @@ class JPersistAndApi(CostCase):
         self.assertTrue(loaded["built"])
         self.assertAlmostEqual(loaded["total_cost"], built["total_cost"], places=6)
         self.assertEqual(loaded["engine_version"], "packaging_cost_v1")
-        self.assertEqual(loaded["cost_profile"], "packaging_v1")
+        self.assertEqual(loaded["cost_profile"], module.CURRENT_PROFILE)
 
     def test_j3_rebuild_replaces_items_without_duplicating(self):
         module = self.cost_mod()
