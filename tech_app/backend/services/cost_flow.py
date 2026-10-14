@@ -433,7 +433,10 @@ def packaging_cost_projection(project_id: str) -> Optional[dict]:
     if float(final.get("total") or 0) <= 0:
         return None
     items = []
-    for key, category, label in _PACKAGING_COST_ROWS:
+    rows = (('material','material','包装材料费'),('processing','machining','加工费'),
+            ('others','other','其他费用（组装人工、包装等）')) \
+        if ledger.get('cost_profile') == 'detail_sheet/1' else _PACKAGING_COST_ROWS
+    for key, category, label in rows:
         amount = round(float(final.get(key) or 0), 2)
         if amount:
             items.append({"category": category, "name": label, "unit": "元",

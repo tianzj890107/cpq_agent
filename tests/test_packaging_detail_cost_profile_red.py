@@ -7,6 +7,20 @@ from tech_app.backend.services import packaging_cost as cost
 
 
 class DetailRules(unittest.TestCase):
+    def test_quote_document_preserves_three_cost_groups_and_same_price(self):
+        import cpq_packaging_quote as quote
+        from tests.test_packaging_quote_close_loop_red import package_fixture
+        package=package_fixture()
+        package['cost'].update(cost_profile='detail_sheet/1',material_total=2,process_total=6,
+            labor_total=.3,packaging_total=1,other_total=0,tooling_total=0,freight_total=0,
+            subtotal=8.3,total_cost=9.3)
+        result=quote.price(package,gross_margin_rate=.1)
+        self.assertAlmostEqual(9.3/.9,result['margin_price'])
+        section=quote._doc_sections(result)[4]
+        labels=[r['项目'] for r in section['rows']]
+        self.assertIn('加工',labels);self.assertIn('其他费用',labels)
+        self.assertNotIn('工装',labels);self.assertNotIn('人工',labels)
+
     def test_quantity_imposition_matrix_and_soft_variant(self):
         for quantity in (1000,5000,10000,20000):
             for n_up in (1,2):
@@ -105,6 +119,14 @@ class DetailRules(unittest.TestCase):
 
 
 class DetailProject(CostCase):
+    def test_cost_handoff_projection_has_three_groups(self):
+        from tech_app.backend.services import cost_flow
+        self.prepare();self.build_cost()
+        projected=cost_flow.packaging_cost_projection(PID)
+        self.assertTrue(projected)
+        self.assertTrue(all(row['category'] in ('material','machining','other') for row in projected['items']))
+        self.assertFalse(any(row['name']=='人工' for row in projected['items']))
+
     def test_real_project_and_database_readback_use_detail_profile(self):
         self.prepare()
         result=self.build_cost()

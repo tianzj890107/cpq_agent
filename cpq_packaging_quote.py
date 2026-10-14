@@ -633,7 +633,13 @@ def _doc_sections(quote: dict) -> List[dict]:
                   source=_text(item.get("source")) or "工艺路线")
              for item in steps] or
             [_row("工艺路线", "（本包未带工序行）", source="工艺路线")])},
-        {"id": DOC_SECTIONS[4][0], "title": DOC_SECTIONS[4][1], "rows": [
+        {"id": DOC_SECTIONS[4][0], "title": DOC_SECTIONS[4][1], "rows": ([
+            _row("材料", _money(cost.get("material_total")), source="同一包装公式账"),
+            _row("加工", _money(cost.get("process_total")), source="同一包装公式账（含制造人工）"),
+            _row("其他费用", _money(sum(_num(cost.get(key)) or 0 for key in ('labor_total','packaging_total','other_total'))),
+                 source="组装人工、包装费及其它项目费用；不重复加工费"),
+            _row("成本总额", money.get("cost_total"), source="同一包装公式账 total_cost"),
+        ] if q.get('cost_profile')=='detail_sheet/1' else [
             _row("材料", _money(cost.get("material_total")), source="包装成本引擎"),
             _row("工艺", _money(cost.get("process_total")), source="包装成本引擎"),
             _row("人工", _money(cost.get("labor_total")), source="包装成本引擎"),
@@ -643,7 +649,7 @@ def _doc_sections(quote: dict) -> List[dict]:
             _row("损耗", _money(cost.get("loss_amount")), source="包装成本引擎"),
             _row("小计", _money(cost.get("subtotal")), source="包装成本引擎"),
             _row("成本总额", money.get("cost_total"), source="第 7 批 total_cost"),
-        ]},
+        ])},
         {"id": DOC_SECTIONS[5][0], "title": DOC_SECTIONS[5][1], "rows": (
             [
                 _row("定价模式", _text(q.get("pricing_mode_label")), source="Spec §1.2"),
