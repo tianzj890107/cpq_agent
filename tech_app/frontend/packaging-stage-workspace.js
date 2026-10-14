@@ -25,11 +25,11 @@
   function cuts(board) {
     const settings=board.cut_settings||{};
     let html='<section class="inline-card"><div class="inline-card-title">无排模零件 / 组成的开料</div><div class="inline-hint">沿用统一开料规则，材料专属余量优先；修改配置后第4阶段重算。</div>';
-    html+=`<div class="inline-edit-grid"><label>默认长余量(mm)</label><input type="number" min="0" step="0.01" data-pkg-margin-length value="${esc(settings.cut_margin_length_mm??0)}"><label>默认宽余量(mm)</label><input type="number" min="0" step="0.01" data-pkg-margin-width value="${esc(settings.cut_margin_width_mm??5)}"></div><button class="inline-action save" type="button" data-pkg-save-allowance>保存开料余量</button>`;
+    html+=`<div class="ai-cut-allowance-bar"><label>默认长余量(mm) <input type="number" min="0" step="0.01" data-pkg-margin-length value="${esc(settings.cut_margin_length_mm??0)}"></label><label>默认宽余量(mm) <input type="number" min="0" step="0.01" data-pkg-margin-width value="${esc(settings.cut_margin_width_mm??5)}"></label><button class="inline-action save" type="button" data-pkg-save-allowance>保存开料余量</button></div>`;
     const materials=new Set((board.individual_cuts||[]).map(p=>p.material_code).filter(Boolean));
     for(const code of materials){const configured=settings.cut_allowances?.[code]||{};
       html+=`<div class="inline-edit-grid" data-pkg-material="${esc(code)}"><label>${esc(code)} 长余量(mm)</label><input type="number" min="0" step="0.01" data-pkg-material-length value="${esc(configured.length_mm??settings.cut_margin_length_mm??0)}"><label>宽余量(mm)</label><input type="number" min="0" step="0.01" data-pkg-material-width value="${esc(configured.width_mm??settings.cut_margin_width_mm??5)}"></div>`;}
-    for(const p of board.individual_cuts||[]) html+=`<div class="inline-row"><b>${esc(p.code)} · ${esc(p.name)}</b><div>展开尺寸：${size(p.size_mm)}</div><div>余量：${(p.allowance_mm||[]).map(n=>Number(n).toFixed(2)).join(' × ')} mm</div><div>最终开料尺寸：${size(p.sheet_mm)}</div><div>来源：${esc(p.size_source)}</div>${preview(board,p.code,'查看展开原图')}</div>`;
+    for(const p of board.individual_cuts||[]) html+=`<div class="inline-row"><b class="ai-layout-part-title">${esc(p.code)} · ${esc(p.name)}</b><div>展开尺寸：${size(p.size_mm)}</div><div>余量：${(p.allowance_mm||[]).map(n=>Number(n).toFixed(2)).join(' × ')} mm</div><div>最终开料尺寸：${size(p.sheet_mm)}</div><div>来源：${esc(p.size_source)}</div>${preview(board,p.code,'查看展开原图')}</div>`;
     if(!(board.individual_cuts||[]).length)html+='<div class="inline-hint">当前零件均已关联排模。</div>';
     return html+'</section>';
   }

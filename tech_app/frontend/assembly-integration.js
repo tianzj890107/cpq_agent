@@ -742,13 +742,14 @@ function aiRenderPackagingLayout() {
       + `<span class="inline-cov-code">${esc(sheet)} · ${row.n_up ? `排 ${Number(row.n_up)} 模` : '模数待确认'} · ${row.confirmed ? '已核对文字' : '待核对'}</span>`
       + (candidate ? '<span class="inline-cov-code">排模／草稿候选，尚非确认排模</span>'
         : `<button type="button" class="inline-action" data-ai-layout-confirm="${aiAttr(row.entity_id)}" data-confirmed="${row.confirmed ? 'true' : 'false'}">${row.confirmed ? '撤销确认' : '确认图上排模'}</button>`) + '</div>';
-    if (associated.length) html += `<div class="ai-hint">已关联：${associated.map(p=>esc(p.name || p.business_part_code)).join('、')}；无需再次保存，展开可调整。</div>`;
+    if (associated.length) html += `<div class="ai-layout-part-title">${associated.map(p=>esc(p.name || p.business_part_code)).join('、')}</div><div class="ai-hint">已关联，无需再次保存，展开可调整。</div>`;
     if (row.classification_notice) html += `<div class="ai-hint">${esc(row.classification_notice)}</div>`;
     if (row.machine_mm) html += `<div class="ai-hint">上机尺寸：${esc(row.machine_mm.join(' × '))} mm（不作为开料尺寸）</div>`;
     if(row.utilization!=null)html+=`<div class="ai-hint">展开包络面积利用率：${(row.utilization*100).toFixed(2)}%（非刀线净面积）</div>`;
     ['direction','margin_mm','spacing_mm'].forEach(key=>{if(row[key]!=null)html+=`<div class="ai-hint">${esc({direction:'排模方向',margin_mm:'边距(mm)',spacing_mm:'间距(mm)'}[key])}：${esc(row[key])}</div>`;});
-    html+=`<button type="button" class="inline-action" data-pkg-drawing="">查看排模原图</button>`;
-    html += `<details class="ai-layout-picker" data-ai-cut-region="${aiAttr(row.entity_id)}"><summary>开料尺寸与排出数量</summary>`
+    if (row.association_gaps?.length) html += `<div class="ai-hint">未自动关联：${row.association_gaps.map(g=>esc(g.name)+(g.code==='ambiguous_part_name'?'（有多个对应件）':'（清单无唯一对应件）')).join('、')}</div>`;
+    html+=`<button type="button" class="inline-action" data-ai-layout-preview="${aiAttr(row.entity_id)}" aria-expanded="false">查看排模原图</button><div class="ai-layout-preview" data-ai-layout-preview-host hidden></div>`;
+    html += `<div class="ai-layout-controls"><details class="ai-layout-picker" data-ai-cut-region="${aiAttr(row.entity_id)}"><summary class="inline-action">开料尺寸与排出数量</summary>`
       + '<div class="ai-hint">开料尺寸、上机尺寸、零件展开尺寸分别记录。近邻标注尚未证明是纸张尺寸；核实后再采纳。无排模件默认展开长+0mm、宽+5mm，可按材料配置余量。</div>';
     (row.cut_dimension_candidates || []).forEach((dimension,index) => {
       html += `<div class="inline-cov-row"><span>${Number(dimension.length_mm).toFixed(2)} × ${Number(dimension.width_mm).toFixed(2)} mm · ${dimension.dimension_role==='cut_sheet'?'明确开料标注':'尺寸角色待核实'}</span>`
@@ -762,12 +763,11 @@ function aiRenderPackagingLayout() {
     });
     html += `<div class="ai-hint">费用按各件所需展开面积占比分摊，合计等于整张费用；关联不自动推导用量。来源：${esc(row.size_source || '未取得开料尺寸')}</div>`
       + `<button class="inline-action save" type="button" data-ai-cut-save="${aiAttr(row.entity_id)}">核实并保存开料参数</button></details>`;
-    if (row.association_gaps?.length) html += `<div class="ai-hint">未自动关联：${row.association_gaps.map(g=>esc(g.name)+(g.code==='ambiguous_part_name'?'（有多个对应件）':'（清单无唯一对应件）')).join('、')}</div>`;
-    html += `<div class="ai-layout-association-bar"><details class="ai-layout-picker"><summary>关联零件 · 已选 ${(row.part_codes || []).length} 项</summary>`
+    html += `<div class="ai-layout-association-bar"><details class="ai-layout-picker"><summary class="inline-action">关联零件 · 已选 ${(row.part_codes || []).length} 项</summary>`
       + `<div class="ai-hint">可多选；关联不推导用量，请单独核实排模与用量。</div>`
       + (row.assignment_source === 'cad_layout_full_name' ? `<div class="ai-hint">已按 DWG 排模文字中的零件名称自动关联，可修改。</div>` : '')
       + `<div class="ai-layout-options" data-ai-layout-parts="${aiAttr(row.entity_id)}">${options || '<div class="inline-empty">尚无可关联零件</div>'}</div></details>`
-      + `<button type="button" class="inline-action save" data-ai-layout-save="${aiAttr(row.entity_id)}">保存关联</button></div></div>`;
+      + `<button type="button" class="inline-action save" data-ai-layout-save="${aiAttr(row.entity_id)}">保存关联</button></div></div></div>`;
   });
   return html + '</section>';
 }
@@ -1761,7 +1761,60 @@ function aiLayoutSelectedCodes(group) {
   return Array.from(group?.querySelectorAll('[data-ai-layout-part-code]:checked') || []).map(input => input.value);
 }
 
+function aiLayoutCadSvg(doc) {
+  const scene = doc?.cad_scene || {};
+  const rows = (scene.entities || []).filter(row => scene.layer_visibility?.[row.layer] !== false);
+  const boxes = rows.map(row => row.bbox).filter(box => Array.isArray(box) && box.length === 4 && box.every(n => Number.isFinite(Number(n))));
+  if (!boxes.length) return '';
+  const box = [Math.min(...boxes.map(b=>Number(b[0]))),Math.min(...boxes.map(b=>Number(b[1]))),Math.max(...boxes.map(b=>Number(b[2]))),Math.max(...boxes.map(b=>Number(b[3])))];
+  const pad = Math.max(box[2]-box[0],box[3]-box[1],1)*.02;
+  const colours = {cut:'#dc2626',half_cut:'#1f6feb',crease:'#16a34a',v_groove:'#ec4899',frame:'#eab308',bleed:'#eab308',print:'#57606a',hole:'#cf222e',glue_flap:'#f59e0b'};
+  const aci = {1:'#dc2626',2:'#eab308',3:'#16a34a',4:'#06b6d4',5:'#1f6feb',6:'#ec4899',7:'#57606a'};
+  const drawing = rows.map(row => {
+    const colour = colours[row.role] || aci[row.aci_color || row.layer_aci_color] || '#8b949e';
+    if (row.kind === 'text') {
+      if (!Number.isFinite(Number(row.x)) || !Number.isFinite(Number(row.y))) return '';
+      const height = Number(row.height)>0 ? Number(row.height) : 2.5;
+      return `<text x="${Number(row.x)}" y="${-Number(row.y)}" font-size="${height}" fill="${colour}">${esc(row.text || '')}</text>`;
+    }
+    const points = (row.points || []).filter(p=>Array.isArray(p) && p.length>=2 && p.slice(0,2).every(n=>Number.isFinite(Number(n)))).map(p=>`${Number(p[0])},${-Number(p[1])}`);
+    if (points.length < 2) return '';
+    const tag = row.closed ? 'polygon' : 'polyline';
+    return `<${tag} points="${points.join(' ')}" fill="none" stroke="${colour}" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
+  }).join('');
+  if (!drawing) return '';
+  return `<svg viewBox="${box[0]-pad} ${-box[3]-pad} ${box[2]-box[0]+2*pad} ${box[3]-box[1]+2*pad}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="排模图纸原图">${drawing}</svg>`;
+}
+
+let aiLayoutPreviewCache = {key:'',promise:null};
+async function aiToggleLayoutPreview(button) {
+  const host = button.closest('.ai-layout-row')?.querySelector('[data-ai-layout-preview-host]');
+  if (!host) return;
+  const show = host.hidden;
+  host.hidden = !show;
+  button.setAttribute('aria-expanded', String(show));
+  button.textContent = show ? '收起排模原图' : '查看排模原图';
+  if (!show || host.querySelector('svg')) return;
+  host.textContent = '读取排模原图…';
+  const key = aiPid + ':' + (aiBusinessParts?.business_parts_hash || '');
+  try {
+    if (aiLayoutPreviewCache.key !== key || !aiLayoutPreviewCache.promise) {
+      aiLayoutPreviewCache = {key,promise:api(`/api/projects/${encodeURIComponent(aiPid)}/requirement/packaging-geometry`)};
+    }
+    const doc = await aiLayoutPreviewCache.promise;
+    const svg = aiLayoutCadSvg(doc);
+    if (!svg) throw new Error('尚无可显示的CAD原图，请先完成图纸解析。');
+    host.innerHTML = '<div class="ai-hint">图纸平面原图 · 保留CAD图层和尺寸标注</div>' + svg;
+  } catch (error) {
+    if (aiLayoutPreviewCache.key === key) aiLayoutPreviewCache.promise = null;
+    host.textContent = '排模原图读取失败：' + error.message;
+    const retry = document.createElement('button');retry.type='button';retry.className='inline-action';retry.textContent='重试';
+    retry.onclick=()=>{host.hidden=true;void aiToggleLayoutPreview(button);};host.appendChild(retry);
+  }
+}
+
 function aiBindBody() {
+  document.querySelectorAll('[data-ai-layout-preview]').forEach(button=>{button.onclick=()=>aiToggleLayoutPreview(button);});
   document.querySelectorAll('[data-pkg-save-assembly]').forEach(button=>{button.onclick=async()=>{
     const group=button.closest('[data-pkg-assembly-step]');
     const index=Number(button.dataset.pkgSaveAssembly);

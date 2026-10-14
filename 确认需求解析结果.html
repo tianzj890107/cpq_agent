@@ -577,6 +577,26 @@
     }
     .btn-primary:hover:not(:disabled) { filter: brightness(1.06); }
 
+    .packaging-pricing-controls {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+      margin-bottom: 12px;
+    }
+    .packaging-pricing-controls .packaging-margin-input,
+    .packaging-pricing-controls .btn {
+      box-sizing: border-box; height: 36px; border-radius: 10px;
+      border: 1px solid var(--border-secondary); font-size: 14px;
+    }
+    .packaging-margin-input {
+      width: 100px; max-width: 100%; min-width: 0; padding: 0 10px;
+      background: var(--bg-page); color: var(--text-primary);
+    }
+    .packaging-margin-input:hover { border-color: var(--color-primary); }
+    .packaging-margin-input:focus-visible {
+      border-color: var(--color-primary);
+      outline: 2px solid var(--color-primary); outline-offset: 2px;
+    }
+    .packaging-pricing-controls .btn { padding: 0 14px; }
+
     /* 报价智能体强调控件（AI 徽标 / 当前步骤圆点 / 强行填满 / 确认下一步）：
        徽标与步骤圆点常态浅底蓝字描边，仅悬浮进入深蓝选中态；
        两个按钮常态使用柔和白→浅蓝渐变描边，仅非禁用悬浮进入深蓝渐变。 */
@@ -3416,14 +3436,16 @@
        BOOT_PENDING：boot() 里 kickoff（需求全文）还没暂存好之前不许抢跑，
        否则新建报价会在没有需求内容的情况下开始第 1 步。 */
     let BOOT_PENDING = true;
+    let QUOTE_REPLAYING = false;
+    let QUOTE_RESUME_KEY = '';
     const WF_AUTO = { inflight: false, failedFor: '' };
     function wfMaybePromptStart() {
       const el = $('wfStartPrompt');
       if (el) el.remove();               // 旧版确认气泡（若有残留）一律清掉
       const u = wfUser();
       const need = u && WF.loaded && WF.canEdit && !WF.stepStarted && !WF.awaiting && !WF.pendingTask;
-      if (!need || BOOT_PENDING || busy) return;
       const key = (currentSessionId || '') + '#' + currentStep;
+      if (!need || BOOT_PENDING || busy || QUOTE_REPLAYING || QUOTE_RESUME_KEY === key) return;
       if (WF_AUTO.inflight || WF_AUTO.failedFor === key) return;   // 失败过就不无限重试
       WF_AUTO.inflight = true;
       addAiBubble('▶ 第 ' + currentStep + ' 步「' + STEPS[currentStep - 1] + '」由**' +
@@ -4405,11 +4427,11 @@
           '<span class="readonly-chip" id="packagingPanelChip">系统计算</span></div>' +
           '<i class="ti ti-chevron-down collapse-arrow"></i>' +
         '</div><div class="collapse-content">' +
-          '<label for="packagingMarginInput">毛利率（%）</label> ' +
-          '<input id="packagingMarginInput" type="number" min="0" max="99.99" step="0.01"' +
+          '<div class="packaging-pricing-controls"><label for="packagingMarginInput">毛利率（%）</label>' +
+          '<input id="packagingMarginInput" class="packaging-margin-input" type="number" min="0" max="99.99" step="0.01"' +
           ' value="' + (rate === null ? '' : String((rate * 100).toFixed(2))) + '"' +
-          ' style="width:90px;max-width:100%;margin:0 8px">' +
-          '<button class="btn btn-secondary" type="button" id="packagingRepriceBtn">按此毛利率重算</button>' +
+          '>' +
+          '<button class="btn btn-secondary" type="button" id="packagingRepriceBtn">按此毛利率重算</button></div>' +
           '<details class="collapse-block"'+(shownStep===4?' open':'')+'><summary class="collapse-header">其他加价 · 元/只</summary>'+
           '<div class="collapse-content"><div class="empty-hint">独立人工和产品包材已计成本，不在此重复加；运输填写值替换原估算运费。留空沿用原值，填0表示不收取。</div>'+
           packagingAddonDefinitions().map(([code,label])=>'<label class="form-label">'+label+
@@ -4509,6 +4531,22 @@
           '</tr></thead><tbody>' + rows + '</tbody></table>' +
         '</div>';
       return true;
+    }
+
+    function summarySectionRows(payload) {
+      if (!payload || payload.kind !== 'summary') return { columns: [], rows: [] };
+      const rows = (Array.isArray(payload.rows) ? payload.rows : [])
+        .filter(row => row && typeof row === 'object' && !Array.isArray(row));
+      if (rows.length) {
+        const columns = Array.isArray(payload.columns) && payload.columns.length
+          ? payload.columns : [...new Set(rows.flatMap(row => Object.keys(row)))];
+        return { columns, rows };
+      }
+      const fields = (Array.isArray(payload.fields) ? payload.fields : [])
+        .filter(field => field && (field.label || field.key));
+      return { columns: ['字段', '值'], rows: fields.map(field => ({
+        '字段': field.label || field.key, '值': field.value ?? '',
+      })) };
     }
 
     async function wfRestoreStepData(step) {
@@ -5178,11 +5216,13 @@
       try {
         // 行业记忆键**故意**不在清理清单里：与技术工艺路径「记住上次选的行业」一致，
         // 同一个人通常连着建同一行业的单子，每次都退回默认行业等于每次都要重选。
-        ['cpq:requirement', 'cpq:files', 'cpq:fileContents', 'cpq:projectName', 'cpq:projectCode', 'cpq:customer']
+        ['cpq:requirement', 'cpq:files', 'cpq:fileContents', 'cpq:projectName', 'cpq:projectCode', 'cpq:customer', 'cpq:openSession']
           .forEach(k => sessionStorage.removeItem(k));
       } catch {}
-      // 会话隔离后无需预先重置后端：刷新页面时 init 会 /api/new 拿到全新会话
-      location.reload();
+      // 只有主动新建解除绑定；普通刷新仍沿用URL里的会话。
+      const next = new URL(location.href);
+      next.searchParams.delete('session_id');
+      location.href = next.href;
     }
     // 兼容旧入口（导航「新对话」）
     function restartSession() { startNewQuote(); }
@@ -5258,8 +5298,16 @@
         box.appendChild(item);
       });
     }
+    function pinQuoteSession(id) {
+      const next = new URL(location.href);
+      next.searchParams.set('session_id', id);
+      history.replaceState(history.state, '', next.href);
+    }
     async function openSession(id) {
-      if (busy) { alert('请等当前回合结束再切换历史。'); return; }
+      if (busy) { alert('请等当前回合结束再切换历史。'); return false; }
+      QUOTE_REPLAYING = true;
+      let opened = false;
+      try {
       let data;
       try {
         data = await cpqAuthFetch(AGENT_URL + '/api/session/open', {
@@ -5267,8 +5315,10 @@
           body: JSON.stringify({ id }),
         }).then(r => r.ok ? r.json() : null);
       } catch (e) { data = null; }
-      if (!data || !data.id) { alert('无法打开该历史记录。'); return; }
+      if (!data || !data.id) { alert('无法打开该历史记录；不会新建或覆盖原会话，请重试。'); return false; }
       currentSessionId = data.id;
+      opened = true;
+      pinQuoteSession(data.id);
       closeOverlays();
       // 换了一张卡片：上下文/第 2 步快照都要重新拉一次（历史重放出来的可能是旧产品）
       STEP1_CTX_READY = false;
@@ -5280,7 +5330,12 @@
       replaySession(data);
       // 以卡片为准纠正步骤（交接过来的卡片，会话 JSON 里的 step 可能还停在上一步），
       // 再按该步骤重算我的操作权限、决定是否询问「开始本步骤」
-      wfRefresh(true);
+      await wfRefresh(true);
+      return true;
+      } finally {
+        if (opened) QUOTE_RESUME_KEY = (currentSessionId || '') + '#' + currentStep;
+        QUOTE_REPLAYING = false;
+      }
     }
     async function deleteSession(src, id, title) {
       if (!confirm('删除历史记录「' + (title || id) + '」？此操作不可恢复。')) return;
@@ -5509,7 +5564,7 @@
       if ($('projectName')) $('projectName').textContent = projectName || '未命名报价项目';
       initModelInfoFallback();
 
-      // 探测服务 & 重置会话
+      // 探测服务；已绑定会话先恢复，绝不先创建一个新会话。
       try {
         const meta = await cpqAuthFetch(AGENT_URL + '/api/meta').then(r => r.json());
         setConn(true);
@@ -5527,29 +5582,49 @@
         await refreshFixedFormsForIndustry(CURRENT_INDUSTRY);
         manualMode = !!(meta.settings && meta.settings.model === 'none');
         if (meta.model) $('modelInfo').textContent = ' · ' + (manualMode ? '无模型（人工填写）' : meta.model);
-        const nw = await cpqAuthFetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
-        currentSessionId = nw.id || meta.session_id || null;
-        try { // 记入「我的报价」（未登录时首页「我的」标签仍按本机会话过滤）
-          const mine = JSON.parse(localStorage.getItem('cpq:mySessions') || '[]');
-          if (nw.id && mine.indexOf(nw.id) < 0) { mine.push(nw.id); localStorage.setItem('cpq:mySessions', JSON.stringify(mine.slice(-200))); }
-        } catch (e) {}
         // 从首页「历史记录」/卡片点进来的：直接载入该会话，跳过新对话。
         // URL 上的 session_id 是权威身份（刷新也还在），sessionStorage 只作老路径兜底。
         let openId = urlSessionId;
         try {
           const lastOpen = sessionStorage.getItem('cpq:openSession') || '';
-          sessionStorage.removeItem('cpq:openSession');
           if (!openId) openId = lastOpen;
         } catch (e) {}
-        if (openId) { BOOT_PENDING = false; await openSession(openId); return; }
+        if (openId) {
+          const restored = await openSession(openId);
+          if (restored) {
+            try { sessionStorage.removeItem('cpq:openSession'); } catch (e) {}
+            BOOT_PENDING = false;
+          } else {
+            $('stepBadge').textContent = '恢复失败';
+            addErrorBubble('原报价会话暂时读取失败，请重试或从历史记录打开；不会从头新建报价。');
+          }
+          return;
+        }
+        const nw = await cpqAuthFetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => {
+          if (!r.ok) throw new Error('新建报价失败');
+          return r.json();
+        });
+        if (!nw.id) throw new Error('新建报价未返回会话ID');
+        currentSessionId = nw.id;
+        pinQuoteSession(currentSessionId);
+        try {
+          const mine = JSON.parse(localStorage.getItem('cpq:mySessions') || '[]');
+          if (mine.indexOf(nw.id) < 0) { mine.push(nw.id); localStorage.setItem('cpq:mySessions', JSON.stringify(mine.slice(-200))); }
+        } catch (e) {}
         await wfSyncCard(1);   // 登录后：新会话登记为一张报价卡片（创建人=当前用户）
         await wfRefresh();     // 先匹配角色：第 1 步归谁做、我能不能做（决定下面是否自动开工）
         await checkTechResultHandoff();   // 工艺回传的待确认结果：登录后自动渲染（Spec §2.4）
-      } catch {
-        setConn(false);
-        $('panelPlaceholder').innerHTML =
-          '<i class="ti ti-plug-x"></i><div>未连接到报价助手服务。<br>请在 配置报价CPQ 目录运行 <code>python cpq_agent_server.py</code> 后刷新本页。</div>';
-        addErrorBubble('无法连接报价助手服务（' + AGENT_URL + '）。请先运行：python cpq_agent_server.py，然后刷新页面。');
+      } catch (error) {
+        const placeholder = $('panelPlaceholder');
+        if (urlSessionId || currentSessionId) {
+          $('stepBadge').textContent = '恢复失败';
+          addErrorBubble('报价进度或字段暂时恢复失败：' + ((error && error.message) || '读取失败') + '。原会话保留，请重试；不会从头新建。');
+        } else {
+          setConn(false);
+          if (placeholder) placeholder.innerHTML =
+            '<i class="ti ti-plug-x"></i><div>未连接到报价助手服务，请检查服务后重试。</div>';
+          addErrorBubble('无法连接报价助手服务（' + AGENT_URL + '）：' + ((error && error.message) || '读取失败'));
+        }
         return;
       }
 
@@ -5615,7 +5690,11 @@
 
     // 登录态就绪/变化时重算工作流权限（cpq_auth.js 在本脚本之后加载，事件保证时序正确）
     // 登录/登出后：重建卡片归属 -> 刷新权限 -> 重新判定准入（登录即解锁，登出即锁回去）
-    const onAuthChanged = () => wfSyncCard(currentStep).then(() => wfRefresh()).then(wfGate);
+    const onAuthChanged = () => {
+      // 启动/回放由boot负责；登录态就绪不能抢先登记空卡或启动旧步骤。
+      if (BOOT_PENDING || QUOTE_REPLAYING) return;
+      return wfRefresh(true).then(wfGate);
+    };
     document.addEventListener('cpq-auth-ready', onAuthChanged);
     document.addEventListener('cpq-auth-change', onAuthChanged);
 

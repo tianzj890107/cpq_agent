@@ -24,6 +24,8 @@ const CR_COST_LABEL = { material: '材料', labor: '人工', overhead: '制造�
 
 let crData = null;
 let crTab = 'parts';
+const crViewParam = new URLSearchParams(location.search).get('view');
+const crRequestedView = ['parts', 'assembly', 'total'].includes(crViewParam) ? crViewParam : '';
 let crBusy = false;
 // deferred 长任务（runCostReview / costStep）自己的并发闸门：启动即回执，
 // 后台链路没结束前不允许再排一条。
@@ -510,7 +512,7 @@ function crRenderParts() {
     + `</tr></thead><tbody>`;
   rows.forEach(row => {
     const flag = !row.has_cost ? ' ai-missing' : row.unit_cost <= 0 ? ' ai-missing' : '';
-    html += `<tr class="${flag.trim()}"><td><code>${esc(row.id)}</code> ${esc(row.name)}`
+    html += `<tr class="cr-cost-detail-row ${flag.trim()}" data-cr-cost-detail="${crAttr(row.id)}" tabindex="0" aria-label="查看 ${crAttr(row.name || row.id)} 成本计算详情"><td><code>${esc(row.id)}</code> ${esc(row.name)}`
       + (row.cost_scope === 'material_only' ? '<small class="ai-hint">仅材料开料费，非完整零件成本</small>' : '')
       + (row.open_questions ? `<small class="ai-hint">${row.open_questions} 项待确认</small>` : '')
       + `</td><td>×${row.quantity}</td>`
@@ -522,6 +524,73 @@ function crRenderParts() {
       + `${row.has_cost ? '重算' : '测算'}</button></td></tr>`;
   });
   return html + `</tbody></table></div></section>`;
+}
+
+function crCostDetailHtml(row) {
+  const precise = value => value == null || !Number.isFinite(Number(value)) ? '未取得'
+    : Number(value).toLocaleString('zh-CN', {maximumFractionDigits:6});
+  const valueText = value => value && typeof value === 'object' ? JSON.stringify(value) : String(value ?? '未取得');
+  const labels = {quote_quantity:'报价批量(只)',usage_qty:'每套用量',sheet_length_mm:'开料长(mm)',sheet_width_mm:'开料宽(mm)',
+    part_length_mm:'零件长(mm)',part_width_mm:'零件宽(mm)',grammage_gsm:'克重(g/㎡)',ton_price:'吨价',
+    tax_factor:'税率换算系数',imposition_count:'排版模数',proof_base:'校版损耗基数',proof_loss_sheets:'校版损耗张数',
+    process_seconds:'加工秒数',labor_seconds:'工时秒数',rate_per_hour:'小时费率',unit_price:'单价',
+    min_charge:'最低开机收费',minimum_charge:'最低收费',area_m2:'面积(㎡)',allocation_ratio:'面积分摊比例'};
+  const totalsAvailable = Boolean(row.has_cost || row.calculation_details?.some(item=>item.unit_amount!=null));
+  let html = `<div class="inline-hint">按当前已保存公式账查看，打开详情不重算。批量 ${esc(crData?.packaging_cost?.quote_quantity ?? '未取得')} 只；每套用量 ${esc(row.quantity ?? '未取得')} 件。</div>`;
+  if (!row.has_cost) html += `<div class="inline-warn">${row.cost_stale ? '当前为历史成本，依据已变化，需重算后使用。' : '当前成本尚未完整测算，以下仅展示已保存依据。'}</div>`;
+  html += `<div class="inline-totals"><span>材料 ${precise(totalsAvailable ? row.breakdown?.material : null)}</span><span>实际加工费 ${precise(totalsAvailable ? row.breakdown?.processing : null)}</span><span>单件 ${precise(totalsAvailable ? row.unit_cost : null)}</span><span>每套小计 ${precise(totalsAvailable ? row.subtotal : null)} 元</span></div>`
+    + '<div class="inline-hint">面板显示两位小数；单件合计使用未舍入金额相加后再舍入，不能用已显示的两项两位小数反推合计。独立人工和出货包材在整单成本，不在此重复计费。</div>';
+  const details = row.calculation_details || [];
+  if (!details.length) return html + '<div class="inline-empty">没有已保存的逐项计算依据；请完成测算后查看，系统不会编造公式。</div>';
+  for (const category of ['material','processing']) {
+    const items = details.filter(item=>item.category === category);
+    if (!items.length) continue;
+    html += `<section class="inline-card"><div class="inline-card-title">${category==='material'?'材料费':'实际加工费'} · ${items.length} 条明细</div>`;
+    items.forEach((item,index) => {
+      html += `<details class="cr-calculation-item" open><summary>${index+1}. ${esc(item.category_label || item.cost_category || '费用')} · ${esc(item.part_name || item.formula_code || '明细')} · ${precise(item.unit_amount)} 元/件</summary>`
+        + `<div class="inline-row"><b>公式</b><code>${esc(item.expression || '历史明细未保存公式表达式')}</code></div>`
+        + `<div class="inline-hint">${esc(item.formula_code || '公式编码未保存')} · 版本 ${esc(item.formula_version || '未保存')}</div>`;
+      const inputs = Object.entries(item.inputs || {});
+      if (inputs.length) html += '<table class="inline-cost-table"><thead><tr><th>参数</th><th>取值</th></tr></thead><tbody>'
+        + inputs.map(([key,value])=>`<tr><td>${esc(labels[key] || key)}</td><td>${esc(valueText(value))}</td></tr>`).join('')+'</tbody></table>';
+      else html += `<div class="inline-hint">${esc(item.inputs_error || '历史明细未保存输入参数')}</div>`;
+      html += `<div class="inline-row">原公式金额 ${precise(item.amount)} 元 → 按账内损耗口径 ${precise(item.amount_with_loss)} 元 ÷ 每套用量 ${precise(item.quantity_divisor ?? row.quantity)} = ${precise(item.unit_amount)} 元/件。</div>`
+        + `<div class="inline-hint">损耗率：${precise(item.loss_rate)}；只有原账规则适用的类别计损耗。${item.min_charge_applied?'最低收费已应用，批量摊销参数见上表。':''}</div>`
+        + `<div class="inline-hint">费率 ${esc(item.rate_code || '未保存')} · 来源 ${esc(item.source_ref || item.source || '未保存')} ${esc(item.note || '')}</div>`;
+      if (item.assumptions?.length) html += `<div class="inline-hint">假设/推荐依据：${esc(valueText(item.assumptions))}</div>`;
+      html += '</details>';
+    });
+    html += '</section>';
+  }
+  return html;
+}
+
+function crOpenCostDetail(id, origin) {
+  const row = (crData?.parts || []).find(item=>String(item.id) === String(id));
+  if (!row) return;
+  document.querySelector('.cr-cost-details')?.close();
+  const dialog = document.createElement('dialog');
+  dialog.className = 'cr-cost-details';
+  dialog.setAttribute('aria-label', `${row.id} ${row.name} 成本计算详情`);
+  dialog.innerHTML = `<div class="cr-cost-details-head"><strong>${esc(row.id)} · ${esc(row.name)} · 计算详情</strong><button class="inline-action" type="button" data-cr-detail-close aria-label="关闭成本详情">关闭</button></div><div class="cr-cost-details-body">${crCostDetailHtml(row)}</div>`;
+  dialog.querySelector('[data-cr-detail-close]').onclick = ()=>dialog.close();
+  dialog.addEventListener('click',event=>{if(event.target===dialog)dialog.close();});
+  dialog.addEventListener('close',()=>{dialog.remove();if(origin?.isConnected)origin.focus();},{once:true});
+  document.body.appendChild(dialog);
+  dialog.showModal();
+}
+
+function crBindCostDetails() {
+  document.querySelectorAll('[data-cr-cost-detail]').forEach(row=>{
+    row.onclick = event=>{
+      if (event.target.closest('button,a,input,summary,details')) return;
+      crOpenCostDetail(row.dataset.crCostDetail,row);
+    };
+    row.onkeydown = event=>{
+      if (event.target!==row || !['Enter',' '].includes(event.key)) return;
+      event.preventDefault();crOpenCostDetail(row.dataset.crCostDetail,row);
+    };
+  });
 }
 
 function crRenderAssembly() {
@@ -787,6 +856,7 @@ function crRender() {
   document.querySelectorAll('[data-cr-part]').forEach(button => {
     button.onclick = () => crRunPart(button.dataset.crPart, Number(button.dataset.crQty) || 1);
   });
+  crBindCostDetails();
   const counts = crData?.counts || {};
   $cr('crState').textContent = `零件 ${counts.parts_costed || 0}/${counts.parts || 0}`
     + ` · 整机 ${counts.assembly_costed ? '✓' : '—'}`
@@ -1402,7 +1472,7 @@ async function crStart() {
     crData = await crReadCostData();
     $cr('crNote').value = crData.review?.note || '';
     $cr('crQuantity').value = crData.packaging_cost ? (crData.quote_quantity ?? '') : crData.quantity || 1;
-    crTab = crData.ready ? 'total' : (crData.counts?.missing || []).length ? 'parts' : 'assembly';
+    crTab = crRequestedView || (crData.ready ? 'total' : (crData.counts?.missing || []).length ? 'parts' : 'assembly');
     crRender();
     // Cost data is already visible; conversation replay must not block page readiness.
     void crReplayTimeline();

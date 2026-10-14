@@ -139,13 +139,14 @@ button.onclick().then(()=>console.log(JSON.stringify({events,sent:globalThis.sen
         script+=js_function(ROOT/'tech_app/frontend/assembly-integration.js','aiRenderPackagingLayout')+'\n'
         script+=r'''
 document.getElementById('fixture').innerHTML=aiRenderPackagingLayout();
+const controlTops=[...document.querySelectorAll('.ai-layout-controls summary, [data-ai-layout-save]')].map(n=>n.getBoundingClientRect().top);
 document.querySelector('.ai-layout-association-bar details').open=true;
 setTimeout(()=>{
  const checkboxes=[...document.querySelectorAll('input[type=checkbox]')].map(n=>n.getBoundingClientRect().width);
  const numbers=[...document.querySelectorAll('input[type=number]')].map(n=>n.getBoundingClientRect().width);
  const fixture=document.getElementById('fixture');
  const overflow=fixture.scrollWidth>fixture.clientWidth;
- document.getElementById('probe').textContent=JSON.stringify({checkboxes,numbers,overflow,fixtureWidth:fixture.getBoundingClientRect().width});
+ document.getElementById('probe').textContent=JSON.stringify({checkboxes,numbers,overflow,controlTops,fixtureWidth:fixture.getBoundingClientRect().width});
 },100);
 '''
         css='\n'.join((ROOT/'tech_app/frontend'/f).read_text() for f in ('workbench.css','inline-analysis.css','assembly-integration.css'))
@@ -166,6 +167,9 @@ setTimeout(()=>{
                 metrics=json.loads(match.group(1))
                 self.assertEqual(width-24,metrics['fixtureWidth'],metrics)
                 self.assertFalse(metrics['overflow'],metrics)
+                if width==640:
+                    self.assertEqual(3,len(metrics['controlTops']),metrics)
+                    self.assertLessEqual(max(metrics['controlTops'])-min(metrics['controlTops']),1,metrics)
                 self.assertTrue(metrics['checkboxes'])
                 self.assertTrue(all(12<=w<=16 for w in metrics['checkboxes']),metrics)
                 self.assertTrue(all(60<=w<=120 for w in metrics['numbers']),metrics)

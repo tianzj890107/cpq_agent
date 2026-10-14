@@ -45,6 +45,31 @@ def _owner_part_code(code, codes, item):
     return head if head and head in codes else ''
 
 
+def _calculation_evidence(item, amount_with_loss, quantity):
+    """只投影同一公式账的依据，不执行公式、不查新的价格。"""
+    from .packaging_cost import COST_CATEGORIES
+    raw = item.get('inputs_json')
+    try:
+        inputs = json.loads(raw) if isinstance(raw, str) and raw else (raw or {})
+        if not isinstance(inputs, dict):
+            raise ValueError('inputs_not_object')
+        inputs_error = ''
+    except (TypeError, ValueError):
+        inputs, inputs_error = {}, '历史输入参数无法读取'
+    detail = {key: item.get(key) for key in (
+        'seq', 'part_code', 'part_name', 'cost_category', 'formula_code', 'formula_version',
+        'expression', 'amount', 'loss_rate', 'source_ref', 'source', 'note',
+        'rate_code', 'content_code', 'unit', 'unit_price', 'quantity_basis')}
+    detail.update(category='material' if item.get('cost_category') == 'material' else 'processing',
+                  category_label=dict(COST_CATEGORIES).get(item.get('cost_category'), item.get('cost_category') or '费用'),
+                  inputs=inputs, inputs_error=inputs_error,
+                  amount_with_loss=amount_with_loss, quantity_divisor=quantity,
+                  unit_amount=amount_with_loss / quantity if amount_with_loss is not None else None,
+                  min_charge_applied=bool(item.get('min_charge_applied')),
+                  assumptions=item.get('assumptions') or [])
+    return detail
+
+
 def project(doc, ledger):
     from . import packaging_cost
     from . import packaging_layout
@@ -103,10 +128,12 @@ def project(doc, ledger):
         quantity = quantity if valid_quantity else 1
         values = dict.fromkeys(KEYS, 0.0)
         items = grouped.get(code, [])
+        calculation_details = []
         valid = bool(items) and valid_quantity
         for item in items:
             amount = _number(item.get('amount'))
             if amount is None:
+                calculation_details.append(_calculation_evidence(item, None, quantity))
                 errors.append('invalid_amount:' + code)
                 valid = False
                 continue
@@ -114,6 +141,7 @@ def project(doc, ledger):
             amount = packaging_cost.apply_loss(amount, item.get('loss_rate'), category=category,
                 loss_base_scope=ledger.get('loss_base_scope') or packaging_cost.DEFAULT_LOSS_BASE_SCOPE)
             if _number(amount) is None:
+                calculation_details.append(_calculation_evidence(item, None, quantity))
                 errors.append('invalid_loss:' + code)
                 valid = False
                 continue
@@ -121,6 +149,7 @@ def project(doc, ledger):
                    category if category in ('material', 'labor', 'packaging', 'freight', 'other')
                    else 'processing')
             values[key] += amount
+            calculation_details.append(_calculation_evidence(item, amount, quantity))
         if not valid_quantity:
             errors.append('invalid_usage:' + code)
         for key in KEYS:
@@ -132,6 +161,7 @@ def project(doc, ledger):
             'estimate_id': ledger.get('estimate_id'), 'item_count': len(items),
             'breakdown': _breakdown({key: value / quantity for key, value in values.items()}),
             'unit_cost': subtotal / quantity, 'subtotal': subtotal, 'items': items,
+            'calculation_details': calculation_details,
             'summary': '单件与整单来自同一份公式成本明细', 'open_questions': int(not valid)})
     project_values = {key: totals[key] - allocated[key] for key in KEYS}
     if any(value < -.00001 for value in project_values.values()):

@@ -317,6 +317,9 @@
       return;
     }
     Promise.resolve(bridge.navigateView(view, {})).then(() => {
+      const next = new URL(location.href);
+      next.searchParams.set('view', view);
+      history.replaceState(history.state, '', next.href);
       setBoardNotice('');
       syncChildTabActive(CHILD_TAB_PROXY[state.stage] || null);
     }).catch((error) => {

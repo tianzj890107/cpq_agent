@@ -31,6 +31,7 @@ class SequentialTests(unittest.TestCase):
         from tests.test_packaging_whole_part_process_unit_red import js_function
         script=r'''
 let crPid='P',crTaskId='',crUser,crData,crTab='parts';
+const crRequestedView='';
 const events=[],nodes={};
 const $cr=id=>nodes[id]||(nodes[id]={});
 const crBind=()=>{},crLoadModelLabel=()=>{},crUrl=()=>'/cost-review';
