@@ -84,6 +84,16 @@ if(JSON.stringify(row)!==original)throw Error('Changed stored inputs');
         p=subprocess.run(['node','-e',script],capture_output=True,text=True)
         self.assertEqual(p.returncode,0,p.stderr)
 
+    def test_live_extra_fields_are_named_and_unit_slash_is_not_operator(self):
+        fn='function crCostDetailHtml'+JS.split('function crCostDetailHtml',1)[1].split('function crOpenCostDetail',1)[0]
+        script="const esc=x=>String(x??'');const crMoney=x=>String(x);const crData={};"+fn+r'''
+const html=crCostDetailHtml({quantity:1,has_cost:true,calculation_details:[{category:'material',expression:'film_kg_price/quote_quantity',inputs:{cut_size_source:'legacy_allowance_0_5mm',cut_allowance_mm:[0,5],price_unit:'元/吨',price_unit_status:'poc_mock',loss_rate_source:'material.standard_loss_rate',mock:true,standard_seconds:30,section_id:'S1',parameter_source:'part_route_parameters',film_kg_price:10}}]});
+if(html.includes('未命名参数')||html.includes('元 ÷ 千克')||!html.includes('膜重价（元/千克） ÷ 报价批量'))throw Error('Wrong unit or unnamed live fields');
+for(const key of ['legacy_allowance_0_5mm','standard_loss_rate','part_route_parameters'])if(html.includes(key))throw Error('Source enum untranslated');
+'''
+        p=subprocess.run(['node','-e',script],capture_output=True,text=True)
+        self.assertEqual(p.returncode,0,p.stderr)
+
     def test_real_browser_row_dialog_and_recalculate_event_separation(self):
         chrome=pathlib.Path('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')
         if not chrome.exists():self.skipTest('Chrome unavailable')

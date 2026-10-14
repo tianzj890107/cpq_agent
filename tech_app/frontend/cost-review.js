@@ -546,6 +546,9 @@ function crCostDetailHtml(row) {
     gsm_source:'克重来源',material_code:'物料编码',rate_code:'费率编号',source:'来源',source_ref:'来源依据',
     formula_code:'公式编号',formula_version:'公式版本',value:'取值',note:'说明',reason:'原因',quantity:'数量',unit:'单位',
     amount:'金额',loss_rate:'损耗率',part_code:'零件编号',part_codes:'关联零件',scope:'费用范围',
+    cut_size_source:'开料尺寸来源',cut_allowance_mm:'开料长/宽余量（毫米）',price_unit:'材料价格单位',price_unit_status:'价格单位依据',
+    loss_rate_source:'损耗率来源',mock:'模拟参考数据',standard_seconds:'标准工时（秒）',section_id:'组成编号',
+    parameter_source:'工艺参数来源',standard_loss_rate:'标准损耗率',kb_cost_factor:'知识库成本系数',
     sheet_area:'纸张面积',rate:'费率',allocation:'费用分摊',part_area:'零件面积',total_area:'总展开面积'};
   const functions = {MIN:'取最小值',MAX:'MAX',IF:'条件选择',IFERROR:'异常回退',ROUND:'四舍五入'};
   const words = {kb:'知识库',mock:'模拟参考',poc_mock:'模拟参考',POC:'原型验证',demo:'演示参考',
@@ -556,6 +559,7 @@ function crCostDetailHtml(row) {
     transfer_film:'覆转移膜',silk_screen:'丝印',varnish:'过光油',anti_scratch:'防刮花处理',
     pet_oil:'环保吸塑油',visidi_uv:'视高迪紫外处理',texture:'压纹',emboss_deboss:'击凹凸',
     folding:'折页装订',auto_mount:'机贴盒',double_tape:'双面胶',other:'其他',
+    legacy_allowance_0_5mm:'旧版长余量0毫米、宽余量5毫米',demo_process_parameters:'模拟工序参数',part_route_parameters:'零件工艺参数',
     material_price:'材料单价',gsm_source:'克重来源',kg:'千克',mm:'毫米',CNY:'人民币'};
   const knownText = (value, extra={}) => String(value ?? '').replace(/\b[A-Za-z_][A-Za-z0-9_]*\b/g,
     word => extra[word] || labels[word] || words[word] || word);
@@ -583,8 +587,8 @@ function crCostDetailHtml(row) {
       const unnamed = new Map();
       const name = key => dictionary[key] || (unnamed.has(key) ? unnamed.get(key) : (unnamed.set(key,`未命名参数${unnamed.size+1}`),unnamed.get(key)));
       const formula = String(item.expression || '历史明细未保存公式表达式')
-        .replace(/\b[A-Za-z_][A-Za-z0-9_]*\b/g,word=>functions[word.toUpperCase()] || name(word))
-        .replace(/\*/g,' × ').replace(/\//g,' ÷ ');
+        .replace(/\*/g,' × ').replace(/\//g,' ÷ ')
+        .replace(/\b[A-Za-z_][A-Za-z0-9_]*\b/g,word=>functions[word.toUpperCase()] || name(word));
       html += `<details class="cr-calculation-item" open><summary>${index+1}. ${esc(knownText(item.category_label || item.cost_category || (category==='material'?'材料':'实际加工')))} · ${esc(item.part_name || '明细')} · ${precise(item.unit_amount)} 元/件</summary>`
         + `<div class="inline-row"><b>公式</b><code>${esc(formula)}</code></div>`
         + `<div class="inline-hint">公式编号：${esc(item.formula_code || '未保存')} · 版本：${esc(item.formula_version || '未保存')}</div>`;
