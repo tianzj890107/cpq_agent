@@ -171,7 +171,7 @@ class CPanelStepScoped(unittest.TestCase):
     def test_c1_executable_visibility_rule(self):
         script = (
             fn_src("packagingQuotePanelStepVisible") + "\n"
-            "for(const [n,want] of [[1,false],[2,false],[3,true],[4,true],[5,true],[6,false]]){"
+            "for(const [n,want] of [[1,false],[2,false],[3,false],[4,false],[5,false],[6,false]]){"
             "const got=packagingQuotePanelStepVisible(n);"
             "if(got!==want)throw new Error('第 '+n+' 步期望 '+want+' 实得 '+got);}\n"
         )
@@ -184,9 +184,11 @@ class CPanelStepScoped(unittest.TestCase):
                       "showStep() 必须按该判据切换 `#packagingQuotePanel` 的可见性")
 
     def test_c3_pricing_inputs_are_kept(self):
-        text = html_text()
-        for token in ("packagingMarginInput", "packagingRepriceBtn", "renderCard"):
-            self.assertIn(token, text, "护栏：包装定价入口不许被撤掉（缺 %s）" % token)
+        text = html_text() + (ROOT/'tech_app/frontend/packaging-quote-workspace.js').read_text()
+        # 新Spec quote-industry-fields-without-extra-cards：入口迁入已有字段，不再保留额外面板。
+        for token in ('毛利率（%）','data-packaging-reprice','repricePackagingWorkspace'):
+            if token=='data-packaging-reprice':token='dataset.packagingReprice'
+            self.assertIn(token, text, "定价入口迁移不能丢失（缺 %s）" % token)
 
 
 # --------------------------------------------------------------------------- #
@@ -249,8 +251,8 @@ class EBackEndUntouched(unittest.TestCase):
 
     def test_e3_card_still_wires_the_pricing_panel(self):
         text = html_text()
-        self.assertIn("packaging-quote-panel.js", text, "卡片仍必须引用包装定价面板")
-        self.assertIn("PackagingQuotePanel", text, "卡片仍必须真的调 PackagingQuotePanel")
+        self.assertIn("packaging-quote-workspace.js", text)
+        self.assertIn("/wf/card/pricing-save", text)
 
 
 if __name__ == "__main__":

@@ -145,7 +145,7 @@ def quote_step_completion_gate(step_no, data, *, quote_fingerprint: str = "",
         if not valid_quote:
             blockers.append(_gate_blocker(
                 "packaging_quote_missing", "包装定价结果尚未生成，不能完成本步。",
-                "在包装定价面板输入明确的毛利率并重算，核对来源与缺口后再确认。",
+                "在第3步定价规则填写明确毛利率并保存重算，核对来源与缺口后再确认。",
                 fixable_by_fill=False))
         elif step == 6 and (packaging_quote.get("draft") or packaging_quote.get("publish_blocked")
                             or packaging_quote.get("gap_count")
@@ -161,6 +161,11 @@ def quote_step_completion_gate(step_no, data, *, quote_fingerprint: str = "",
                 "包装材料成本为零或成本仍是暂定状态，不能生成正式报价单。",
                 "回技术工艺核对材料单价、用量及成本确认状态。",
                 fixable_by_fill=False))
+        if valid_quote and packaging_quote.get('source_cost_fingerprint'):
+            from cpq_quote_workspace import cost_fingerprint
+            if packaging_quote['source_cost_fingerprint']!=cost_fingerprint(package):
+                blockers.append(_gate_blocker('packaging_quote_stale','成本版本已变化，原定价不可继续使用。',
+                    '在原定价规则或加价规则保存并重算。',fixable_by_fill=False))
         head = blockers[0] if blockers else {}
         return {"ok": not blockers, "step_no": step,
                 "code": head.get("code", ""),

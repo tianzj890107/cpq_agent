@@ -498,7 +498,9 @@ def fixed_forms_catalog(industry=None) -> list:
             # （行数据在场时一律以「行的键是否与表头对齐」为准，与行业无关）。
             entry["techparams_switched"] = entry["techparams_source"] != _DA_PRODUCT_SOURCE
             entry["industry"] = quote_industry_templates.normalize(industry)
-        out.append(entry)
+        from cpq_quote_workspace import catalog_entry
+        entry=catalog_entry(entry,quote_industry_templates.normalize(industry))
+        if entry is not None:out.append(entry)
     out.sort(key=lambda x: (x["step"], x.pop("_ord")))
     return out
 
@@ -1223,6 +1225,18 @@ _PRODUCT_SOURCES: dict = {
 _PACKAGING_BOX_COLUMNS = (
     ("box_type_code", "盒型编码"),
     ("name", "盒型名称"),
+    ("inner_length", "成品内长（mm）"),
+    ("inner_width", "成品内宽（mm）"),
+    ("inner_height", "成品内高（mm）"),
+    ("material", "材料"),
+    ("grey_board", "灰板"),
+    ("face_paper", "面纸"),
+    ("lining_paper", "里纸"),
+    ("insert_type", "内衬类型"),
+    ("magnetic", "磁吸"),
+    ("collapsible", "可折叠"),
+    ("lamination", "覆膜"),
+    ("hot_stamping", "烫金"),
     ("family", "盒型族"),
     ("size_l_min", "内长下限（mm）"),
     ("size_l_max", "内长上限（mm）"),

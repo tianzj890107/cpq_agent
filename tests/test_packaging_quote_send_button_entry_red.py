@@ -130,7 +130,8 @@ class BGuards(unittest.TestCase):
         self.assertIn("snapshot.packaging_package", text,
                       "面板仍必须只认快照里的 `packaging_package`，不许自己兜底造一份（Spec §2.6）")
         for page in ROOT_PAGES:
-            self.assertIn("packaging-quote-panel.js", text_of(ROOT / page),
+            script='packaging-quote-workspace.js' if page=='确认需求解析结果.html' else 'packaging-quote-panel.js'
+            self.assertIn(script, text_of(ROOT / page),
                           "%s 必须仍加载面板脚本（Spec §2.6）" % page)
 
 

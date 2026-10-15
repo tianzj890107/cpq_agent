@@ -195,10 +195,9 @@ class BCardVisibility(unittest.TestCase):
 
     def test_b2_quote_page_references_the_packaging_panel(self):
         html = QUOTE_HTML.read_text(encoding="utf-8")
-        self.assertIn("packaging-quote-panel.js", html,
-                      "报价页必须引用包装报价面板（Spec §1.2 / §3.2）")
-        self.assertIn("PackagingQuotePanel", html,
-                      "报价页必须真的调 PackagingQuotePanel（Spec §3.2）")
+        # 新Spec quote-industry-fields-without-extra-cards：保留引擎，改用共用字段适配。
+        self.assertIn("packaging-quote-workspace.js", html)
+        self.assertIn("/wf/card/pricing-save", html)
 
     def test_b3_panel_price_endpoint_is_injectable(self):
         source = PANEL_JS.read_text(encoding="utf-8")

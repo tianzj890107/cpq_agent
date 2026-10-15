@@ -1240,6 +1240,7 @@ def packaging_snapshot(result: dict) -> dict:
             '币种':fields['currency'],'成本结果版本':fields['cost_result_version'],
             '成本指纹':fields['cost_fingerprint'],'缺口数':fields['gap_count'],
             '成本状态':fields['cost_status'],'成本档位':fields['cost_profile']}
+    from cpq_quote_workspace import product_cost_fields,technical_fields,cost_fingerprint
     return {
         "s2_products": {"kind": "table", "title": "包装产品信息", "数据": [{
             "产品系列": "包装", "产品型号": box_code, "成品编码": (result.get('material') or {}).get('number') or box_code,
@@ -1250,7 +1251,10 @@ def packaging_snapshot(result: dict) -> dict:
             "成本指纹":fields['cost_fingerprint'],"成本状态":fields['cost_status'],
             "成本结果版本": source.get("result_version") or package.get("result_version") or "",
             "成本有缺口": bool(cost.get("has_gaps") or gaps),
+            **product_cost_fields(package),
         }]},
+        "s2_techparams": {"kind":"table","title":"产品技术参数（沿用·仅确认）","数据":[technical_fields(package)]},
+        "packaging_cost_fingerprint":cost_fingerprint(package),
         "s2_packaging": {"kind": "packaging", "title": "包装：盒型与参数",
                          "数据": [packaging_row]},
         "s2_packaging_cost": {"kind": "packaging", "title": "包装：成本构成",
@@ -1274,6 +1278,11 @@ def _merge_report_snapshot(snapshot: dict, report: dict) -> dict:
         "结论": report.get("conclusion") or "",
         "报告链接": report.get("report_url") or "",
     }]}
+    if merged.get('packaging_package'):
+        import copy
+        merged['s2_products']=copy.deepcopy(merged.get('s2_products') or {})
+        for row in merged['s2_products'].get('数据') or []:
+            row.update({'工艺报告编号':report.get('report_no') or '', '工艺报告版本':report.get('version') or ''})
     return merged
 
 

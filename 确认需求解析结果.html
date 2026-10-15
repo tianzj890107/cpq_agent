@@ -1016,9 +1016,8 @@
        同源相对路径：8010 根上没有这个文件时会按既有规则转发给 tech_app 前端。 -->
   <script src="/file-policy.js?v=20261015-1"></script>
   <script src="quick-quote-panel.js?v=20261015-files1"></script>
-  <!-- 包装报价面板（Spec packaging-quote-draft-and-card-visibility §3.2）：图纸项目回传的整包
-       （快照里的 packaging_package）由它定价，并渲染第 3–5 步四段分区（草稿/正式的分界在服务端）。 -->
-  <script src="packaging-quote-panel.js?v=pqp1"></script>
+  <!-- 行业仅决定字段；包装使用共用报价分区，读取不触发定价。 -->
+  <script src="packaging-quote-workspace.js?v=20261015-fields1"></script>
   <script>
     /* 快速报价工作区的页面级入口（Spec 批 3 §2.6）：容器 + 展开/收起。
        只做搬运：rows 由后端工作区（diff_table）给，金额与单位都已在行里排好版；
@@ -1898,6 +1897,9 @@
     function saveStepEdits() {
       if (busy) return;
       const n = shownStep;
+      if(currentIndustry()==='packaging' && LAST_PACKAGING_PACKAGE && n>=3 && n<=5){
+        repricePackagingWorkspace(n);return;
+      }
       const data = collectStepData(n);
       const stepName = STEPS[n - 1];
       // 唯一 turn helper（隔离执行时退回底层气泡原语）：保存修改也是用户主动触发的新回合。
@@ -1933,7 +1935,7 @@
       sec.step = ui.step;
       sec.title = ui.title || sec.title || ui.section_id;
       // 右侧一律可编辑：用户可点击任意分区修改（含系统计算项）
-      sec.editable = true;
+      sec.editable = (typeof currentIndustry==='function' && currentIndustry()==='packaging') ? ui.editable!==false : true;
       if (ui.status) sec.status = ui.status;
       if (ui.source) sec.source = ui.source;
       const seq = [...sections.values()].filter(s => s.step === ui.step).indexOf(sec) + 1;
@@ -1941,7 +1943,7 @@
         `<div class="collapse-header" onclick="this.parentElement.classList.toggle('open')">
           <div class="collapse-title">
             <span class="num">${seq}</span>${escapeHtml(sec.title)}
-            ${ui.editable === false ? '<span class="readonly-chip">系统计算·可改</span>' : ''}
+            ${ui.editable === false ? '<span class="readonly-chip">'+(currentIndustry()==='packaging'?'系统计算':'系统计算·可改')+'</span>' : ''}
             ${statusChipHtml(sec.status)}
           </div>
           <i class="ti ti-chevron-down collapse-arrow"></i>
@@ -2224,12 +2226,13 @@
       const sec = sectionShell(ui);
       sec.kind = 'table';
       sec.columns = techParamsColumnsOf(ui) || ui.columns || [];
+      sec.fixedRows=currentIndustry()==='packaging' && ['s3_markup','s4_markup'].includes(ui.section_id);
       const content = sec.el.querySelector('.collapse-content');
       const table = document.createElement('table');
       table.className = 'list-table';
       const thead = document.createElement('thead');
       thead.innerHTML = '<tr>' + sec.columns.map(c => `<th>${escapeHtml(c.label)}</th>`).join('') +
-        (sec.editable ? '<th>操作</th>' : '') + '</tr>';
+        (sec.editable && !sec.fixedRows ? '<th>操作</th>' : '') + '</tr>';
       table.appendChild(thead);
       const tbody = document.createElement('tbody');
       for (const row of (ui.rows || [])) tbody.appendChild(makeTableRow(sec, row));
@@ -2239,9 +2242,9 @@
       const toolbar = document.createElement('div');
       toolbar.className = 'list-toolbar';
       toolbar.innerHTML =
-        (sec.editable ? '<a class="list-add-link" href="javascript:;"><i class="ti ti-plus"></i>新增</a>' : '<span></span>') +
+        (sec.editable && !sec.fixedRows ? '<a class="list-add-link" href="javascript:;"><i class="ti ti-plus"></i>新增</a>' : '<span></span>') +
         `<span class="list-footer-info">共 <span class="count">${(ui.rows || []).length}</span> 条</span>`;
-      if (sec.editable) {
+      if (sec.editable && !sec.fixedRows) {
         toolbar.querySelector('.list-add-link').onclick = () => {
           const blank = {};
           sec.columns.forEach(c => blank[c.key] = '');
@@ -2250,6 +2253,12 @@
         };
       }
       content.appendChild(toolbar);
+      if(currentIndustry()==='packaging' && ['s3_markup','s4_markup','s5_detail'].includes(ui.section_id)){
+        const button=document.createElement('button');button.type='button';button.className='btn btn-secondary';
+        button.textContent='保存并重算';button.dataset.packagingReprice=String(sec.step);
+        button.onclick=()=>repricePackagingWorkspace(sec.step);toolbar.prepend(button);
+        content.addEventListener('input',()=>{PACKAGING_PRICING_DIRTY=true;PACKAGING_PRICING_REQUEST++;});
+      }
       if (ui.footer) {
         const note = document.createElement('div');
         note.className = 'table-footer-note';
@@ -2266,7 +2275,7 @@
         const td = document.createElement('td');
         const val = row[c.key] == null ? '' : String(row[c.key]);
         const reco = recoCols.includes(c.key);
-        if (sec.editable && !readonlyCols.includes(c.key)) {
+        if (sec.editable && !c.readonly && !readonlyCols.includes(c.key)) {
           const input = document.createElement('input');
           input.value = val;
           input.dataset.key = c.key;
@@ -2280,7 +2289,7 @@
         }
         tr.appendChild(td);
       }
-      if (sec.editable) {
+      if (sec.editable && !sec.fixedRows) {
         const td = document.createElement('td');
         td.innerHTML = '<button class="btn-delete"><i class="ti ti-trash"></i></button>';
         td.querySelector('button').onclick = () => {
@@ -2806,6 +2815,7 @@
 
     function applyUiEvent(ui) {
       try {
+        if(cardSnapshotSectionSkipped(ui.section_id,currentIndustry()))return;
         if (ui.action === 'set_step') { setStep(ui.step); return; }
         if (ui.action === 'chat_candidates') { renderCandidates(ui); return; }
         if (ui.action === 'focus_section') {
@@ -3374,8 +3384,10 @@
         if (currentIndustry() === 'packaging' && currentStep >= 3) {
           // Restore the latest saved pricing, not only step 2's unpriced cost package.
           for (let n = Math.min(currentStep, 5); n >= 2; n--) {
+            const restoreSession=currentSessionId,restoreRevision=PACKAGING_PRICING_REQUEST;
             const saved = await wfApi('/wf/card/step-data?session_id=' +
               encodeURIComponent(currentSessionId) + '&step_no=' + n);
+            if(currentSessionId!==restoreSession || PACKAGING_PRICING_REQUEST!==restoreRevision)break;
             if (saved && saved.data && saved.data.packaging_package) {
               await renderPackagingQuotePanel(saved.data);
               if (saved.data.packaging_quote || n === 2) break;
@@ -4147,6 +4159,10 @@
           }
         }
         payload = data || collectStepData(n);
+        if(LAST_PACKAGING_PACKAGE && n>=3 && PACKAGING_PRICING_DIRTY){
+          const verdict={ok:false,code:'pricing_requires_recalculation',message:'报价参数或成本已变化，请在本步保存并重算后继续。',blocking:[],action:'在定价规则、加价规则或报价明细点击保存并重算。'};
+          STEP_GATE_VERDICTS[n]=verdict;return verdict;
+        }
         if (LAST_PACKAGING_PACKAGE && n >= 3) {
           payload = Object.assign({}, payload, {
             packaging_package: LAST_PACKAGING_PACKAGE,
@@ -4336,6 +4352,10 @@
     let LAST_PACKAGING_QUOTE = null;
     let LAST_PACKAGING_PACKAGE = null;
     let PACKAGING_RESTORED_RATE = null;
+    let PACKAGING_COST_FINGERPRINT = '';
+    let PACKAGING_PRICING_DIRTY = false;
+    let PACKAGING_PRICING_REQUEST = 0;
+    let PACKAGING_COMMERCIAL_QUOTE = null;
 
     function restorePackagingPricing(snap) {
       const q = snap && snap.packaging_quote;
@@ -4363,26 +4383,16 @@
 
     function applyPackagingQuoteRows(quote) {
       if (!quote || !LAST_PACKAGING_PACKAGE) return;
-      const req = LAST_PACKAGING_PACKAGE.requirement || {};
-      const row = {
-        '产品系列': '包装', '产品型号': quote.box_type_code, '成品编码': quote.box_type_code,
-        '成品描述': quote.product_name || req.packaging_product_name || req.title || '',
-        '数量': quote.quote_quantity, '币种': quote.currency,
-        '基础成本': quote.cost_total, '价格': quote.untaxed_unit_price,
-        '利润加成': quote.margin_price - quote.cost_total, '其他加价': quote.addon_total,
-        '报价': quote.subtotal_unit ?? quote.untaxed_unit_price,
-        '折扣': 1 - (quote.discount_rate ?? 0),
-        '折后价格': quote.net_unit_price ?? quote.untaxed_unit_price,
-        '总金额': quote.untaxed_total, '税率': quote.tax_rate,
-        '税金': quote.taxed_total - quote.untaxed_total,
-        '成本状态': quote.draft ? '暂估（缺口草稿）' : '完整',
-        '成本结果版本': quote.source_result_version || '',
-        ...packagingQuoteDetailValues(quote),
-      };
+      const row = {...window.PackagingQuoteWorkspace.project(LAST_PACKAGING_PACKAGE,quote).s2_products[0],
+        ...packagingQuoteDetailValues(quote)};
       for (const id of ['s1_products', 's2_products', 's3_products', 's4_products', 's5_detail']) {
         const f = FORMS.find(x => x.section_id === id);
+        const old=extractSectionRows(id);
+        const index=old.length===1?0:old.findIndex(x=>x['成品编码']===row['成品编码']);
+        if(old.length>1 && index<0)continue;
+        const rows=old.length?old.map((r,i)=>i===index?{...r,...row,'成品编码':r['成品编码']||row['成品编码']}:r):[row];
         if (f) renderTableSection({action: 'render_table', section_id: id, step: f.step,
-          title: f.title, columns: f.columns || [], editable: f.editable, rows: [row]});
+          title: f.title, columns: f.columns || [], editable: f.editable, rows});
       }
     }
 
@@ -4413,8 +4423,7 @@
     /* 包装定价块的可见步骤（Spec `packaging-quote-card-sales-view-parity.md` C3）：毛利率输入与
        s3/s4/s5 定价分区只属于第 3–5 步；其余步骤与三行业一致保持隐藏，不再常驻结果区末尾。 */
     function packagingQuotePanelStepVisible(step) {
-      const n = Number(step) || 0;
-      return n >= 3 && n <= 5;
+      return false; // 旧入口兼容；不再创建独立行业卡片。
     }
 
     /* 零件/几何段判定（Spec `packaging-quote-card-sales-view-parity.md` C2）：包装卡片里的
@@ -4422,7 +4431,7 @@
        （那些行业没有这一段，规则也不替它们做决定）。 */
     function cardSnapshotSectionSkipped(sectionId, industry) {
       if (String(industry || '') !== 'packaging') return false;
-      return String(sectionId || '') === 'packaging_parts';
+      return ['packaging_parts','s2_packaging','s2_packaging_cost','s2_report'].includes(String(sectionId||''));
     }
 
     function packagingAddonDefinitions() {
@@ -4443,86 +4452,58 @@
     }
 
     async function renderPackagingQuotePanel(snap) {
-      const pricingSession = currentSessionId;
       const pkg = snap && snap.packaging_package;
-      if (!pkg || !window.PackagingQuotePanel) return null;
+      if (!pkg || !window.PackagingQuoteWorkspace) return null;
+      const previous=LAST_PACKAGING_QUOTE || PACKAGING_COMMERCIAL_QUOTE;
+      const changed=PACKAGING_COST_FINGERPRINT && snap.packaging_cost_fingerprint && PACKAGING_COST_FINGERPRINT!==snap.packaging_cost_fingerprint;
       LAST_PACKAGING_PACKAGE = pkg;
+      if(snap.packaging_cost_fingerprint)PACKAGING_COST_FINGERPRINT=snap.packaging_cost_fingerprint;
       restorePackagingPricing(snap);
-      const addonValues=packagingAddonValues(snap);
-      // A saved snapshot owns its saved rate. An earlier unpriced panel may
-      // already contain an empty input; that must not erase restored pricing.
-      const rate = snap.packaging_quote && snap.packaging_quote.pricing_mode === 'gross_margin'
-        ? PACKAGING_RESTORED_RATE : packagingMarginRate();
-      const key = [((pkg.box_type || {}).confirmed_box_type || ''),
-                   ((pkg.source || {}).result_version || pkg.result_version || ''),
-                   ((pkg.cost || {}).total_cost === undefined ? '' : (pkg.cost || {}).total_cost),
-                   (rate === null ? '' : rate), JSON.stringify(addonValues)].join('|');
-      if (key === PACKAGING_PANEL_KEY && LAST_PACKAGING_QUOTE) {
-        applyPackagingQuoteRows(LAST_PACKAGING_QUOTE);
-        return null;
-      }
-      LAST_PACKAGING_QUOTE = null;
-      let host = document.getElementById('packagingQuotePanel');
-      if (!host) {
-        host = document.createElement('section');
-        host.id = 'packagingQuotePanel';
-        host.className = 'collapse-block open';
-        $('resultsContent').insertBefore(host, null);
-        host.style.display = packagingQuotePanelStepVisible(shownStep) ? '' : 'none';
-      }
-      host.innerHTML =
-        '<div class="collapse-header" onclick="this.parentElement.classList.toggle(\'open\')">' +
-          '<div class="collapse-title"><span class="num">包</span>包装：定价与报价分区' +
-          '<span class="readonly-chip" id="packagingPanelChip">系统计算</span></div>' +
-          '<i class="ti ti-chevron-down collapse-arrow"></i>' +
-        '</div><div class="collapse-content">' +
-          '<div class="packaging-pricing-controls"><label for="packagingMarginInput">毛利率（%）</label>' +
-          '<input id="packagingMarginInput" class="packaging-margin-input" type="number" min="0" max="99.99" step="0.01"' +
-          ' value="' + (rate === null ? '' : String((rate * 100).toFixed(2))) + '"' +
-          '>' +
-          '<button class="btn btn-secondary" type="button" id="packagingRepriceBtn">按此毛利率重算</button></div>' +
-          '<details class="collapse-block"'+(shownStep===4?' open':'')+'><summary class="collapse-header">其他加价 · 元/只</summary>'+
-          '<div class="collapse-content"><div class="empty-hint">独立人工和产品包材已计成本，不在此重复加；运输填写值替换原估算运费。留空沿用原值，填0表示不收取。</div>'+
-          packagingAddonDefinitions().map(([code,label])=>'<label class="form-label">'+label+
-            ' <input class="form-input" type="number" step="0.01" data-packaging-addon="'+code+'" value="'+
-            (Number.isFinite(addonValues[code])?String(addonValues[code]):'')+'" style="width:100px;max-width:100%;margin:4px 8px"></label>').join('')+
-          '</div></details>'+
-          '<div id="packagingQuoteContent"></div>' +
-        '</div>';
-      const reprice = document.getElementById('packagingRepriceBtn');
-      if (reprice) reprice.addEventListener('click', () => {
-        renderPackagingQuotePanel({ packaging_package: LAST_PACKAGING_PACKAGE });
-      });
-      const content = document.getElementById('packagingQuoteContent');
-      const options = { base: AGENT_URL };
-      if (rate === null) {
-        content.textContent = '请先输入明确的毛利率，再点“按此毛利率重算”；系统不会默认填入费率。';
-        return null;
-      }
-      options.pricing_mode = 'gross_margin';
-      options.gross_margin_rate = rate;
-      options.addons = addonValues;
-      try {
-        const result = await window.PackagingQuotePanel.renderCard(snap, content, options);
-        if (currentSessionId !== pricingSession) return null;
-        const quote = (result && result.quote) || {};
-        LAST_PACKAGING_QUOTE = Object.keys(quote).length ? quote : null;
-        if (LAST_PACKAGING_QUOTE) PACKAGING_PANEL_KEY = key;
-        if (LAST_PACKAGING_QUOTE) {
-          PACKAGING_RESTORED_RATE = LAST_PACKAGING_QUOTE.gross_margin_rate;
-          applyPackagingQuoteRows(LAST_PACKAGING_QUOTE);
+      const candidate=snap.packaging_quote || (!changed?LAST_PACKAGING_QUOTE:null);
+      const valid=window.PackagingQuoteWorkspace.quoteMatches(pkg,candidate) &&
+        (!candidate.source_cost_fingerprint || candidate.source_cost_fingerprint===PACKAGING_COST_FINGERPRINT);
+      LAST_PACKAGING_QUOTE=valid?candidate:null;
+      PACKAGING_COMMERCIAL_QUOTE=LAST_PACKAGING_QUOTE || snap.packaging_quote || previous;
+      if(changed){PACKAGING_PRICING_DIRTY=true;PACKAGING_PRICING_REQUEST++;}
+      const view=window.PackagingQuoteWorkspace.project(pkg,LAST_PACKAGING_QUOTE,PACKAGING_COMMERCIAL_QUOTE);
+      for(const id of ['s1_products','s2_products','s2_techparams','s3_products','s4_products','s3_markup','s4_markup']){
+        const f=FORMS.find(x=>x.section_id===id);if(!f)continue;
+        let rows=id.endsWith('_products')?view.s2_products:view[id];
+        if(id.endsWith('_products')){
+          const report=(snap.s2_report?.数据 || [])[0];
+          if(report)rows=rows.map(r=>({...r,'工艺报告编号':report['报告编号']??'','工艺报告版本':report['版本']??''}));
+          const old=extractSectionRows(id);if(old.length===1)rows=[{...old[0],...rows[0],'成品编码':old[0]['成品编码']||rows[0]['成品编码']}];
+          else if(old.length>1)continue;
         }
-        const chip = document.getElementById('packagingPanelChip');
-        if (chip) {
-          chip.textContent = quote.draft
-            ? '缺口草稿·不得对外发布（缺口 ' + (quote.gap_count || 0) + ' 项）'
-            : '可发布';
-        }
-        return result;
-      } catch (e) {
-        content.textContent = '包装定价失败：' + ((e && e.message) || e);
-        return null;
+        if(['s3_markup','s4_markup'].includes(id) && PACKAGING_PRICING_DIRTY && sections.has(id))continue;
+        renderTableSection({section_id:id,step:f.step,title:f.title,columns:f.columns,editable:f.editable,rows,
+          techparams_columns:f.techparams_columns,techparams_switched:f.techparams_switched,
+          footer:id==='s3_markup' && !LAST_PACKAGING_QUOTE?'填写毛利率后保存并重算；成本变化后需重新定价。':undefined});
       }
+      if(LAST_PACKAGING_QUOTE && !PACKAGING_PRICING_DIRTY)applyPackagingQuoteRows(LAST_PACKAGING_QUOTE);
+      return LAST_PACKAGING_QUOTE;
+    }
+
+    async function repricePackagingWorkspace(step) {
+      if(busy || !LAST_PACKAGING_PACKAGE)return false;
+      const session=currentSessionId, fingerprint=PACKAGING_COST_FINGERPRINT, request=++PACKAGING_PRICING_REQUEST;
+      const say=typeof beginUserTurn==='function'?beginUserTurn:addUserBubble;
+      say('保存并重算第 '+step+' 步报价。');
+      setBusy(true);
+      try{
+        const inputs=window.PackagingQuoteWorkspace.readInputs(extractSectionRows('s3_markup'),extractSectionRows('s4_markup'),
+          extractSectionRows('s5_detail')[0],LAST_PACKAGING_QUOTE||PACKAGING_COMMERCIAL_QUOTE,LAST_PACKAGING_PACKAGE);
+        if(step===5)inputs.basic_fields=(collectStepData(5).s5_basic||{}).数据 || {};
+        const result=await wfApi('/wf/card/pricing-save',{method:'POST',body:{session_id:session,step_no:step,cost_fingerprint:fingerprint,inputs}});
+        if(currentSessionId!==session || PACKAGING_COST_FINGERPRINT!==fingerprint || request!==PACKAGING_PRICING_REQUEST)return false;
+        if(!result.ok)throw Error(result.error||'定价保存失败');
+        PACKAGING_PRICING_DIRTY=false;
+        await renderPackagingQuotePanel(result.data);
+        s5BindLiveCalc();
+        addAiBubble('已保存报价计算结果；未推进步骤。'+(LAST_PACKAGING_QUOTE?.draft?'当前成本有缺口，仅供内部试算。':''));
+        return true;
+      }catch(error){addErrorBubble(error.message||String(error));return false;}
+      finally{if(currentSessionId===session)setBusy(false);}
     }
 
     /* 历史报价版本（Spec packaging-quote-version-persistence.md §2.3/§3.4）：
@@ -4547,10 +4528,10 @@
       let host = document.getElementById('packagingQuoteVersions');
       if (!list.length) { if (host) host.remove(); return false; }
       if (!host) {
-        host = document.createElement('section');
+        host = document.createElement('div');
         host.id = 'packagingQuoteVersions';
-        host.className = 'collapse-block open';
-        $('resultsContent').insertBefore(host, null);
+        host.className = 'drawer-body';
+        $('historyDrawer').insertBefore(host,$('historyList'));
       }
       const rows = list.map(v => {
         const draft = quoteVersionIsDraft(v);
@@ -4566,15 +4547,11 @@
       }).join('');
       const latestNo = latest && latest.version_no ? latest.version_no : '';
       host.innerHTML =
-        '<div class="collapse-header" onclick="this.parentElement.classList.toggle(\'open\')">' +
-          '<div class="collapse-title"><span class="num">版</span>报价版本（只增不改）' +
-          '<span class="readonly-chip">历史可查</span></div>' +
-          '<i class="ti ti-chevron-down collapse-arrow"></i>' +
-        '</div><div class="collapse-content">' +
+        '<div class="drawer-title">当前报价版本</div><div>' +
           '<div class="pkg-quote-empty" data-quote-version-latest="' +
             escapeHtml(String(latestNo)) + '">共 ' + list.length + ' 版' +
             (latestNo ? '，最新为 V' + escapeHtml(String(latestNo)) : '') +
-            '；点开任一版即可看到当次报价单内容。</div>' +
+            '；历史版本只读，不改变当前报价。</div>' +
           '<table class="list-table"><thead><tr>' +
             '<th>版本</th><th>时间</th><th>成本合计</th><th>未税单价</th><th>状态</th>' +
           '</tr></thead><tbody>' + rows + '</tbody></table>' +
@@ -4600,6 +4577,7 @@
 
     async function wfRestoreStepData(step) {
       if (!wfUser() || !currentSessionId || !FORMS.length) return false;
+      const restoreSession=currentSessionId,restoreRevision=PACKAGING_PRICING_REQUEST;
       let snap = null;
       let versions = null;
       let latest = null;
@@ -4610,6 +4588,7 @@
         versions = d && d.packaging_quote_versions;
         latest = d && d.latest_quote_version;
       } catch (e) { return false; }
+      if(currentSessionId!==restoreSession || PACKAGING_PRICING_REQUEST!==restoreRevision)return false;
       // 第 5 步：先把历史版本列表渲染出来（只读接口，失败不影响快照恢复）
       if (step === 5) { try { renderQuoteVersions(versions, latest); } catch (e) {} }
       if (!snap || typeof snap !== 'object') return false;
@@ -4892,7 +4871,7 @@
           await renderPackagingQuotePanel({ packaging_package: LAST_PACKAGING_PACKAGE,
             packaging_quote: LAST_PACKAGING_QUOTE });
         } else {
-          addErrorBubble('请先取得包装工艺与成本结果，再在包装定价面板填写加成参数。');
+          addErrorBubble('请先接收工艺与成本结果，再在第3步定价规则填写毛利率。');
         }
         return !!LAST_PACKAGING_QUOTE;
       }
@@ -5060,7 +5039,7 @@
     function s5RecalcRow(tr) {
       if (currentIndustry() === 'packaging' && LAST_PACKAGING_QUOTE) {
         const values = packagingQuoteDetailValues(LAST_PACKAGING_QUOTE);
-        Object.keys(values).forEach(key => _s5Set(tr, key, values[key]));
+        S5_DERIVED.forEach(key => _s5Set(tr, key, values[key]));
         return;
       }
       const quote = _numOf(_s5Get(tr, '报价'));
@@ -5086,12 +5065,12 @@
         if (tr.dataset.s5bound) return;
         tr.dataset.s5bound = '1';
         if (currentIndustry() === 'packaging' && LAST_PACKAGING_QUOTE) {
-          // 包装输入通过定价面板改后由引擎重算，不允许明细另算出第二套金额。
-          ['数量', '报价', '折扣', '税率'].forEach(key => {
+          // 报价由引擎生成；数量/折扣/税率仍在原明细表修改，再显式保存重算。
+          ['报价'].forEach(key => {
             const cell = _s5Cell(tr, key);
             if (cell && cell.tagName === 'INPUT') {
               cell.readOnly = true;
-              cell.title = '请在包装定价面板修改并重新定价';
+              cell.title = '由定价规则与其他加价计算，请修改对应字段后保存并重算';
             }
           });
         }
@@ -5161,7 +5140,7 @@
         const auto = {
           '报价单号': old5['报价单号'] || s5QuoteNo(),           // QUO+年月+3位流水
           '报价有效天数': '14',                                  // 默认 14 天
-          '币种': '人民币',                                      // 默认人民币
+          '币种': LAST_PACKAGING_QUOTE?.currency || src1['币种'] || '人民币',
           '报价联系人': (u.display_name || u.username || ''),    // 登录人姓名
           '申请日期': s5Today(),                                 // 默认当天
         };
@@ -5176,6 +5155,11 @@
             return { key: x.key, label: x.label, type: 'text', value: (v != null ? String(v) : '') };
           }),
         });
+      }
+      if(currentIndustry()==='packaging' && LAST_PACKAGING_QUOTE){
+        applyPackagingQuoteRows(LAST_PACKAGING_QUOTE);s5BindLiveCalc();
+        addAiBubble('报价方案已带入已保存的定价结果。数量、折扣、税率可在原字段修改，修改后点击“保存并重算”；金额由同一引擎生成。');
+        return true;
       }
       // ② 报价明细：逐产品一行，同名列直接抄 + 默认值 + 公式计算
       let rows = [];
@@ -5298,6 +5282,12 @@
       { agent: 'rule', label: '规则', base: peerBase('cpq:ruleAgentUrl', 'rule', 47296), page: '规则助手-规则配置.html', key: 'rule:openSession' },
     ];
     async function loadHistoryList() {
+      if(currentIndustry()==='packaging' && currentSessionId && wfUser()){
+        const session=currentSessionId;
+        wfApi('/wf/card/step-data?session_id='+encodeURIComponent(session)+'&step_no=5')
+          .then(data=>{if(currentSessionId===session)renderQuoteVersions(data.packaging_quote_versions,data.latest_quote_version);})
+          .catch(()=>{});
+      }
       const box = $('historyList');
       box.innerHTML = '<div class="hist-empty">加载中…</div>';
       const sessions = [];
@@ -5376,6 +5366,11 @@
       LAST_PACKAGING_QUOTE = null;
       PACKAGING_PANEL_KEY = '';
       PACKAGING_RESTORED_RATE = null;
+      PACKAGING_COST_FINGERPRINT = '';
+      PACKAGING_COMMERCIAL_QUOTE = null;
+      PACKAGING_PRICING_DIRTY = false;
+      PACKAGING_PRICING_REQUEST++;
+      renderQuoteVersions([],null);
       replaySession(data);
       // 以卡片为准纠正步骤（交接过来的卡片，会话 JSON 里的 step 可能还停在上一步），
       // 再按该步骤重算我的操作权限、决定是否询问「开始本步骤」
