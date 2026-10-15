@@ -3963,11 +3963,39 @@ def normalize_finance_handoff(payload, *, session_id: str = "") -> dict:
     return record
 
 
+def _gate_package_from_stored_handoff(payload: dict, session_id) -> dict:
+    """门禁判成本版本时，包只认落库的第 2 步交接包（Spec
+    `packaging-quote-gate-cost-fingerprint-authority.md` §2 C1/C3）。
+
+    浏览器回传的那份包在 `JSON.parse→JSON.stringify` 里走过一趟：`0.0` 会变成 `0`
+    （Python 的 `json.dumps` 写 `0.0`），同一份成本因此算出第二个指纹，预检就会把
+    正常报价误判成「成本版本已变化」——而写闸 `cpq_wf.complete_step` 用的是落库包、
+    不会报这条。这里把两处口径并成一处：**指纹只由落库包算**，负载里那份只在
+    读不到落库包时兜底。只读，不写任何表。
+    """
+    sid = str(session_id or "").strip()
+    if not sid or not isinstance(payload.get("packaging_package"), dict):
+        return payload
+    try:
+        import cpq_wf
+        source = cpq_wf.step_snapshot(sid, 2) or {}
+    except Exception:
+        # 读不到（连不上库 / 会话不存在 / 老卡没有第 2 步）→ 按调用方给的包判，不新增阻断。
+        return payload
+    stored = source.get("packaging_package") if isinstance(source, dict) else None
+    if not isinstance(stored, dict) or stored.get("industry") != "packaging":
+        return payload
+    merged = dict(payload)
+    merged["packaging_package"] = stored
+    return merged
+
+
 def _handle_quote_step_gate(data: dict) -> dict:
     """POST /api/quote/step-gate —— 第 3–6 步的完成门禁（只读：不写任何表）。"""
     body = data if isinstance(data, dict) else {}
+    payload = body.get("data") if isinstance(body.get("data"), dict) else {}
     return quote_step_completion_gate(
-        body.get("step_no"), body.get("data") if isinstance(body.get("data"), dict) else {},
+        body.get("step_no"), _gate_package_from_stored_handoff(payload, body.get("session_id")),
         quote_fingerprint=str(body.get("quote_fingerprint") or ""),
         detail_fingerprint=str(body.get("detail_fingerprint") or ""),
         business_case_id=str(body.get("business_case_id") or ""))
