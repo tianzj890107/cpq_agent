@@ -534,6 +534,18 @@
     .list-footer-info { font-size: 12px; color: var(--text-tertiary); }
     .list-footer-info .count { color: var(--text-secondary); font-weight: 500; }
     .table-footer-note { margin-top: 8px; font-size: 12px; color: var(--text-tertiary); }
+    /* 包装第 3 步的人工毛利率入口（Spec `packaging-quote-card-sales-view-parity.md` C3：
+       毛利率输入必须保留；`packaging-online-two-dwg-flow-closure-20260929.md`：
+       系统不会默认填入费率）。与「成本加成率」是两个口径，文案必须区分。 */
+    .packaging-pricing-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+    .packaging-pricing-controls .packaging-margin-input,
+    .packaging-pricing-controls .btn { height: 36px; border-radius: 10px; }
+    .packaging-pricing-controls .packaging-margin-input {
+      width: 120px; padding: 0 10px; font: inherit; color: var(--text-primary);
+      border: 1px solid var(--border-secondary); background: var(--bg-page);
+    }
+    .packaging-pricing-controls label { font-size: 13px; color: var(--text-secondary); }
+    .packaging-pricing-hint { font-size: 12px; color: var(--text-tertiary); }
 
     /* 文档（报价单） */
     .doc-body { font-size: 13.5px; line-height: 1.8; color: var(--text-primary); padding: 4px 2px; }
@@ -2258,6 +2270,16 @@
         button.textContent='保存并重算';button.dataset.packagingReprice=String(sec.step);
         button.onclick=()=>repricePackagingWorkspace(sec.step);toolbar.prepend(button);
         content.addEventListener('input',()=>{PACKAGING_PRICING_DIRTY=true;PACKAGING_PRICING_REQUEST++;});
+      }
+      if(currentIndustry()==='packaging' && ui.section_id==='s3_markup'){
+        // 毛利率入口必须显式可见：费率只从人工输入或已存报价恢复，系统不填默认值。
+        content.insertAdjacentHTML('beforeend', packagingPricingControlsHtml());
+        const marginInput=document.getElementById('packagingMarginInput');
+        const reprice=document.getElementById('packagingRepriceBtn');
+        if(marginInput && PACKAGING_RESTORED_RATE!==null && !marginInput.value)
+          marginInput.value=Number((PACKAGING_RESTORED_RATE*100).toFixed(8));
+        if(marginInput)marginInput.addEventListener('input',()=>{PACKAGING_PRICING_DIRTY=true;PACKAGING_PRICING_REQUEST++;});
+        if(reprice)reprice.addEventListener('click',()=>repricePackagingWorkspace(sec.step));
       }
       if (ui.footer) {
         const note = document.createElement('div');
@@ -4396,8 +4418,18 @@
       }
     }
 
-    /* 毛利率从第 3 步「定价规则（利润加成）」的已渲染行里读（页面上没有单独的输入框）；
-       读不到就交给服务端报"缺费率"并把原因显示在面板上 —— 不猜数字。 */
+    /* 第 3 步的人工毛利率入口。费率只认人工输入或已存报价恢复，系统不会默认填入费率；
+       「毛利率」与「成本加成率」是两个口径，文案必须写清（不能靠 Agent 猜）。 */
+    function packagingPricingControlsHtml() {
+      return '<div class="packaging-pricing-controls">'
+        + '<label for="packagingMarginInput">毛利率（%）</label>'
+        + '<input id="packagingMarginInput" class="packaging-margin-input" type="number" min="0" max="99.99" step="0.01" inputmode="decimal" placeholder="如 25">'
+        + '<button id="packagingRepriceBtn" class="btn btn-primary" type="button">按此毛利率重算</button>'
+        + '<span class="packaging-pricing-hint">毛利率＝成本 ÷（1－毛利率），不是成本加成率；系统不会默认填入费率，请按本次报价口径填写。</span>'
+        + '</div>';
+    }
+
+    /* 毛利率优先取上面的人工输入框；没有输入框时才退回已渲染行 / 已存报价 —— 不猜数字。 */
     function packagingMarginRate() {
       const manual = document.getElementById('packagingMarginInput');
       if (manual) {
@@ -4486,13 +4518,23 @@
 
     async function repricePackagingWorkspace(step) {
       if(busy || !LAST_PACKAGING_PACKAGE)return false;
+      const rate=packagingMarginRate();
+      if(rate===null){
+        addErrorBubble('请在第 3 步「定价规则（利润加成）」人工填写 0（含）到 100（不含）的毛利率；系统不会默认填入费率。');
+        return false;
+      }
       const session=currentSessionId, fingerprint=PACKAGING_COST_FINGERPRINT, request=++PACKAGING_PRICING_REQUEST;
       const say=typeof beginUserTurn==='function'?beginUserTurn:addUserBubble;
       say('保存并重算第 '+step+' 步报价。');
       setBusy(true);
       try{
-        const inputs=window.PackagingQuoteWorkspace.readInputs(extractSectionRows('s3_markup'),extractSectionRows('s4_markup'),
+        // 人工输入框是毛利率的唯一入口：先把它写回定价行，再交给共用读取器（同一口径，不另算金额）。
+        const marginRows=extractSectionRows('s3_markup');
+        if(marginRows[0])marginRows[0]['毛利率（%）']=Number((rate*100).toFixed(8));
+        const options=window.PackagingQuoteWorkspace.readInputs(marginRows,extractSectionRows('s4_markup'),
           extractSectionRows('s5_detail')[0],LAST_PACKAGING_QUOTE||PACKAGING_COMMERCIAL_QUOTE,LAST_PACKAGING_PACKAGE);
+        options.gross_margin_rate = rate;
+        const inputs=options;
         if(step===5)inputs.basic_fields=(collectStepData(5).s5_basic||{}).数据 || {};
         const result=await wfApi('/wf/card/pricing-save',{method:'POST',body:{session_id:session,step_no:step,cost_fingerprint:fingerprint,inputs}});
         if(currentSessionId!==session || PACKAGING_COST_FINGERPRINT!==fingerprint || request!==PACKAGING_PRICING_REQUEST)return false;
