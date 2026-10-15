@@ -1870,6 +1870,7 @@ async function runPackagingBusinessProcessBatch(project, ready, skipped) {
   const pollBase = 600;
   const pollCeiling = 1200;
   let failures = 0;
+  let completed = 0;
   publish();
   // 单件全流程（读已有 → 起任务 → 轮询终态）；返回即表示这一件已定论（跳过 / 完成 / 失败）。
   const runOne = async (item) => {
@@ -1881,6 +1882,7 @@ async function runPackagingBusinessProcessBatch(project, ready, skipped) {
       detail.log.push(detail.progress); publish();
       const existing = await read(base);
       if (existing.plan?.steps?.length && !existing.business_stale && !existing.stale) {
+        completed++;
         detail.log.push(`${item.code}：已有有效工艺，保留并跳过`);
         publish(); return;
       }
@@ -1903,6 +1905,7 @@ async function runPackagingBusinessProcessBatch(project, ready, skipped) {
         if (['succeeded', 'partial'].includes(task.status)) {
           if (!task.result?.plan?.steps?.length) throw new Error('任务完成但未返回工序');
           if (task.status === 'partial') failures++;
+          completed++;
           detail.log.push(`${item.code}：${task.status === 'partial' ? '部分完成' : '已完成'}，${task.result.plan.steps.length}道工序`);
           break;
         }
@@ -1928,8 +1931,11 @@ async function runPackagingBusinessProcessBatch(project, ready, skipped) {
       })());
     }
     await Promise.all(workers);
-    detail.status = failures || skipped.length ? 'partial' : 'succeeded';
-    detail.progress = `工艺推荐结束：失败${failures}件，跳过${skipped.length}件`; publish();
+    detail.status = failures === ready.length && completed === 0 ? 'failed'
+      : failures || skipped.length ? 'partial' : 'succeeded';
+    detail.progress = `工艺推荐结束：失败${failures}件，跳过${skipped.length}件`;
+    if (detail.status === 'failed') detail.error = detail.progress;
+    publish();
   } catch (error) {
     detail.status = 'interrupted'; detail.error = error.message; publish();
   } finally {
@@ -5761,7 +5767,8 @@ const activeTaskPromises = new Map();
 // 独立打开（无父壳）时 TechBoardRuntime 仍存在，但不会向父窗口发送任何消息，行为不变。
 function forwardTaskDetail(detail) {
   const runtimeEvent = detail.status === "failed" ? "task-failed"
-    : (detail.status === "succeeded" || detail.status === "partial") ? "task-completed"
+    : detail.status === "partial" ? "task-partial"
+    : detail.status === "succeeded" ? "task-completed"
     : "task-progress";
   if (window.TechBoardRuntime && window.TechBoardRuntime.publish) {
     window.TechBoardRuntime.publish(runtimeEvent, "board-task", detail);
@@ -5803,6 +5810,8 @@ async function pollTask(projectId, taskId, label) {
 const DRAWING_STAGE = "drawing";
 // 每个任务已经落库过的进度行数：轮询只提交新出现的行，不重复追加整段。
 const drawingTimelineCursor = new Map();
+let drawingTimelineWriteQueue = Promise.resolve();
+const drawingTimelineEchoed = new Set();
 // 会话时间线的两个出口都写全路径（POST /agent/event 落库、GET /agent/events 回放），
 // 避免各处再拼一份路径、也方便和父壳的同一份契约对照。
 function drawingTimelineEventUrl() {
@@ -5819,7 +5828,8 @@ function persistDrawingTask(detail) {
   const fresh = log.slice(drawingTimelineCursor.get(taskId) || 0);
   drawingTimelineCursor.set(taskId, log.length);
   if (!fresh.length && !detail.status) return;
-  fetch(drawingTimelineEventUrl(), {
+  const url = drawingTimelineEventUrl();
+  const options = {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -5829,6 +5839,19 @@ function persistDrawingTask(detail) {
               status: String(detail.status || ""), steps: fresh,
               error: String(detail.error || "") },
     }),
+  };
+  const prompt = String(detail.prompt || '').trim();
+  const echoKey = `echo:${detail.runId || taskId}`;
+  drawingTimelineWriteQueue = drawingTimelineWriteQueue.then(async () => {
+    const identity = `${url}:${echoKey}`;
+    if (prompt && !drawingTimelineEchoed.has(identity)) {
+      const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'user', source: 'shell', stage: DRAWING_STAGE,
+          key: echoKey, text: prompt }) });
+      if (!response.ok) return;
+      drawingTimelineEchoed.add(identity);
+    }
+    await fetch(url, options);
   }).catch(() => { /* 落库失败不影响看板与本地会话可见性 */ });
 }
 // 回放本阶段已落库条目：交给会话宿主按同一套 (ts, seq) 顺序渲染；

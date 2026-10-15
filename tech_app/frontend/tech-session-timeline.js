@@ -55,6 +55,12 @@
       merged[field] = value;
     });
     const steps = [];
+    const terminal = ['succeeded', 'completed', 'partial', 'failed', 'blocked', 'interrupted'];
+    if (terminal.includes(previous && previous.status)
+        && ['queued', 'running'].includes(incoming && incoming.status)) {
+      merged.status = previous.status;
+      if (Object.prototype.hasOwnProperty.call(previous, 'error')) merged.error = previous.error;
+    }
     [].concat((isPlain(previous) && previous.steps) || [],
               (isPlain(incoming) && incoming.steps) || []).forEach(row => {
       const text = String(row);
@@ -114,6 +120,7 @@
       const previous = out[at];
       const merged = Object.assign({}, previous, entry);
       merged.seq = previous.seq;      // 就地更新：序号与位置都不动
+      merged.ts = previous.ts || entry.ts;
       if (isPlain(previous.task) && isPlain(entry.task)) {
         merged.task = mergeTask(previous.task, entry.task);
       }

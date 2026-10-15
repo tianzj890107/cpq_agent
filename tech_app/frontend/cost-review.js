@@ -70,6 +70,22 @@ const crSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 /* 与 3 组装与整合同款：一次用户触发 = 一个 turn 容器（display:contents，视觉顺序不变），
    容器里先放用户气泡，紧随其后的执行卡 / 说明也落进来，成对顺序稳定。 */
 let costTurn = null;
+let crBridgeTurn = null;
+let crBridgeSequence = 0;
+function crEmbeddedChat() {
+  return window.parent !== window && Boolean(window.TechBoardRuntime?.publish);
+}
+function crBridgeProgress(name, extra) {
+  if (!crEmbeddedChat() || !crBridgeTurn) return;
+  const detail = Object.assign({}, crBridgeTurn, extra || {});
+  detail.taskId = crBridgeTurn.taskId;
+  detail.prompt = crBridgeTurn.prompt;
+  detail.log = Array.from(new Set([...(crBridgeTurn.log || []), ...(extra?.log || [])]));
+  crBridgeTurn = detail;
+  try {
+    window.TechBoardRuntime.publish(name, detail.action || 'costStep', detail);
+  } catch { /* 会话桥断开不能阻止成本业务请求，也不能把 busy 留在进行中。 */ }
+}
 function crAppend(html) {
   $cr('crEmpty')?.remove();
   const node = document.createElement('div');
@@ -82,6 +98,10 @@ function crAppend(html) {
 }
 
 function crSay(text) {
+  if (crEmbeddedChat() && crBridgeTurn && !crReplaying) {
+    crBridgeProgress('task-progress', { log: [String(text)] });
+    return;
+  }
   crAppend(`<div class="oc-amsg" data-agent-card="" data-status="completed">
     <div class="oc-abody" data-agent-role="body"><div class="oc-atxt">${esc(text)}</div></div></div>`);
   crPersistNote(text);
@@ -90,6 +110,13 @@ function crSay(text) {
 /* 用户气泡原语：本页所有「用户点按钮 → 会话区出卡」的入口都先经过它，返回可见气泡节点，
    后续生成的执行卡就长在同一个 turn 容器里。 */
 function crUserSay(text) {
+  if (crEmbeddedChat() && !crReplaying) {
+    crBridgeTurn = { taskId: `cost-turn:${crPid}:${Date.now()}:${++crBridgeSequence}`,
+      label: String(text || ''), status: 'running', log: [] };
+    crBridgeTurn.prompt = String(text || '');
+    crBridgeProgress('task-progress');
+    return null;
+  }
   $cr('crEmpty')?.remove();
   const turn = document.createElement('div');
   turn.className = 'oc-turn';
@@ -113,7 +140,7 @@ function crUserSay(text) {
 let crReplaying = false;
 function crPersistNote(text) {
   const value = String(text || '').trim();
-  if (!value || crReplaying || !crPid) return;
+  if (!value || crReplaying || !crPid || crEmbeddedChat()) return;
   Promise.resolve()
     .then(() => api(`/api/projects/${encodeURIComponent(crPid)}/agent/event`, {
       method: 'POST',
@@ -259,6 +286,7 @@ function crCard(title) {
   const seen = new Set();
   return {
     log(lines) {
+      crBridgeProgress('task-progress', { label: title, log: lines.map(String) });
       for (const line of lines) {
         if (seen.has(line)) continue;
         seen.add(line);
@@ -277,12 +305,18 @@ function crCard(title) {
       $cr('crThread').scrollTop = $cr('crThread').scrollHeight;
     },
     done(ok, message) {
+      const bridgeStatus = ok === 'interrupted' ? 'interrupted'
+        : ok === 'partial' ? 'partial' : ok ? 'succeeded' : 'failed';
+      crBridgeProgress(bridgeStatus === 'failed' ? 'task-failed'
+        : bridgeStatus === 'partial' ? 'task-partial'
+        : bridgeStatus === 'succeeded' ? 'task-completed' : 'task-progress',
+        { label: title, status: bridgeStatus, error: message || '' });
       const state = card.querySelector('.oc-alabel-state');
       // 中断沿用进行中的蓝色 chip：同一张卡、同一个 chip 就地翻转，不新增第二行。
       const interrupted = ok === 'interrupted';
-      card.setAttribute('data-status', interrupted ? 'interrupted' : ok ? 'completed' : 'failed');
+      card.setAttribute('data-status', bridgeStatus === 'succeeded' ? 'completed' : bridgeStatus);
       state.className = `oc-alabel-state ${interrupted ? 'is-interrupted' : ok ? 'is-succeeded' : 'is-failed'}`;
-      state.textContent = interrupted ? '⏸ 中断' : ok ? '✓ 已完成' : '⚠ 失败';
+      state.textContent = interrupted ? '⏸ 中断' : ok === 'partial' ? '部分完成' : ok ? '✓ 已完成' : '⚠ 失败';
       settled = true;
       // 卡片收尾：仍是「进行中」的过程行（含折叠区里的结果行）一次性收成完成 ✓，
       // 界面上不再留圆圈。
@@ -334,6 +368,13 @@ function crPublishTask(name, extra) {
   if (!runtime || typeof runtime.publish !== 'function') return;
   try {
     const action=extra?.action || 'costStep';
+    if (crEmbeddedChat() && crBridgeTurn) {
+      const status = extra?.status || ({ 'task-completed': 'succeeded', 'task-failed': 'failed',
+        'task-partial': 'partial' })[name] || crBridgeTurn.status;
+      crBridgeProgress(name, Object.assign({ action, status }, extra || {}));
+      crRememberSettle(name, action, extra);
+      return;
+    }
     runtime.publish(name, action, Object.assign({ action: action }, extra || {}));
     crRememberSettle(name, action, extra);
   } catch { /* 进度上报失败不影响业务本身 */ }
@@ -352,7 +393,7 @@ function crRememberSettle(name, subject, extra) {
 // 失败必须带真实错误文本（父壳拿来显示，不再只报「超时未响应」）。
 function crSettleTask(event, action, extra) {
   try {
-    window.TechBoardRuntime.publish(event, action, Object.assign({ action: action }, extra || {}));
+    crPublishTask(event, Object.assign({ action: action }, extra || {}));
   } catch (error) { /* 独立打开无运行时 */ }
   crRememberSettle(event, action, extra);
 }
@@ -1405,6 +1446,7 @@ async function crConfirmCost(waiver = null) {
   if (crBusy) return false;
   crBusy = true;
   crRender();
+  crUserSay('确认当前成本。');
   crPublishTask('task-progress', { taskId: 'cost-confirm', label: '确认成本',
                                    progress: '正在确认成本…' });
   try {

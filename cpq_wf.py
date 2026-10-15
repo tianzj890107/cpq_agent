@@ -226,7 +226,7 @@ def _ddl_pg(schema: str) -> list:
                 handoff_kind            varchar(32)  NOT NULL,
                 source_project_id       varchar(64),
                 source_task_id          bigint,
-                source_result_version   varchar(64),
+                source_result_version   text,
                 target_quote_session_id varchar(32),
                 target_card_id          bigint,
                 target_task_id          bigint,
@@ -238,6 +238,10 @@ def _ddl_pg(schema: str) -> list:
                 created_by_user_id      bigint,
                 created_at              timestamptz NOT NULL DEFAULT now()
             )""",
+        # 成本版本含完整 fingerprint，旧 varchar(64) 会阻断真实回传。
+        # TEXT 扩容不截断旧数据；重复初始化仍安全，幂等键/事务不变。
+        f"ALTER TABLE {schema}.cpq_wf_handoff"
+        f" ALTER COLUMN source_result_version TYPE text",
         # 报价版本（包装第 8 批，Spec §3.2）：包装定价的每一次落版本一行。
         # **只增不改**：只有 INSERT 与 SELECT，没有 UPDATE 路径，所以表内没有 updated_at ——
         # 「原报价成本 vs 新成本」两版必须同时存在（cpq_wf_card_step.data_snapshot 是

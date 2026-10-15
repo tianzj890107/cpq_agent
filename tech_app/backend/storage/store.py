@@ -1414,6 +1414,11 @@ def _merge_task_entry(previous: dict, incoming: dict) -> dict:
         if value in (None, "", [], {}):
             continue
         merged[field] = value
+    if (previous or {}).get("status") in {"succeeded", "completed", "partial", "failed", "blocked", "interrupted"}:
+        if (incoming or {}).get("status") in {"queued", "running"}:
+            merged["status"] = previous["status"]
+            if "error" in previous:
+                merged["error"] = previous["error"]
     steps: List[str] = []
     for row in list((previous or {}).get("steps") or []) + list((incoming or {}).get("steps") or []):
         text = str(row)
@@ -1473,6 +1478,7 @@ def append_session_event(project_id: str, event: dict) -> dict:
             # 空值不覆盖：进度提交常常只带增量字段（比如只报状态），不能把已有内容抹掉。
             merged.update({k: v for k, v in incoming.items() if v not in (None, "", [], {})})
             merged["seq"] = previous.get("seq")
+            merged["ts"] = previous.get("ts", incoming.get("ts"))
             if merged.get("task") is not None and previous.get("task") is not None:
                 merged["task"] = _merge_task_entry(previous.get("task"), incoming.get("task"))
             items[index] = merged

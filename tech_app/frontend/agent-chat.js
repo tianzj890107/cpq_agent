@@ -54,13 +54,17 @@
   const scrollDown = () => { thread.scrollTop = thread.scrollHeight; };
   // 会话条目落库：统一走 POST /agent/event（回放走 GET /agent/events?stage=&source=）。
   // 渲染不依赖落库结果 —— 网络失败只留痕，不阻塞会话。回放期间不重复写回。
+  let sessionWriteQueue = Promise.resolve();
   function persistSessionEvent(event) {
     if (!projectId || replayingHistory) return null;
     const payload = Object.assign({ source: "shell", stage: boardStage() }, event || {});
-    return fetch(api("/event"), {
-      method: "POST", headers: authHeaders(true), body: JSON.stringify(payload),
-    }).then(response => (response.ok ? response.json().catch(() => null) : null))
+    // 捕获当前项目与载荷，再按发言顺序提交，不能让较慢的用户消息落在任务卡后面。
+    const url = api("/event");
+    const options = { method: "POST", headers: authHeaders(true), body: JSON.stringify(payload) };
+    sessionWriteQueue = sessionWriteQueue.then(() => fetch(url, options))
+      .then(response => (response.ok ? response.json().catch(() => null) : null))
       .catch(() => null);
+    return sessionWriteQueue;
   }
 
   // 统一工作台（tech-workbench.html）与独立 2.1 页共用本脚本。父壳只有
@@ -1832,7 +1836,7 @@
     // 既不谎报失败，也不能一直停在「进行中」。
     const interrupted = requested === "interrupted"
       || (requested !== "succeeded" && isInterruptedCode(detail.code));
-    const status = requested === "completed" ? "succeeded"
+    let status = requested === "completed" ? "succeeded"
       : interrupted ? "interrupted" : requested;
     // 会话只留「有真实执行内容」的卡：progress_log 明细才算内容。只有标题、只有状态、
     // 只有一句通用「正在…」进度的点击回执一律不建卡 —— 否则秒级同步动作每点一次都会
@@ -1856,6 +1860,8 @@
     const hasContent = log.length > 0 || existingCard || Boolean(blockedReason) || echoAllowed;
     if (!hasContent && !streamLength) return;
     const card = ensureTaskCard(taskId, label);
+    if (["succeeded", "partial", "failed", "blocked", "interrupted"].includes(card.status)
+        && ["queued", "running"].includes(status)) status = card.status;
     // 回声与 Agent 输出成对（Spec §2.3）：卡已经建出来（或已经有卡）才补这声「我：…」，
     // 并把它插在这张卡的上方 —— 不许出现"发了回声却没有 Agent 输出"。
     if (echoAllowed) echoTaskPrompt(detail, card);
