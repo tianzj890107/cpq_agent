@@ -1257,7 +1257,7 @@
           .then((r) => r.ok ? r.json() : {}),
         fetch(`/api/projects/${id}/summary`, { headers: authHeaders() })
           .then((r) => r.ok ? r.json() : {}),
-        fetch(`/api/projects/${id}/cost-review`, { headers: authHeaders() })
+        fetch(`/api/projects/${id}/cost-review?view=saved`, { headers: authHeaders() })
           .then((r) => r.ok ? r.json() : {})
           .catch(() => ({})),
       ]);

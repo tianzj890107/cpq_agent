@@ -4061,7 +4061,7 @@ def _thumbnail_summary(business_parts: Any) -> Dict[str, Any]:
 
 def business_parts_document(reference: Any, geometry: Any, *,
                             bindings: Any = None, legacy_parts_id: str = "",
-                            thumbnails: Any = None) -> Dict[str, Any]:
+                            thumbnails: Any = None, cad_ir: Any = None) -> Dict[str, Any]:
     """组一份业务部件文档（Spec §2 的数据模型）。
 
     `reference` 是 `packaging_reference_workbook.import_workbook()` 的产物（**唯一**业务件
@@ -4185,6 +4185,9 @@ def business_parts_document(reference: Any, geometry: Any, *,
         doc['business_parts'] = [packaging_sections.hydrate_part(row, evidence.get('components') or [])
                                  for row in doc['business_parts']]
         doc['business_parts'] = order_business_parts_by_regions(doc['business_parts'])
+        if isinstance(cad_ir, dict):
+            from .packaging_part_topology import refine_document
+            doc = refine_document(doc, cad_ir)
     doc["business_parts_id"], doc["business_parts_hash"] = _business_identity(doc)
     return doc
 
@@ -4690,6 +4693,9 @@ def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
                     row['sections'].append(extra)
                     row['section_gaps'].append('raw_geometry_portion_unresolved')
                     row['sections_complete'] = False
+        if selected.get('topology_rule'):
+            from .packaging_part_topology import restore_candidate_sections
+            restore_candidate_sections(row, selected, evidence)
         for section in row.get('sections') or []:
             for key in ('confirmed_size','estimated_size'):
                 if section.get(key):
@@ -4997,8 +5003,9 @@ def verified_business_part_input_row(row: Any, doc: Any) -> Dict[str, Any]:
             or (_num(confirmed.get("length_mm")) or 0) <= 0
             or (_num(confirmed.get("width_mm")) or 0) <= 0):
         automatic=_automatic_selected_size(binding,binding.get('entity_ids') or [])
+        from .packaging_part_topology import has_exact_raw_geometry
         if (doc.get('auto_geometry_inputs') is not False and binding.get('status')=='bound'
-                and binding.get('component_ids') and automatic):
+                and (binding.get('component_ids') or has_exact_raw_geometry(result,doc)) and automatic):
             reference=dict(business_part_reference_block(result))
             reference.update(length_mm=automatic['length_mm'],width_mm=automatic['width_mm'],
                 size_source='auto_selected_cad_geometry',size_quality='auto_geometry_reference')

@@ -47,6 +47,7 @@
     let html=`<section class="inline-card"><div class="inline-card-title">3.2 组装工艺</div><div class="inline-hint">只列零件之间新增的工序，零件制造工艺在2.1查看。</div><div class="inline-totals"><span>新增工序 ${(board.assembly_steps||[]).length}</span><span>${board.status?.['3.2']?.completed?'已采用':'待采用'}</span></div>`;
     if(board.assembly_scope_changed)html+='<div class="inline-hint">旧工艺或当前方案已变化，请重新生成新增组装工艺；历史结果保留。</div>';
     if(board.process_missing)html+=`<div class="inline-hint">${esc(board.process_missing)} 个零件制造工艺待补齐，生成组装工艺时只补缺失零件。</div>`;
+    if((board.assembly_questions||[]).length)html+='<details class="inline-row"><summary>连接依据待补 · '+board.assembly_questions.length+' 项</summary>'+board.assembly_questions.map(q=>'<div class="inline-hint">'+esc(q.field||'连接关系')+'：'+esc(q.reason||'')+'</div>').join('')+'</details>';
     html+='</section>';
     for(const [index,step] of (board.assembly_steps||[]).entries()){
       const codes=step.part_codes||[];

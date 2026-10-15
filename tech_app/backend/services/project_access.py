@@ -316,12 +316,13 @@ def _packaging_cost_visible(project_id: str) -> bool:
     """
     if not project_id:
         return False
-    from . import packaging_cost   # 函数级延迟 import：避开 services 之间的导入顺序问题
+    from ..storage import da_repo
     try:
-        cost = packaging_cost.load_cost(project_id) or {}
+        requirement = store.load_requirement(project_id) or {}
+        cost = da_repo.load_packaging_cost(project_id, requirement.get('requirement_no') or '')
     except Exception:              # 读不出来（老项目 / 数据损坏）按「没算过」处理
         return False
-    return bool(cost.get("built"))
+    return bool(cost)
 
 
 def claimed_task_project_access(project_id: str, user: dict) -> bool:

@@ -1,0 +1,2230 @@
+{
+  "enclosure": {
+    "wine": {
+      "changed_parts": 0,
+      "changes": [],
+      "all_part_fields_identical": true,
+      "baseline_parts_hash": "9c106a34a5101a6bea66c93390ba287f701e6df1dc1f1ac7f029e5cc0d4556de",
+      "experimental_parts_hash": "9c106a34a5101a6bea66c93390ba287f701e6df1dc1f1ac7f029e5cc0d4556de"
+    },
+    "round": {
+      "changed_parts": 3,
+      "changes": [
+        {
+          "id": "DWG-S1-BP09",
+          "name": "面卡",
+          "before": {
+            "candidate_id": "group:cmp:2087|cmp:2088|cmp:2089|cmp:2098|cmp:2099|cmp:2100|cmp:2101|cmp:2102",
+            "dimensions": [
+              296.1722917330917,
+              346.29373927192137
+            ],
+            "entity_total": 8,
+            "section_total": 8
+          },
+          "after": {
+            "candidate_id": "layout:783bc1b05b4c64b1",
+            "dimensions": [
+              389.59999999999127,
+              389.60000000000036
+            ],
+            "entity_total": 34,
+            "section_total": 8
+          },
+          "changed_fields": [
+            "geometry_binding"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP10",
+          "name": "内托灰板1",
+          "before": {
+            "candidate_id": "group:cmp:2105|cmp:2106|cmp:2107|cmp:2108|cmp:2109|cmp:2110|cmp:2111|cmp:2112|cmp:2113|cmp:2114",
+            "dimensions": [
+              353.5713008238963,
+              347.29373927191955
+            ],
+            "entity_total": 10,
+            "section_total": 10
+          },
+          "after": {
+            "candidate_id": "layout:95d2a6d7643a75db",
+            "dimensions": [
+              388.6000000000058,
+              388.60000000000036
+            ],
+            "entity_total": 12,
+            "section_total": 10
+          },
+          "changed_fields": [
+            "geometry_binding"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP06",
+          "name": "面卡",
+          "before": {
+            "candidate_id": "group:cmp:2935|cmp:2936|cmp:2937|cmp:2946|cmp:2947|cmp:2948|cmp:2949|cmp:2950",
+            "dimensions": [
+              296.17229173310625,
+              346.29373927192137
+            ],
+            "entity_total": 8,
+            "section_total": 8
+          },
+          "after": {
+            "candidate_id": "layout:d360e078113aabef",
+            "dimensions": [
+              389.59999999999127,
+              389.60000000000036
+            ],
+            "entity_total": 34,
+            "section_total": 8
+          },
+          "changed_fields": [
+            "geometry_binding"
+          ]
+        }
+      ],
+      "all_part_fields_identical": false,
+      "baseline_parts_hash": "950b2c6b4dbe3c7ef75dcde75a52280ec48a87266fbb78ac8f59a15c16dba612",
+      "experimental_parts_hash": "73af1ab3afab361c6cd9e912d98401a4fd61357ff5e14c303880c099b7fe4c7f"
+    },
+    "wine_freeze_pass": true
+  },
+  "topology": {
+    "wine": {
+      "changed_parts": 0,
+      "changes": [],
+      "all_part_fields_identical": true,
+      "baseline_parts_hash": "9c106a34a5101a6bea66c93390ba287f701e6df1dc1f1ac7f029e5cc0d4556de",
+      "experimental_parts_hash": "9c106a34a5101a6bea66c93390ba287f701e6df1dc1f1ac7f029e5cc0d4556de"
+    },
+    "round": {
+      "changed_parts": 19,
+      "changes": [
+        {
+          "id": "DWG-S1-BP06",
+          "name": "地盒内、外圈围边面纸",
+          "before": {
+            "candidate_id": "group:cmp:1242|cmp:1298|cmp:1318|cmp:1320|cmp:1427|scheme:1:cmp:765",
+            "dimensions": [
+              633.7997939874913,
+              537.2673761737951
+            ],
+            "entity_total": 167,
+            "section_total": 6
+          },
+          "after": {
+            "candidate_id": "group:cmp:1242|cmp:1298|cmp:1318|cmp:1320|cmp:1427|scheme:1:cmp:765",
+            "dimensions": [
+              633.7997939874913,
+              537.2673761737951
+            ],
+            "entity_total": 214,
+            "section_total": 6
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP07",
+          "name": "地盒底板",
+          "before": {
+            "candidate_id": "region:DWG-P15",
+            "dimensions": [
+              404.0,
+              404.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P15",
+            "dimensions": [
+              404.0,
+              404.0
+            ],
+            "entity_total": 10,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP13",
+          "name": "外层倒扣面纸",
+          "before": {
+            "candidate_id": "region:DWG-P16",
+            "dimensions": [
+              401.0,
+              401.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P16",
+            "dimensions": [
+              401.0,
+              401.0
+            ],
+            "entity_total": 110,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP09",
+          "name": "面卡",
+          "before": {
+            "candidate_id": "group:cmp:2087|cmp:2088|cmp:2089|cmp:2098|cmp:2099|cmp:2100|cmp:2101|cmp:2102",
+            "dimensions": [
+              296.1722917330917,
+              346.29373927192137
+            ],
+            "entity_total": 8,
+            "section_total": 8
+          },
+          "after": {
+            "candidate_id": "layout:783bc1b05b4c64b1",
+            "dimensions": [
+              389.59999999999127,
+              389.60000000000036
+            ],
+            "entity_total": 34,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP10",
+          "name": "内托灰板1",
+          "before": {
+            "candidate_id": "group:cmp:2105|cmp:2106|cmp:2107|cmp:2108|cmp:2109|cmp:2110|cmp:2111|cmp:2112|cmp:2113|cmp:2114",
+            "dimensions": [
+              353.5713008238963,
+              347.29373927191955
+            ],
+            "entity_total": 10,
+            "section_total": 10
+          },
+          "after": {
+            "candidate_id": "layout:95d2a6d7643a75db",
+            "dimensions": [
+              388.6000000000058,
+              388.60000000000036
+            ],
+            "entity_total": 12,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP16",
+          "name": "外层倒扣底板",
+          "before": {
+            "candidate_id": "region:DWG-P17",
+            "dimensions": [
+              396.6000000000058,
+              396.59999999999854
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P17",
+            "dimensions": [
+              396.6000000000058,
+              396.59999999999854
+            ],
+            "entity_total": 6,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP18",
+          "name": "底盒底板1",
+          "before": {
+            "candidate_id": "layout:fdc8c2fb245203c9",
+            "dimensions": [
+              387.6000000000058,
+              387.60000000000036
+            ],
+            "entity_total": 2,
+            "section_total": 0
+          },
+          "after": {
+            "candidate_id": "layout:fdc8c2fb245203c9",
+            "dimensions": [
+              387.6000000000058,
+              387.60000000000036
+            ],
+            "entity_total": 2,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP23",
+          "name": "内层倒扣面纸",
+          "before": {
+            "candidate_id": "group:cmp:1506|cmp:1535|scheme:1:cmp:924",
+            "dimensions": [
+              402.3056779786857,
+              260.45593024540904
+            ],
+            "entity_total": 68,
+            "section_total": 2
+          },
+          "after": {
+            "candidate_id": "group:cmp:1506|cmp:1535|scheme:1:cmp:924",
+            "dimensions": [
+              402.3056779786857,
+              260.45593024540904
+            ],
+            "entity_total": 115,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP20",
+          "name": "内层倒扣补纸",
+          "before": {
+            "candidate_id": "region:DWG-P53",
+            "dimensions": [
+              157.0,
+              156.9999999999991
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P53",
+            "dimensions": [
+              157.0,
+              156.9999999999991
+            ],
+            "entity_total": 2,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP21",
+          "name": "内层倒扣底板",
+          "before": {
+            "candidate_id": "region:DWG-P52",
+            "dimensions": [
+              157.0,
+              157.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P52",
+            "dimensions": [
+              157.0,
+              157.0
+            ],
+            "entity_total": 2,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP02",
+          "name": "地盒内、外圈围边面纸",
+          "before": {
+            "candidate_id": "group:cmp:2140|cmp:2196|cmp:2216|cmp:2218|cmp:2325|scheme:2:cmp:790",
+            "dimensions": [
+              633.7997939874913,
+              537.267376173796
+            ],
+            "entity_total": 167,
+            "section_total": 6
+          },
+          "after": {
+            "candidate_id": "group:cmp:2140|cmp:2196|cmp:2216|cmp:2218|cmp:2325|scheme:2:cmp:790",
+            "dimensions": [
+              633.7997939874913,
+              537.267376173796
+            ],
+            "entity_total": 214,
+            "section_total": 6
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP03",
+          "name": "地盒底板",
+          "before": {
+            "candidate_id": "region:DWG-P15",
+            "dimensions": [
+              404.0,
+              404.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P15",
+            "dimensions": [
+              404.0,
+              404.0
+            ],
+            "entity_total": 10,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP06",
+          "name": "面卡",
+          "before": {
+            "candidate_id": "group:cmp:2935|cmp:2936|cmp:2937|cmp:2946|cmp:2947|cmp:2948|cmp:2949|cmp:2950",
+            "dimensions": [
+              296.17229173310625,
+              346.29373927192137
+            ],
+            "entity_total": 8,
+            "section_total": 8
+          },
+          "after": {
+            "candidate_id": "layout:d360e078113aabef",
+            "dimensions": [
+              389.59999999999127,
+              389.60000000000036
+            ],
+            "entity_total": 34,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP07",
+          "name": "内托灰板1",
+          "before": {
+            "candidate_id": "layout:ae7b9c83c868f916",
+            "dimensions": [
+              388.6000000000058,
+              388.60000000000036
+            ],
+            "entity_total": 12,
+            "section_total": 10
+          },
+          "after": {
+            "candidate_id": "layout:ae7b9c83c868f916",
+            "dimensions": [
+              388.6000000000058,
+              388.60000000000036
+            ],
+            "entity_total": 12,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP09",
+          "name": "外层倒扣面纸",
+          "before": {
+            "candidate_id": "region:DWG-P16",
+            "dimensions": [
+              401.0,
+              401.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P16",
+            "dimensions": [
+              401.0,
+              401.0
+            ],
+            "entity_total": 110,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP12",
+          "name": "外层倒扣底板",
+          "before": {
+            "candidate_id": "region:DWG-P17",
+            "dimensions": [
+              396.6000000000058,
+              396.60000000000036
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P17",
+            "dimensions": [
+              396.6000000000058,
+              396.60000000000036
+            ],
+            "entity_total": 6,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP17",
+          "name": "内层倒扣面纸",
+          "before": {
+            "candidate_id": "group:cmp:2404|cmp:2437|scheme:2:cmp:953",
+            "dimensions": [
+              402.3056779787148,
+              260.45593024541085
+            ],
+            "entity_total": 68,
+            "section_total": 2
+          },
+          "after": {
+            "candidate_id": "group:cmp:2404|cmp:2437|scheme:2:cmp:953",
+            "dimensions": [
+              402.3056779787148,
+              260.45593024541085
+            ],
+            "entity_total": 115,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP14",
+          "name": "内层倒扣补纸",
+          "before": {
+            "candidate_id": "region:DWG-P52",
+            "dimensions": [
+              157.0,
+              157.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P52",
+            "dimensions": [
+              157.0,
+              157.0
+            ],
+            "entity_total": 2,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP15",
+          "name": "内层倒扣底板",
+          "before": {
+            "candidate_id": "region:DWG-P51",
+            "dimensions": [
+              157.0,
+              157.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P51",
+            "dimensions": [
+              157.0,
+              157.0
+            ],
+            "entity_total": 2,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        }
+      ],
+      "all_part_fields_identical": false,
+      "baseline_parts_hash": "950b2c6b4dbe3c7ef75dcde75a52280ec48a87266fbb78ac8f59a15c16dba612",
+      "experimental_parts_hash": "76c1a670bb7d0f4d302c5f07c01f9ac1580d8a59b9379e6dbcbc99e05cdacb31"
+    },
+    "wine_freeze_pass": true
+  },
+  "combined": {
+    "wine": {
+      "changed_parts": 0,
+      "changes": [],
+      "all_part_fields_identical": true,
+      "baseline_parts_hash": "9c106a34a5101a6bea66c93390ba287f701e6df1dc1f1ac7f029e5cc0d4556de",
+      "experimental_parts_hash": "9c106a34a5101a6bea66c93390ba287f701e6df1dc1f1ac7f029e5cc0d4556de"
+    },
+    "round": {
+      "changed_parts": 27,
+      "changes": [
+        {
+          "id": "DWG-S1-BP06",
+          "name": "地盒内、外圈围边面纸",
+          "before": {
+            "candidate_id": "group:cmp:1242|cmp:1298|cmp:1318|cmp:1320|cmp:1427|scheme:1:cmp:765",
+            "dimensions": [
+              633.7997939874913,
+              537.2673761737951
+            ],
+            "entity_total": 167,
+            "section_total": 6
+          },
+          "after": {
+            "candidate_id": "group:cmp:1242|cmp:1298|cmp:1318|cmp:1320|cmp:1427|scheme:1:cmp:765",
+            "dimensions": [
+              633.7997939874913,
+              537.2673761737951
+            ],
+            "entity_total": 214,
+            "section_total": 6
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP07",
+          "name": "地盒底板",
+          "before": {
+            "candidate_id": "region:DWG-P15",
+            "dimensions": [
+              404.0,
+              404.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P15",
+            "dimensions": [
+              404.0,
+              404.0
+            ],
+            "entity_total": 10,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP04",
+          "name": "地盒内围衬纸",
+          "before": {
+            "candidate_id": "region:DWG-P62",
+            "dimensions": [
+              204.99999999989814,
+              48.99999999998727
+            ],
+            "entity_total": 8,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P62",
+            "dimensions": [
+              204.99999999989814,
+              142.11878724397502
+            ],
+            "entity_total": 12,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP13",
+          "name": "外层倒扣面纸",
+          "before": {
+            "candidate_id": "region:DWG-P16",
+            "dimensions": [
+              401.0,
+              401.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P16",
+            "dimensions": [
+              401.0,
+              401.0
+            ],
+            "entity_total": 110,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP09",
+          "name": "面卡",
+          "before": {
+            "candidate_id": "group:cmp:2087|cmp:2088|cmp:2089|cmp:2098|cmp:2099|cmp:2100|cmp:2101|cmp:2102",
+            "dimensions": [
+              296.1722917330917,
+              346.29373927192137
+            ],
+            "entity_total": 8,
+            "section_total": 8
+          },
+          "after": {
+            "candidate_id": "layout:783bc1b05b4c64b1",
+            "dimensions": [
+              389.59999999999127,
+              389.60000000000036
+            ],
+            "entity_total": 34,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP10",
+          "name": "内托灰板1",
+          "before": {
+            "candidate_id": "group:cmp:2105|cmp:2106|cmp:2107|cmp:2108|cmp:2109|cmp:2110|cmp:2111|cmp:2112|cmp:2113|cmp:2114",
+            "dimensions": [
+              353.5713008238963,
+              347.29373927191955
+            ],
+            "entity_total": 10,
+            "section_total": 10
+          },
+          "after": {
+            "candidate_id": "layout:95d2a6d7643a75db",
+            "dimensions": [
+              388.6000000000058,
+              388.60000000000036
+            ],
+            "entity_total": 12,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP16",
+          "name": "外层倒扣底板",
+          "before": {
+            "candidate_id": "region:DWG-P17",
+            "dimensions": [
+              396.6000000000058,
+              396.59999999999854
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P17",
+            "dimensions": [
+              396.6000000000058,
+              396.59999999999854
+            ],
+            "entity_total": 6,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP14",
+          "name": "外层倒扣内围衬纸",
+          "before": {
+            "candidate_id": "region:DWG-P40",
+            "dimensions": [
+              623.0,
+              45.000000000007276
+            ],
+            "entity_total": 4,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P40",
+            "dimensions": [
+              639.0,
+              182.0710650760957
+            ],
+            "entity_total": 13,
+            "section_total": 3
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP18",
+          "name": "底盒底板1",
+          "before": {
+            "candidate_id": "layout:fdc8c2fb245203c9",
+            "dimensions": [
+              387.6000000000058,
+              387.60000000000036
+            ],
+            "entity_total": 2,
+            "section_total": 0
+          },
+          "after": {
+            "candidate_id": "layout:fdc8c2fb245203c9",
+            "dimensions": [
+              387.6000000000058,
+              387.60000000000036
+            ],
+            "entity_total": 2,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP17",
+          "name": "内托支撑围条",
+          "before": {
+            "candidate_id": "layout:240a8b7e14e58d2b",
+            "dimensions": [
+              454.998370248999,
+              20.0
+            ],
+            "entity_total": 16,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "layout:240a8b7e14e58d2b",
+            "dimensions": [
+              454.998370248999,
+              56.40826654100056
+            ],
+            "entity_total": 32,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP23",
+          "name": "内层倒扣面纸",
+          "before": {
+            "candidate_id": "group:cmp:1506|cmp:1535|scheme:1:cmp:924",
+            "dimensions": [
+              402.3056779786857,
+              260.45593024540904
+            ],
+            "entity_total": 68,
+            "section_total": 2
+          },
+          "after": {
+            "candidate_id": "group:cmp:1506|cmp:1535|scheme:1:cmp:924",
+            "dimensions": [
+              402.3056779786857,
+              260.45593024540904
+            ],
+            "entity_total": 115,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP22",
+          "name": "内层倒扣内围衬纸",
+          "before": {
+            "candidate_id": "region:DWG-P74",
+            "dimensions": [
+              177.49999999998545,
+              48.50000000000273
+            ],
+            "entity_total": 4,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P74",
+            "dimensions": [
+              193.00000000013097,
+              149.1187872439832
+            ],
+            "entity_total": 12,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP20",
+          "name": "内层倒扣补纸",
+          "before": {
+            "candidate_id": "region:DWG-P53",
+            "dimensions": [
+              157.0,
+              156.9999999999991
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P53",
+            "dimensions": [
+              157.0,
+              156.9999999999991
+            ],
+            "entity_total": 2,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP21",
+          "name": "内层倒扣底板",
+          "before": {
+            "candidate_id": "region:DWG-P52",
+            "dimensions": [
+              157.0,
+              157.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P52",
+            "dimensions": [
+              157.0,
+              157.0
+            ],
+            "entity_total": 2,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP02",
+          "name": "地盒内、外圈围边面纸",
+          "before": {
+            "candidate_id": "group:cmp:2140|cmp:2196|cmp:2216|cmp:2218|cmp:2325|scheme:2:cmp:790",
+            "dimensions": [
+              633.7997939874913,
+              537.267376173796
+            ],
+            "entity_total": 167,
+            "section_total": 6
+          },
+          "after": {
+            "candidate_id": "group:cmp:2140|cmp:2196|cmp:2216|cmp:2218|cmp:2325|scheme:2:cmp:790",
+            "dimensions": [
+              633.7997939874913,
+              537.267376173796
+            ],
+            "entity_total": 214,
+            "section_total": 6
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP03",
+          "name": "地盒底板",
+          "before": {
+            "candidate_id": "region:DWG-P15",
+            "dimensions": [
+              404.0,
+              404.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P15",
+            "dimensions": [
+              404.0,
+              404.0
+            ],
+            "entity_total": 10,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP01",
+          "name": "地盒内围衬纸",
+          "before": {
+            "candidate_id": "region:DWG-P61",
+            "dimensions": [
+              204.9999999999127,
+              48.999999999989996
+            ],
+            "entity_total": 8,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P61",
+            "dimensions": [
+              204.9999999999127,
+              142.11878724397866
+            ],
+            "entity_total": 12,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP06",
+          "name": "面卡",
+          "before": {
+            "candidate_id": "group:cmp:2935|cmp:2936|cmp:2937|cmp:2946|cmp:2947|cmp:2948|cmp:2949|cmp:2950",
+            "dimensions": [
+              296.17229173310625,
+              346.29373927192137
+            ],
+            "entity_total": 8,
+            "section_total": 8
+          },
+          "after": {
+            "candidate_id": "layout:d360e078113aabef",
+            "dimensions": [
+              389.59999999999127,
+              389.60000000000036
+            ],
+            "entity_total": 34,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP07",
+          "name": "内托灰板1",
+          "before": {
+            "candidate_id": "layout:ae7b9c83c868f916",
+            "dimensions": [
+              388.6000000000058,
+              388.60000000000036
+            ],
+            "entity_total": 12,
+            "section_total": 10
+          },
+          "after": {
+            "candidate_id": "layout:ae7b9c83c868f916",
+            "dimensions": [
+              388.6000000000058,
+              388.60000000000036
+            ],
+            "entity_total": 12,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP08",
+          "name": "内托支撑围条",
+          "before": {
+            "candidate_id": "layout:4f8a433cca5ef612",
+            "dimensions": [
+              454.9983702479949,
+              20.0
+            ],
+            "entity_total": 16,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "layout:4f8a433cca5ef612",
+            "dimensions": [
+              454.99837024840235,
+              56.40826654056036
+            ],
+            "entity_total": 32,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP09",
+          "name": "外层倒扣面纸",
+          "before": {
+            "candidate_id": "region:DWG-P16",
+            "dimensions": [
+              401.0,
+              401.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P16",
+            "dimensions": [
+              401.0,
+              401.0
+            ],
+            "entity_total": 110,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP12",
+          "name": "外层倒扣底板",
+          "before": {
+            "candidate_id": "region:DWG-P17",
+            "dimensions": [
+              396.6000000000058,
+              396.60000000000036
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P17",
+            "dimensions": [
+              396.6000000000058,
+              396.60000000000036
+            ],
+            "entity_total": 6,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP10",
+          "name": "外层倒扣内围衬纸",
+          "before": {
+            "candidate_id": "region:DWG-P40",
+            "dimensions": [
+              623.0000000000437,
+              45.000000000010914
+            ],
+            "entity_total": 4,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P40",
+            "dimensions": [
+              639.0,
+              182.0710650760975
+            ],
+            "entity_total": 13,
+            "section_total": 3
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP17",
+          "name": "内层倒扣面纸",
+          "before": {
+            "candidate_id": "group:cmp:2404|cmp:2437|scheme:2:cmp:953",
+            "dimensions": [
+              402.3056779787148,
+              260.45593024541085
+            ],
+            "entity_total": 68,
+            "section_total": 2
+          },
+          "after": {
+            "candidate_id": "group:cmp:2404|cmp:2437|scheme:2:cmp:953",
+            "dimensions": [
+              402.3056779787148,
+              260.45593024541085
+            ],
+            "entity_total": 115,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP16",
+          "name": "内层倒扣内围衬纸",
+          "before": {
+            "candidate_id": "region:DWG-P73",
+            "dimensions": [
+              177.5,
+              48.5
+            ],
+            "entity_total": 4,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P73",
+            "dimensions": [
+              193.00000000013097,
+              149.1187872439823
+            ],
+            "entity_total": 12,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP14",
+          "name": "内层倒扣补纸",
+          "before": {
+            "candidate_id": "region:DWG-P52",
+            "dimensions": [
+              157.0,
+              157.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P52",
+            "dimensions": [
+              157.0,
+              157.0
+            ],
+            "entity_total": 2,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP15",
+          "name": "内层倒扣底板",
+          "before": {
+            "candidate_id": "region:DWG-P51",
+            "dimensions": [
+              157.0,
+              157.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P51",
+            "dimensions": [
+              157.0,
+              157.0
+            ],
+            "entity_total": 2,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        }
+      ],
+      "all_part_fields_identical": false,
+      "baseline_parts_hash": "950b2c6b4dbe3c7ef75dcde75a52280ec48a87266fbb78ac8f59a15c16dba612",
+      "experimental_parts_hash": "407210057a364bcd0b15338b18b80f1d67a5e4d20bff277d29b237cc5dfc0fb9"
+    },
+    "wine_freeze_pass": true
+  },
+  "caption_union": {
+    "wine": {
+      "changed_parts": 3,
+      "changes": [
+        {
+          "id": "DWG-BP09",
+          "name": "内皮壳忖纸",
+          "before": {
+            "candidate_id": "layout:c8e8a8f1799a1e46",
+            "dimensions": [
+              221.13999999999987,
+              269.32000000000016
+            ],
+            "entity_total": 14,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "layout:c8e8a8f1799a1e46",
+            "dimensions": [
+              382.33114329599994,
+              1056.98817697
+            ],
+            "entity_total": 60,
+            "section_total": 3
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-BP16",
+          "name": "内盒2灰板",
+          "before": {
+            "candidate_id": "group:cmp:44|cmp:54",
+            "dimensions": [
+              261.3030000000017,
+              434.9680000000012
+            ],
+            "entity_total": 44,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "group:cmp:44|cmp:54",
+            "dimensions": [
+              611.3743923430002,
+              642.0142286370001
+            ],
+            "entity_total": 54,
+            "section_total": 3
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-BP17",
+          "name": "贴牌",
+          "before": {
+            "candidate_id": "layout:6f3df3ef71ef4da5",
+            "dimensions": [
+              110.39374580699996,
+              225.999989593
+            ],
+            "entity_total": 44,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "layout:6f3df3ef71ef4da5",
+            "dimensions": [
+              457.247095401,
+              921.0634554639998
+            ],
+            "entity_total": 46,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        }
+      ],
+      "all_part_fields_identical": false,
+      "baseline_parts_hash": "9c106a34a5101a6bea66c93390ba287f701e6df1dc1f1ac7f029e5cc0d4556de",
+      "experimental_parts_hash": "e29e8a2e046d5fd1eaab11a836e144209b16f33cf32571a0009b387a07afd21c"
+    },
+    "round": {
+      "changed_parts": 29,
+      "changes": [
+        {
+          "id": "DWG-S1-BP06",
+          "name": "地盒内、外圈围边面纸",
+          "before": {
+            "candidate_id": "group:cmp:1242|cmp:1298|cmp:1318|cmp:1320|cmp:1427|scheme:1:cmp:765",
+            "dimensions": [
+              633.7997939874913,
+              537.2673761737951
+            ],
+            "entity_total": 167,
+            "section_total": 6
+          },
+          "after": {
+            "candidate_id": "group:cmp:1242|cmp:1298|cmp:1318|cmp:1320|cmp:1427|scheme:1:cmp:765",
+            "dimensions": [
+              633.7997939874913,
+              537.2673761737951
+            ],
+            "entity_total": 214,
+            "section_total": 6
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP07",
+          "name": "地盒底板",
+          "before": {
+            "candidate_id": "region:DWG-P15",
+            "dimensions": [
+              404.0,
+              404.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P15",
+            "dimensions": [
+              404.0,
+              404.0
+            ],
+            "entity_total": 10,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP04",
+          "name": "地盒内围衬纸",
+          "before": {
+            "candidate_id": "region:DWG-P62",
+            "dimensions": [
+              204.99999999989814,
+              48.99999999998727
+            ],
+            "entity_total": 8,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P62",
+            "dimensions": [
+              204.99999999989814,
+              142.11878724397502
+            ],
+            "entity_total": 12,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP08",
+          "name": "底座灰板围板",
+          "before": {
+            "candidate_id": "region:DWG-P30",
+            "dimensions": [
+              258.0,
+              130.49255068327875
+            ],
+            "entity_total": 4,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P30",
+            "dimensions": [
+              258.0,
+              200.25756302899936
+            ],
+            "entity_total": 8,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP13",
+          "name": "外层倒扣面纸",
+          "before": {
+            "candidate_id": "region:DWG-P16",
+            "dimensions": [
+              401.0,
+              401.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P16",
+            "dimensions": [
+              643.8000000000029,
+              579.9465460680003
+            ],
+            "entity_total": 121,
+            "section_total": 3
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP09",
+          "name": "面卡",
+          "before": {
+            "candidate_id": "group:cmp:2087|cmp:2088|cmp:2089|cmp:2098|cmp:2099|cmp:2100|cmp:2101|cmp:2102",
+            "dimensions": [
+              296.1722917330917,
+              346.29373927192137
+            ],
+            "entity_total": 8,
+            "section_total": 8
+          },
+          "after": {
+            "candidate_id": "layout:783bc1b05b4c64b1",
+            "dimensions": [
+              389.59999999999127,
+              389.60000000000036
+            ],
+            "entity_total": 34,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP10",
+          "name": "内托灰板1",
+          "before": {
+            "candidate_id": "group:cmp:2105|cmp:2106|cmp:2107|cmp:2108|cmp:2109|cmp:2110|cmp:2111|cmp:2112|cmp:2113|cmp:2114",
+            "dimensions": [
+              353.5713008238963,
+              347.29373927191955
+            ],
+            "entity_total": 10,
+            "section_total": 10
+          },
+          "after": {
+            "candidate_id": "layout:95d2a6d7643a75db",
+            "dimensions": [
+              388.6000000000058,
+              388.60000000000036
+            ],
+            "entity_total": 12,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP16",
+          "name": "外层倒扣底板",
+          "before": {
+            "candidate_id": "region:DWG-P17",
+            "dimensions": [
+              396.6000000000058,
+              396.59999999999854
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P17",
+            "dimensions": [
+              396.6000000000058,
+              396.59999999999854
+            ],
+            "entity_total": 6,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP14",
+          "name": "外层倒扣内围衬纸",
+          "before": {
+            "candidate_id": "region:DWG-P40",
+            "dimensions": [
+              623.0,
+              45.000000000007276
+            ],
+            "entity_total": 4,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P40",
+            "dimensions": [
+              639.0,
+              182.0710650760957
+            ],
+            "entity_total": 13,
+            "section_total": 3
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP18",
+          "name": "底盒底板1",
+          "before": {
+            "candidate_id": "layout:fdc8c2fb245203c9",
+            "dimensions": [
+              387.6000000000058,
+              387.60000000000036
+            ],
+            "entity_total": 2,
+            "section_total": 0
+          },
+          "after": {
+            "candidate_id": "layout:fdc8c2fb245203c9",
+            "dimensions": [
+              387.6000000000058,
+              387.60000000000036
+            ],
+            "entity_total": 2,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP17",
+          "name": "内托支撑围条",
+          "before": {
+            "candidate_id": "layout:240a8b7e14e58d2b",
+            "dimensions": [
+              454.998370248999,
+              20.0
+            ],
+            "entity_total": 16,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "layout:240a8b7e14e58d2b",
+            "dimensions": [
+              521.7651977060013,
+              56.40826654100056
+            ],
+            "entity_total": 35,
+            "section_total": 3
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP23",
+          "name": "内层倒扣面纸",
+          "before": {
+            "candidate_id": "group:cmp:1506|cmp:1535|scheme:1:cmp:924",
+            "dimensions": [
+              402.3056779786857,
+              260.45593024540904
+            ],
+            "entity_total": 68,
+            "section_total": 2
+          },
+          "after": {
+            "candidate_id": "group:cmp:1506|cmp:1535|scheme:1:cmp:924",
+            "dimensions": [
+              402.3056779786857,
+              260.45593024540904
+            ],
+            "entity_total": 115,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP22",
+          "name": "内层倒扣内围衬纸",
+          "before": {
+            "candidate_id": "region:DWG-P74",
+            "dimensions": [
+              177.49999999998545,
+              48.50000000000273
+            ],
+            "entity_total": 4,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P74",
+            "dimensions": [
+              193.00000000013097,
+              149.1187872439832
+            ],
+            "entity_total": 12,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP20",
+          "name": "内层倒扣补纸",
+          "before": {
+            "candidate_id": "region:DWG-P53",
+            "dimensions": [
+              157.0,
+              156.9999999999991
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P53",
+            "dimensions": [
+              157.0,
+              156.9999999999991
+            ],
+            "entity_total": 2,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S1-BP21",
+          "name": "内层倒扣底板",
+          "before": {
+            "candidate_id": "region:DWG-P52",
+            "dimensions": [
+              157.0,
+              157.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P52",
+            "dimensions": [
+              157.0,
+              157.0
+            ],
+            "entity_total": 2,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP02",
+          "name": "地盒内、外圈围边面纸",
+          "before": {
+            "candidate_id": "group:cmp:2140|cmp:2196|cmp:2216|cmp:2218|cmp:2325|scheme:2:cmp:790",
+            "dimensions": [
+              633.7997939874913,
+              537.267376173796
+            ],
+            "entity_total": 167,
+            "section_total": 6
+          },
+          "after": {
+            "candidate_id": "group:cmp:2140|cmp:2196|cmp:2216|cmp:2218|cmp:2325|scheme:2:cmp:790",
+            "dimensions": [
+              633.7997939874913,
+              537.267376173796
+            ],
+            "entity_total": 214,
+            "section_total": 6
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP03",
+          "name": "地盒底板",
+          "before": {
+            "candidate_id": "region:DWG-P15",
+            "dimensions": [
+              404.0,
+              404.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P15",
+            "dimensions": [
+              404.0,
+              404.0
+            ],
+            "entity_total": 10,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP01",
+          "name": "地盒内围衬纸",
+          "before": {
+            "candidate_id": "region:DWG-P61",
+            "dimensions": [
+              204.9999999999127,
+              48.999999999989996
+            ],
+            "entity_total": 8,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P61",
+            "dimensions": [
+              204.9999999999127,
+              142.11878724397866
+            ],
+            "entity_total": 12,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP05",
+          "name": "底座灰板围板",
+          "before": {
+            "candidate_id": "region:DWG-P30",
+            "dimensions": [
+              258.0,
+              130.4925506832742
+            ],
+            "entity_total": 4,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P30",
+            "dimensions": [
+              258.0,
+              200.25756302900027
+            ],
+            "entity_total": 8,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP06",
+          "name": "面卡",
+          "before": {
+            "candidate_id": "group:cmp:2935|cmp:2936|cmp:2937|cmp:2946|cmp:2947|cmp:2948|cmp:2949|cmp:2950",
+            "dimensions": [
+              296.17229173310625,
+              346.29373927192137
+            ],
+            "entity_total": 8,
+            "section_total": 8
+          },
+          "after": {
+            "candidate_id": "layout:d360e078113aabef",
+            "dimensions": [
+              389.59999999999127,
+              389.60000000000036
+            ],
+            "entity_total": 34,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP07",
+          "name": "内托灰板1",
+          "before": {
+            "candidate_id": "layout:ae7b9c83c868f916",
+            "dimensions": [
+              388.6000000000058,
+              388.60000000000036
+            ],
+            "entity_total": 12,
+            "section_total": 10
+          },
+          "after": {
+            "candidate_id": "layout:ae7b9c83c868f916",
+            "dimensions": [
+              388.6000000000058,
+              687.620318538
+            ],
+            "entity_total": 15,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP08",
+          "name": "内托支撑围条",
+          "before": {
+            "candidate_id": "layout:4f8a433cca5ef612",
+            "dimensions": [
+              454.9983702479949,
+              20.0
+            ],
+            "entity_total": 16,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "layout:4f8a433cca5ef612",
+            "dimensions": [
+              454.99837024840235,
+              56.40826654056036
+            ],
+            "entity_total": 32,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP09",
+          "name": "外层倒扣面纸",
+          "before": {
+            "candidate_id": "region:DWG-P16",
+            "dimensions": [
+              401.0,
+              401.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P16",
+            "dimensions": [
+              643.8000000000029,
+              579.9465460680003
+            ],
+            "entity_total": 121,
+            "section_total": 3
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP12",
+          "name": "外层倒扣底板",
+          "before": {
+            "candidate_id": "region:DWG-P17",
+            "dimensions": [
+              396.6000000000058,
+              396.60000000000036
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P17",
+            "dimensions": [
+              396.6000000000058,
+              396.60000000000036
+            ],
+            "entity_total": 6,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP10",
+          "name": "外层倒扣内围衬纸",
+          "before": {
+            "candidate_id": "region:DWG-P40",
+            "dimensions": [
+              623.0000000000437,
+              45.000000000010914
+            ],
+            "entity_total": 4,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P40",
+            "dimensions": [
+              639.0,
+              182.0710650760975
+            ],
+            "entity_total": 13,
+            "section_total": 3
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP17",
+          "name": "内层倒扣面纸",
+          "before": {
+            "candidate_id": "group:cmp:2404|cmp:2437|scheme:2:cmp:953",
+            "dimensions": [
+              402.3056779787148,
+              260.45593024541085
+            ],
+            "entity_total": 68,
+            "section_total": 2
+          },
+          "after": {
+            "candidate_id": "group:cmp:2404|cmp:2437|scheme:2:cmp:953",
+            "dimensions": [
+              402.3056779787148,
+              260.45593024541085
+            ],
+            "entity_total": 115,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP16",
+          "name": "内层倒扣内围衬纸",
+          "before": {
+            "candidate_id": "region:DWG-P73",
+            "dimensions": [
+              177.5,
+              48.5
+            ],
+            "entity_total": 4,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P73",
+            "dimensions": [
+              193.00000000013097,
+              149.1187872439823
+            ],
+            "entity_total": 12,
+            "section_total": 2
+          },
+          "changed_fields": [
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP14",
+          "name": "内层倒扣补纸",
+          "before": {
+            "candidate_id": "region:DWG-P52",
+            "dimensions": [
+              157.0,
+              157.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P52",
+            "dimensions": [
+              157.0,
+              157.0
+            ],
+            "entity_total": 2,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        },
+        {
+          "id": "DWG-S2-BP15",
+          "name": "内层倒扣底板",
+          "before": {
+            "candidate_id": "region:DWG-P51",
+            "dimensions": [
+              157.0,
+              157.0
+            ],
+            "entity_total": 1,
+            "section_total": 1
+          },
+          "after": {
+            "candidate_id": "region:DWG-P51",
+            "dimensions": [
+              157.0,
+              157.0
+            ],
+            "entity_total": 2,
+            "section_total": 1
+          },
+          "changed_fields": [
+            "experiment_topology",
+            "geometry_binding",
+            "sections"
+          ]
+        }
+      ],
+      "all_part_fields_identical": false,
+      "baseline_parts_hash": "950b2c6b4dbe3c7ef75dcde75a52280ec48a87266fbb78ac8f59a15c16dba612",
+      "experimental_parts_hash": "f264d04ed7a44ae6b3ff2cba00539e49275a9bf4b762fd89ee4cb96342498f38"
+    },
+    "wine_freeze_pass": false
+  }
+}

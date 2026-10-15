@@ -1,6 +1,7 @@
 """Read-only views of the canonical packaging formula ledger; no second cost store."""
 import math
 import json
+import hashlib
 
 KEYS = ('material', 'labor', 'processing', 'tooling', 'packaging', 'freight', 'other')
 TOTAL_KEYS = dict(zip(KEYS, ('material_total', 'labor_total', 'process_total',
@@ -71,7 +72,7 @@ def _calculation_evidence(item, amount_with_loss, quantity):
     return detail
 
 
-def project(doc, ledger):
+def project(doc, ledger, *, include_details=True, detail_part_id=None):
     from . import packaging_cost
     from . import packaging_layout
     scheme_error = ''
@@ -124,6 +125,7 @@ def project(doc, ledger):
     allocated = dict.fromkeys(KEYS, 0.0)
     for part in parts:
         code = str(part.get('business_part_code') or '')
+        want_detail = include_details and (detail_part_id is None or code == detail_part_id)
         ref = part.get('reference') or part.get('authority') or {}
         quantity = _number(ref.get('quantity', part.get('quantity', 1)))
         if quantity is None and doc.get('poc_demo') is True and (part.get('poc_inputs') or {}).get('mock') is True:
@@ -137,7 +139,8 @@ def project(doc, ledger):
         for item in items:
             amount = _number(item.get('amount'))
             if amount is None:
-                calculation_details.append(_calculation_evidence(item, None, quantity))
+                if want_detail:
+                    calculation_details.append(_calculation_evidence(item, None, quantity))
                 errors.append('invalid_amount:' + code)
                 valid = False
                 continue
@@ -145,7 +148,8 @@ def project(doc, ledger):
             amount = packaging_cost.apply_loss(amount, item.get('loss_rate'), category=category,
                 loss_base_scope=ledger.get('loss_base_scope') or packaging_cost.DEFAULT_LOSS_BASE_SCOPE)
             if _number(amount) is None:
-                calculation_details.append(_calculation_evidence(item, None, quantity))
+                if want_detail:
+                    calculation_details.append(_calculation_evidence(item, None, quantity))
                 errors.append('invalid_loss:' + code)
                 valid = False
                 continue
@@ -154,7 +158,8 @@ def project(doc, ledger):
                    category if category in ('material', 'labor', 'packaging', 'freight', 'other')
                    else 'processing')
             values[key] += amount
-            calculation_details.append(_calculation_evidence(item, amount, quantity))
+            if want_detail:
+                calculation_details.append(_calculation_evidence(item, amount, quantity))
         if not valid_quantity:
             errors.append('invalid_usage:' + code)
         for key in KEYS:
@@ -165,8 +170,8 @@ def project(doc, ledger):
             'cost_stale': built and stale, 'cost_scope': 'canonical_ledger',
             'estimate_id': ledger.get('estimate_id'), 'item_count': len(items),
             'breakdown': _breakdown({key: value / quantity for key, value in values.items()}),
-            'unit_cost': subtotal / quantity, 'subtotal': subtotal, 'items': items,
-            'calculation_details': calculation_details,
+            'unit_cost': subtotal / quantity, 'subtotal': subtotal,
+            **({'items': items, 'calculation_details': calculation_details} if want_detail else {}),
             'summary': '单件与整单来自同一份公式成本明细', 'open_questions': int(not valid)})
     project_values = {key: totals[key] - allocated[key] for key in KEYS}
     if any(value < -.00001 for value in project_values.values()):
@@ -187,7 +192,14 @@ def project(doc, ledger):
     zero = [row['id'] for row in rows if row['has_cost'] and row['subtotal'] <= 0]
     reconciled = not errors
     usable = built and not stale and reconciled
+    # estimate_id is upserted in place. Pin details to the actual saved rows, not just that ID.
+    display_version = hashlib.sha256(json.dumps(
+        {'estimate_id':ledger.get('estimate_id'), 'computed_at':ledger.get('computed_at'),
+         'total_cost':ledger.get('total_cost'), 'items':ledger.get('items') or [],
+         'parts':[{key:row.get(key) for key in ('id','quantity','unit_cost','subtotal')} for row in rows]},
+        ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
     return {'parts': rows, 'parts_total': _breakdown(allocated), 'final': final,
+        'display_version': display_version,
         'unit_cost':final['total'], 'quote_quantity':_number(ledger.get('quote_quantity')),
         'order_total_cost':final['total'] * _number(ledger.get('quote_quantity')) if _number(ledger.get('quote_quantity')) else None,
         'cost_unit':'元/只', 'expense_policy':policy,
@@ -202,15 +214,17 @@ def project(doc, ledger):
             'missing': missing, 'zero': zero, 'assembly_costed': usable},
         'ready': bool(rows) and usable and not missing and not zero,
         'reconciled': reconciled, 'reconciliation_errors': sorted(set(errors)),
-        'project_expenses': expenses, 'packaging_cost': ledger,
+        'project_expenses': expenses, 'packaging_cost': ledger if include_details and detail_part_id is None
+            else {key: value for key, value in ledger.items() if key != 'items'},
         'cost_source': 'packaging_formula_ledger', 'estimate_id': ledger.get('estimate_id')}
 
 
-def load(project_id):
+def load(project_id, *, include_details=True, detail_part_id=None):
     from . import packaging_parts, packaging_cost
     return project(packaging_parts.load_business_parts(project_id) or {},
                    packaging_cost.with_current_quote_quantity(
-                       packaging_cost.load_cost(project_id) or {}, packaging_cost._requirement_data(project_id)))
+                       packaging_cost.load_cost(project_id) or {}, packaging_cost._requirement_data(project_id)),
+                   include_details=include_details, detail_part_id=detail_part_id)
 
 
 def part_view(project_id, code, view=None):

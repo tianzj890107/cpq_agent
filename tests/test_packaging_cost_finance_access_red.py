@@ -61,8 +61,10 @@ class CostAccessCase(unittest.TestCase):
     def patch_reads(self, *, cost_record=None, meta_row=None, plan=None):
         patches = [
             mock.patch.object(STORE, "load_meta", lambda pid: copy.deepcopy(meta_row)),
-            mock.patch.object(COST, "load_cost", lambda pid, req="", scenario=None:
-                              copy.deepcopy(cost_record or {"built": False})),
+            # Visibility now reads only the saved header, not route/BOM validity.
+            # Keep the same built/not-built role and archive assertions below.
+            mock.patch.object(COST.da_repo, "load_packaging_cost", lambda pid, req="", scenario="":
+                              copy.deepcopy(cost_record) if (cost_record or {}).get("built") else None),
         ]
         integration = importlib.import_module("tech_app.backend.services.integration")
         patches.append(mock.patch.object(integration, "load_plan",

@@ -190,6 +190,7 @@ def build(project_id, doc, data, plan, records):
         'assembly_steps':assembly_steps,'postprocess_steps':assembly_steps,
         'assembly_scope_changed':process is not None and not packaging_assembly.valid(plan,active,records),
         'assembly_summary':getattr(process,'summary','') if process else '',
+        'assembly_questions':[q.model_dump() for q in process.open_questions] if process else [],
         'cut_settings':{k:settings[k] for k in ('cut_margin_length_mm','cut_margin_width_mm','cut_allowances') if k in settings},
         'scheme_ready':selected,
         'status':{'3.1':{'completed':layout_ready,'missing':([] if selected else ['未取得业务部件或尚未选择方案'])+layout_gaps+(['开料尺寸缺失：'+','.join(missing_cuts)] if missing_cuts else [])},

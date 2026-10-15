@@ -432,7 +432,7 @@ def _resolve_business_parts(ctx: Dict[str, Any], ir: Dict[str, Any], geometry_pa
             # 产物键名（Spec `packaging-customer-workbook-is-a-reference-not-an-input.md` §2.3/§2.4）：
             # 新键 `reference`；老产物里的旧键仍要认（拼接还原）。
             document = build(outcome.get("reference") or outcome.get("author" + "ity") or {},
-                             geometry_parts, bindings=outcome.get("match"))
+                             geometry_parts, bindings=outcome.get("match"), cad_ir=ir)
         except Exception as exc:                         # noqa: BLE001
             detail["unavailable"] = [{"code": BUSINESS_PARTS_RESOLVE_FAILED,
                                       "message": "业务部件文档组装失败（%s）" % type(exc).__name__}]

@@ -3819,9 +3819,10 @@ def _cost_review_ctx(project_id: str):
     return ir, integration.load_plan(project_id), cost_review.load_review(project_id)
 
 
-def _cost_review_payload(project_id: str):
+def _cost_review_payload(project_id: str, *, include_details=True):
     ir, plan, review = _cost_review_ctx(project_id)
-    return cost_review.payload(project_id, ir, plan, review)
+    return (cost_review.payload(project_id, ir, plan, review) if include_details else
+            cost_review.payload(project_id, ir, plan, review, include_details=False))
 
 
 def _cost_flow(fn, *args, **kwargs):
@@ -3840,9 +3841,25 @@ def _cost_flow(fn, *args, **kwargs):
 
 
 @app.get("/api/projects/{project_id}/cost-review")
-def get_cost_review(project_id: str):
+def get_cost_review(project_id: str, view: str = 'full'):
     """2.3 全貌：零件逐项成本 + 整机成本 + 两种口径的合计 + 评审状态。"""
-    return _cost_review_payload(project_id)
+    if view == 'saved':
+        from .services import cost_review_loading
+        snapshot = cost_review_loading.saved(project_id)
+        if snapshot is not None:
+            return snapshot
+    if view not in ('saved', 'summary', 'full'):
+        raise HTTPException(400, '不支持的成本视图')
+    result = _cost_review_payload(project_id, include_details=view == 'full')
+    if view != 'full':
+        result['verification_pending'] = False
+    return result
+
+
+@app.get('/api/projects/{project_id}/cost-review/details/{part_id}')
+def get_cost_review_detail(project_id: str, part_id: str, estimate_id: str = '', display_version: str = ''):
+    from .services import cost_review_loading
+    return cost_review_loading.detail(project_id, part_id, estimate_id, display_version)
 
 
 @app.put("/api/projects/{project_id}/cost-review")
@@ -7760,7 +7777,7 @@ def derive_packaging_business_parts(pid: str, user: dict = Depends(current_user)
             "action": "确认上传的是带件名的图纸；推不出来时业务部件清单要由对照表导入。"})
     document = packaging_parts.business_parts_document(
         outcome.get("reference") or outcome.get("author" + "ity") or {}, geometry,
-                                                      bindings=outcome.get("match"))
+                                                      bindings=outcome.get("match"), cad_ir=ir)
     saved = packaging_parts.save_business_parts(pid, document)
     store.audit(pid, "workflow:packaging_business_parts_derived", {
         "business_parts_id": saved.get("business_parts_id"),

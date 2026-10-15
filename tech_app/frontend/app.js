@@ -2249,9 +2249,10 @@ function packagingPartSceneEntities(binding, doc) {
     const own = Array.isArray(raw && raw.bbox) ? raw.bbox.slice(0, 4).map(Number) : null;
     const inside = hasBox && own && own.length === 4 && own.every(Number.isFinite)
       && own[0] >= box[0] && own[1] >= box[1] && own[2] <= box[2] && own[3] <= box[3];
-    if (!id || (!ids[id] && !(inside && !foreign[id] && !row.exact_entities)) || annotations[id] || seen[id]) return;
+    const provenOutline = row.topology_rule === 'cad-conservative-topology-v1' && ids[id];
+    if (!id || (!ids[id] && !(inside && !foreign[id] && !row.exact_entities)) || (annotations[id] && !provenOutline) || seen[id]) return;
     seen[id] = true;
-    rows.push(raw);
+    rows.push(provenOutline ? Object.assign({}, raw, {annotation: false}) : raw);
   });
   return rows;
 }
@@ -2306,7 +2307,8 @@ function packagingPartAnnotationEntities(binding, doc) {
         && p.length >= 2 && p.every(Number.isFinite)
         && p[0] >= box[0] - 1 && p[0] <= box[2] + 1
         && p[1] >= box[1] - 1 && p[1] <= box[3] + 1)));
-    if (!id || (!marks[id] && !belongs) || seen[id]) return;
+    if (!id || (!marks[id] && !belongs) || seen[id]
+        || (row.topology_rule === 'cad-conservative-topology-v1' && (row.entity_ids || []).includes(id))) return;
     seen[id] = true;
     rows.push(raw);
   });
@@ -2362,9 +2364,10 @@ function packagingPartSceneSvg(binding, doc, options) {
       const own = list((raw || {}).bbox).slice(0, 4).map(Number);
       const inside = hasBox && own.length === 4 && own.every(Number.isFinite)
         && own[0] >= box[0] && own[1] >= box[1] && own[2] <= box[2] && own[3] <= box[3];
-      if (!id || (!ids[id] && !(inside && !foreign[id] && !bind.exact_entities)) || annotations[id] || seen[id]) return;
+      const provenOutline = bind.topology_rule === 'cad-conservative-topology-v1' && ids[id];
+      if (!id || (!ids[id] && !(inside && !foreign[id] && !bind.exact_entities)) || (annotations[id] && !provenOutline) || seen[id]) return;
       seen[id] = true;
-      rows.push(raw);
+      rows.push(provenOutline ? Object.assign({}, raw, {annotation: false}) : raw);
     });
     return rows;
   }
@@ -2396,7 +2399,8 @@ function packagingPartSceneSvg(binding, doc, options) {
     const seen = {};
     list(scene.entities).forEach(raw => {
       const id = String(((raw || {}).cad_entity_id) || "");
-      if (!id || !marks[id] || seen[id]) return;
+      if (!id || !marks[id] || seen[id]
+          || (bind.topology_rule === 'cad-conservative-topology-v1' && list(bind.entity_ids).includes(id))) return;
       seen[id] = true;
       picked.push(raw);
     });
@@ -4458,6 +4462,7 @@ function packagingCandidateSourceText(candidate) {
     single_connected_fragment:'连通图形', cut_lines_complementary:'互补刀线组合',
     spatial_neighborhood:'空间邻近', layout_frame_unavailable:'无排版区域证据'};
   Object.assign(names,{spatial_bbox_cluster:'相邻图形聚合',same_view:'同一方案区域',same_boundary_role:'同类刀线轮廓',
+    enclosing_circle_internal_contours:'完整圆外轮廓及内部图形',same_caption_parallel_portions:'同一件名的平行多片组成',
     closed_outline_enclosure:'完整闭合外轮廓及内部图形',complete_closed_outline:'完整闭合轮廓',internal_fragment_only:'外轮廓内的局部图形'});
   const reasons = (item.evidence_reasons || []).map(key => names[key] || `证据：${key}`);
   if (item.dimension_spatial) reasons.push('尺寸标注空间吻合');

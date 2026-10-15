@@ -142,6 +142,7 @@ class ProcessStep(BaseModel):
     source_ref: Optional[str] = None
     recommendation: Optional[dict] = None  # 包装展示来源；不是审批或成本依据
     part_codes: List[str] = Field(default_factory=list, description="项目新增工序关联的完整业务零件")
+    assembly_connection_ids: List[str] = Field(default_factory=list, description="本工序实际完成的跨零件连接ID，不用于单件制造")
     scope: Optional[str] = None
     formula_code: Optional[str] = None
     cost_parameters: dict = Field(default_factory=dict)
@@ -289,6 +290,7 @@ class ProcessOutline(BaseModel):
 
 
 class ProcessPlan(BaseModel):
+    assembly_connections: List[dict] = Field(default_factory=list, description="包装跨零件连接建议：每条含id、part_codes、name、method、evidence；只引用当前完整业务零件")
     part_id: str = Field("", description="对应零件编号")
     part_name: str = Field("", description="零件名称")
     material: Optional[str] = Field(None, description="材料牌号")

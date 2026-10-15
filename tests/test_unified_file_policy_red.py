@@ -87,7 +87,7 @@ class FilePolicy(unittest.TestCase):
             found=re.search(r'<pre id="probe">([^<]+)</pre>',r.stdout)
             self.assertIsNotNone(found,r.stderr[-500:]);data=json.loads(found.group(1))
             self.assertTrue(data['same']);self.assertEqual('.step,.stp',data['step'])
-            self.assertFalse(data['docx']);self.assertTrue(data['dwg']);self.assertTrue(data['summary']);self.assertEqual('.xlsx',data['workbook'])
+            self.assertFalse(data['docx']);self.assertTrue(data['dwg']);self.assertFalse(data['summary'],'Agent输入区不应展示常驻文件能力说明');self.assertEqual('.xlsx',data['workbook'])
 
 class DocumentOnlyProject(CostCase):
     def setUp(self):

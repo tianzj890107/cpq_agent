@@ -623,19 +623,41 @@ function crCostDetailHtml(row) {
   return html;
 }
 
-function crOpenCostDetail(id, origin) {
+async function crOpenCostDetail(id, origin) {
   const row = (crData?.parts || []).find(item=>String(item.id) === String(id));
   if (!row) return;
   document.querySelector('.cr-cost-details')?.close();
   const dialog = document.createElement('dialog');
+  const detailController = new AbortController();
   dialog.className = 'cr-cost-details';
   dialog.setAttribute('aria-label', `${row.id} ${row.name} 成本计算详情`);
-  dialog.innerHTML = `<div class="cr-cost-details-head"><strong>${esc(row.id)} · ${esc(row.name)} · 计算详情</strong><button class="inline-action" type="button" data-cr-detail-close aria-label="关闭成本详情">关闭</button></div><div class="cr-cost-details-body">${crCostDetailHtml(row)}</div>`;
+  const lazy = Boolean(crData?.packaging_cost && !row.calculation_details);
+  const estimateId = crData?.estimate_id;
+  const displayVersion = crData?.display_version;
+  dialog.innerHTML = `<div class="cr-cost-details-head"><strong>${esc(row.id)} · ${esc(row.name)} · 计算详情</strong><button class="inline-action" type="button" data-cr-detail-close aria-label="关闭成本详情">关闭</button></div><div class="cr-cost-details-body">${lazy ? '正在读取计算详情…' : crCostDetailHtml(row)}</div>`;
   dialog.querySelector('[data-cr-detail-close]').onclick = ()=>dialog.close();
   dialog.addEventListener('click',event=>{if(event.target===dialog)dialog.close();});
-  dialog.addEventListener('close',()=>{dialog.remove();if(origin?.isConnected)origin.focus();},{once:true});
+  dialog.addEventListener('close',()=>{detailController.abort();dialog.remove();if(origin?.isConnected)origin.focus();},{once:true});
   document.body.appendChild(dialog);
   dialog.showModal();
+  if (lazy) {
+    const read = async () => {
+      const body = dialog.querySelector('.cr-cost-details-body');
+      body.textContent = '正在读取计算详情…';
+      try {
+        const detail = await crReadCostData(20000, `/details/${encodeURIComponent(id)}?estimate_id=${encodeURIComponent(estimateId || '')}&display_version=${encodeURIComponent(displayVersion || '')}`, detailController.signal);
+        if (!dialog.isConnected || !dialog.open) return;
+        if(crData?.estimate_id !== estimateId || crData?.display_version !== displayVersion)throw Error('成本版本已变化，请关闭详情并重新打开');
+        body.innerHTML = crCostDetailHtml(detail);
+      } catch (error) {
+        if (!dialog.isConnected || !dialog.open) return;
+        body.textContent = `详情读取失败：${error.message}。`;
+        const retry = document.createElement('button');retry.className = 'inline-action';
+        retry.textContent = '重试';retry.onclick = read;body.appendChild(retry);
+      }
+    };
+    void read();
+  }
 }
 
 function crBindCostDetails() {
@@ -772,6 +794,7 @@ function crAskProceed(why, options = {}) {
 /* 「确认成本」的前置条件唯一判定：只读身份 / 缺零件 / 缺件数 / 整机未算 / 0 元行。
    只判前置条件，不含 busy；页内提示与左侧动作快照的 run() 共用这一份，两处不漂移。 */
 function crConfirmBlocker() {
+  if (crData?.verification_pending) return '已显示保存的成本，正在核验有效性；核验完成后才能操作';
   if (crReadOnly()) return crReadOnlyWhy();
   if (crData?.packaging_cost && crData.reconciled === false) return '成本明细与总额未对齐，请重新测算并核对';
   if (crData?.packaging_cost?.stale) return '整单公式成本已过期，请重算';
@@ -827,6 +850,11 @@ let crConfirmGate = null;
 
 function crRenderActions() {
   const host = $cr('crActions');
+  if (crData?.verification_pending) {
+    host.innerHTML = '<span class="ai-hint">已显示保存的成本；正在后台核验工艺、用量与规则版本。</span><button type="button" class="inline-action" id="crRetryVerification">重新核验</button>';
+    $cr('crRetryVerification').onclick = () => crStart();
+    return;
+  }
   // 工艺经理侧：零件 / 整机页签里都不再摆「测算未完成的 N 个零件」这类他点不动的按钮，
   // 只说清楚成本归财务经理、入口是左栏同一颗「发送给财务」。
   if (crReadOnly()) {
@@ -911,6 +939,14 @@ function crRender() {
   crRenderActions();
   crDisableActions();
   crRenderOps();
+  if (crData?.verification_pending) {
+    ['crRunAll','crConfirm','crWriteDb','crToQuote','crReturn','crSendToFinance','crRetryFailed','crNote','crQuantity'].forEach(id=>{
+      const node=$cr(id);if(node)node.disabled=true;
+    });
+    document.querySelectorAll('[data-cr-part]').forEach(button=>{button.disabled=true;});
+  } else {
+    ['crNote','crQuantity'].forEach(id=>{const node=$cr(id);if(node)node.disabled=crReadOnly();});
+  }
   document.querySelectorAll('[data-cr-part]').forEach(button => {
     button.onclick = () => crRunPart(button.dataset.crPart, Number(button.dataset.crQty) || 1);
   });
@@ -966,7 +1002,7 @@ function crRenderOps() {
   [$cr('crConfirm'), $cr('crWriteDb'), $cr('crToQuote'), $cr('crReturn')]
     .forEach(btn => { if (btn) btn.hidden = readOnly; });
   const runAllBtn = $cr('crRunAll');
-  if (runAllBtn) runAllBtn.hidden = readOnly;
+  if (runAllBtn) { runAllBtn.hidden = readOnly;runAllBtn.disabled = crBusy; }
   // 「仅重试失败项」只在上一轮真留下失败清单时出现（没失败就没有可重试的东西）。
   const retryBtn = $cr('crRetryFailed');
   if (retryBtn) {
@@ -1014,6 +1050,7 @@ function crSourceLine(source, taskId) {
 }
 
 async function crRunOp(kind) {
+  if (!crData || crData.verification_pending) { crStatus(crConfirmBlocker(), true);return false; }
   if (crBusy) return false;
   const labels = { 'material-write': '写入数据库', 'send-to-quote': '回传销售经理继续报价',
                    'return-to-process': '提交工艺经理确认' };
@@ -1113,6 +1150,7 @@ async function crRunOp(kind) {
    同一对外调用）；收件人留空由报价侧落到默认角色（成本测算＝财务经理），所以这里
    不需要重写 3 组装与整合的派发弹窗，也不新建第二套发送实现。 */
 async function crSendToFinance() {
+  if (!crData || crData.verification_pending) { crStatus(crConfirmBlocker(), true);return false; }
   if (crBusy) return { ok: false, error: { code: 'busy', message: '正在处理，请稍候。' } };
   crBusy = true;
   crRender();
@@ -1158,6 +1196,7 @@ async function crSendToFinance() {
 
 /* --------------------------------------------------------------- 测算 */
 async function crRunPart(partId, quantity) {
+  if (!crData || crData.verification_pending) { crStatus(crConfirmBlocker(), true);return false; }
   if (crData?.packaging_cost) {
     return crRunPackagingLedger();
   }
@@ -1211,6 +1250,7 @@ async function crRunPart(partId, quantity) {
  *  遇到「P-002 失败 → P-003~P-005 连试都不试，只能一个个点」。
  *  `onlyIds` 给定时只跑这些零件（「仅重试失败项」复用同一份逻辑，不重算已成功件）。 */
 async function crRunParts(onlyMissing = false, onlyIds = null) {
+  if (!crData || crData.verification_pending) { crStatus(crConfirmBlocker(), true);return false; }
   if (crData?.packaging_cost) return crRunPackagingLedger();
   const wanted = (Array.isArray(onlyIds) && onlyIds.length)
     ? new Set(onlyIds.map(id => String(id))) : null;
@@ -1239,6 +1279,7 @@ async function crRunParts(onlyMissing = false, onlyIds = null) {
 }
 
 async function crRunAssembly() {
+  if (!crData || crData.verification_pending) { crStatus(crConfirmBlocker(), true);return false; }
   if (crBusy) return false;
   crBusy = true;
   crRender();
@@ -1277,6 +1318,7 @@ async function crRunAssembly() {
 }
 
 async function crRunPackagingLedger() {
+  if (!crData || crData.verification_pending) { crStatus(crConfirmBlocker(), true);return false; }
   if (crBusy) return false;
   if (await crSaveNote() === false) {
     const message = '无法保存核算输入，未提交成本测算';
@@ -1293,6 +1335,7 @@ async function crRunPackagingLedger() {
 }
 
 async function crRunAll() {
+  if (!crData || crData.verification_pending) { crStatus(crConfirmBlocker(), true);return false; }
   if (crData?.packaging_cost) return crRunPackagingLedger();
   await crSaveNote();
   crSay('一键测算全部成本：先把每个零件算出来，再算整机（它要引用零件的单件成本）。本步不联网。');
@@ -1358,6 +1401,7 @@ async function crRetryFailed() {
 }
 
 async function crConfirmCost(waiver = null) {
+  if (!crData || crData.verification_pending) { crStatus(crConfirmBlocker(), true);return false; }
   if (crBusy) return false;
   crBusy = true;
   crRender();
@@ -1391,6 +1435,7 @@ async function crConfirmCost(waiver = null) {
 }
 
 async function crSaveNote() {
+  if (!crData || crData.verification_pending) { crStatus(crConfirmBlocker(), true);return false; }
   if (crData?.packaging_cost) {
     const quantity = Number($cr('crQuantity').value);
     if (!Number.isInteger(quantity) || quantity <= 0) {
@@ -1482,19 +1527,49 @@ function crBind() {
   $cr('crNext').onclick = () => window.CadWorkflowNavigation?.navigate('5.1');
 }
 
-async function crReadCostData(timeoutMs = 20000) {
+async function crReadCostData(timeoutMs = 20000, suffix = '?view=summary', parentSignal = null) {
   const controller=new AbortController();
+  const abort = () => controller.abort();
+  if(parentSignal?.aborted)controller.abort();
+  parentSignal?.addEventListener('abort',abort,{once:true});
   const timer=setTimeout(()=>controller.abort(),timeoutMs);
-  try { return await api(crUrl(''),{signal:controller.signal}); }
+  try { return await api(crUrl(suffix),{signal:controller.signal}); }
   catch(error) {
     if (error.name==='AbortError') {
       throw Object.assign(new Error('成本读取超时，请重试；不代表未测算或清单为空。'),{code:'cost-read-timeout'});
     }
     throw error;
-  } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer);parentSignal?.removeEventListener('abort',abort); }
 }
 
+const crLoadCoordinator = CPQCostReviewLoader.create({
+  readSaved: signal => crReadCostData(20000, '?view=saved', signal),
+  readVerified: signal => crReadCostData(20000, '?view=summary', signal),
+  render: data => {
+    const first = !crData;
+    crData = data;
+    if(first){
+      $cr('crNote').value = crData.review?.note || '';
+      $cr('crQuantity').value = crData.packaging_cost ? (crData.quote_quantity ?? '') : crData.quantity || 1;
+      crTab = crRequestedView || (crData.ready ? 'total' : (crData.counts?.missing || []).length ? 'parts' : 'assembly');
+    }
+    crRender();
+    crStatus(crData.verification_pending ? '已显示保存的成本，正在核验…'
+      : crReadOnly() ? '只读：本步归财务经理' : crData.review?.confirmed ? '成本已确认' : '就绪');
+  },
+  failed: error => {
+    if(!crData)$cr('crBody').innerHTML = `<div class="inline-empty error">成本读取失败：${esc(error.message)}</div>`;
+    crStatus(`成本读取或核验失败：${error.message}；请重新核验，已显示的历史金额仍保留。`,true);
+    if(!crData){
+      const retry=document.createElement('button');retry.className='inline-action';retry.textContent='重试读取';
+      retry.onclick=()=>crStart();$cr('crBody').appendChild(retry);
+    }
+  }
+});
+
 async function crStart() {
+  if(crBusy || crDeferredBusy)return;
+  if(crData){crData.verification_pending=true;crRender();}
   if (!crPid && crTaskId) {
     // URL 没带 project（财务从待办直接进入）：用 task_id 走共享模块唯一恢复项目身份。
     // 关联 0 个 / 多个不同项目、接口读不到 —— 都停下来提示，不加载任何项目数据，
@@ -1512,11 +1587,18 @@ async function crStart() {
   }
   if (!crPid) { if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.exitToTechHome();return;} location.href = 'home.html'; return; }
   crBind();
+  if(!crData){
+    ['crRunAll','crConfirm','crWriteDb','crToQuote','crReturn','crSendToFinance','crRetryFailed','crNote','crQuantity'].forEach(id=>{
+      const node=$cr(id);if(node)node.disabled=true;
+    });
+  }
   crUser = (window.cpqAuth && window.cpqAuth.user && window.cpqAuth.user()) || null;
   if (!crUser && window.cpqAuth && window.cpqAuth.refresh) {
     // 首屏可能还没拉到登录态：等它一次，别把有权限的人误判成只读。
-    try { await window.cpqAuth.refresh(); } catch (error) { /* 后端会再判一次 */ }
-    crUser = (window.cpqAuth.user && window.cpqAuth.user()) || null;
+    void Promise.resolve().then(()=>window.cpqAuth.refresh()).then(()=>{
+      crUser = (window.cpqAuth.user && window.cpqAuth.user()) || null;
+      if(crData)crRender();
+    }).catch(()=>{});
   }
   if (!crUser) {
     // 独立打开（只有技术工艺登录态）时补一个第二来源：身份名要能出现在只读原因里。
@@ -1526,26 +1608,8 @@ async function crStart() {
   }
   $cr('crProject').textContent = `项目 ${crPid}`;
   crLoadModelLabel();
-  try {
-    crData = await crReadCostData();
-    $cr('crNote').value = crData.review?.note || '';
-    $cr('crQuantity').value = crData.packaging_cost ? (crData.quote_quantity ?? '') : crData.quantity || 1;
-    crTab = crRequestedView || (crData.ready ? 'total' : (crData.counts?.missing || []).length ? 'parts' : 'assembly');
-    crRender();
-    // Cost data is already visible; conversation replay must not block page readiness.
-    void crReplayTimeline();
-    crStatus(crReadOnly() ? '只读：本步归财务经理'
-      : crData.review?.confirmed ? '成本已确认' : '就绪');
-    if (crReadOnly()) crSay(crReadOnlyWhy());
-    if (!(crData.parts || []).length) {
-      crSay('还没有拿到 2.1 的零件清单。成本要按零件逐件算，请先完成图纸解析。');
-    }
-  } catch (error) {
-    $cr('crBody').innerHTML = `<div class="inline-empty error">读取失败：${esc(error.message)}</div>`;
-    const retry=document.createElement('button');retry.type='button';retry.className='inline-action';
-    retry.textContent='重试读取';retry.onclick=()=>crStart();$cr('crBody').appendChild(retry);
-    crStatus(`读取失败：${error.message}`, true);
-  }
+  if(!crStart.replayed){crStart.replayed=true;void crReplayTimeline();}
+  return await crLoadCoordinator.load();
 }
 
 crStart();
@@ -1563,15 +1627,8 @@ document.addEventListener('cpq-sso-ready', () => {
   const crSetTab = (name) => { crTab = name; crRender(); };
   // 重新拉取并渲染（复用既有读取路径），供 Agent 改完说明 / 确认 / 去向之后刷新看板。
   const crRefresh = async () => {
-    try {
-      crData = await crReadCostData();
-      crRender();
-      crStatus('已刷新');
-      return { ok: true };
-    } catch (error) {
-      crStatus(`刷新失败：${error.message}`, true);
-      return { ok: false, error: { code: 'refresh-failed', message: error.message || '刷新失败' } };
-    }
+    if(crBusy || crDeferredBusy)return {ok:false,error:{code:'busy',message:'正在处理，请稍候'}};
+    return await crStart();
   };
   // 三个去向动作共用：各自复用既有 crRunOp(kind)（material-write / send-to-quote /
   // return-to-process），不复制任何对外调用。
@@ -1592,7 +1649,7 @@ document.addEventListener('cpq-sso-ready', () => {
       return {ok:true};
     },
     // 非财务身份（工艺经理）不占操作栏：这一页他只有「发送给财务」一个出口。
-    getState: () => ({ visible: !crReadOnly(), enabled: true, busy: Boolean(crBusy) }),
+    getState: () => ({ visible: !crReadOnly(), enabled: true, busy: Boolean(crBusy || crData?.verification_pending) }),
   });
   window.TechBoardRuntime.registerActions({
     // 4 成本测算是财务经理的步骤：工艺经理打开这一页时五颗财务动作一个也点不动（crReadOnly 全挡），
@@ -1605,7 +1662,7 @@ document.addEventListener('cpq-sso-ready', () => {
       run: () => crSendToFinance(),
       // role 只由 getState() 决定（条目上的静态 role 是运行时读不到的死元数据，
       // 4 成本测算一律不写）；enabled 只表达「这一步有这个动作」，忙闲交给 busy。
-      getState: () => ({ visible: crReadOnly(), enabled: true, busy: Boolean(crBusy),
+      getState: () => ({ visible: crReadOnly(), enabled: true, busy: Boolean(crBusy || crData?.verification_pending),
                          role: 'primary' }),
     },
     runCostReview: {
@@ -1614,6 +1671,7 @@ document.addEventListener('cpq-sso-ready', () => {
       order: 10,
       deferred: true,
       run: () => {
+        if (crData?.verification_pending) return {ok:false,error:{code:'verification-pending',message:crConfirmBlocker()}};
         if (crBusy) return { ok: false, error: { code: 'busy', message: '正在测算，请稍候。' } };
         if (crDeferredBusy) return { ok: false, error: { code: 'busy', message: '正在测算，请稍候。' } };
         // 逐件测算 + 整机汇总要跑很多轮模型调用：只启动，秒级回执。
@@ -1624,7 +1682,7 @@ document.addEventListener('cpq-sso-ready', () => {
         return { ok: true };
       },
       // 没算全时它就是 4 成本测算的主按钮；算全之后让位给「确认成本」。
-      getState: () => ({ visible: !crReadOnly(), enabled: true, busy: Boolean(crBusy),
+      getState: () => ({ visible: !crReadOnly(), enabled: true, busy: Boolean(crBusy || crData?.verification_pending),
                          role: !crCostsComplete() ? 'primary' : 'aux' }),
     },
     confirmCostReview: {
@@ -1642,6 +1700,7 @@ document.addEventListener('cpq-sso-ready', () => {
          已经签过字的同一批缺口不再问第二遍（crConfirmGaps().covered）。 */
       gate: (() => {
         const gate = async () => {
+          if (crData?.verification_pending) return {ok:false,error:{code:'verification-pending',message:crConfirmBlocker()}};
           if (crReadOnly()) {
             const why = crReadOnlyWhy();
             crStatus(why, true);
@@ -1695,7 +1754,7 @@ document.addEventListener('cpq-sso-ready', () => {
         return { ok: true };
       },
       // 算全之后它就是 4 成本测算的主按钮；没算全也一直可见可点，点了由闸门给真实原因。
-      getState: () => ({ visible: !crReadOnly(), enabled: true, busy: Boolean(crBusy),
+      getState: () => ({ visible: !crReadOnly(), enabled: true, busy: Boolean(crBusy || crData?.verification_pending),
                          role: crCostsComplete() ? 'primary' : 'aux' }),
     },
     // Agent 改完说明 / 确认 / 去向之后让看板重新拉取并渲染。

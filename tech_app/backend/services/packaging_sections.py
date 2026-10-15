@@ -136,6 +136,12 @@ def hydrate_part(row, components):
     if result.get('sections_source') == 'manual' and result.get('sections'):
         return result
     binding = result.get('geometry_binding') or {}
+    if (result.get('sections_source') == 'cad_topology' and result.get('sections')
+            and binding.get('topology_rule')
+            and all(s.get('topology_rule') == binding['topology_rule'] for s in result['sections'])
+            and {eid for s in result['sections'] for eid in s.get('entity_ids') or []}
+                == set(binding.get('entity_ids') or [])):
+        return result
     if (binding.get('exact_raw_layout') and result.get('sections_source') in ('raw_cad_layout','raw_cad_portions')
             and result.get('sections')
             and {eid for s in result['sections'] for eid in s.get('entity_ids') or []} == set(binding.get('entity_ids') or [])):

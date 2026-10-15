@@ -192,7 +192,7 @@ def _assembly_row(plan) -> dict:
     }
 
 
-def summarize(project_id: str, ir: Optional[DesignIR], plan) -> dict:
+def summarize(project_id: str, ir: Optional[DesignIR], plan, *, include_details=True) -> dict:
     """2.3 的全貌：零件逐项 + 整机 + 两种口径的合计。
 
     给两个合计是有意的，它们回答不同的问题：
@@ -205,7 +205,8 @@ def summarize(project_id: str, ir: Optional[DesignIR], plan) -> dict:
     if (requirement.get('data') or {}).get('industry') == 'packaging':
         from . import packaging_cost
         from . import packaging_cost_ledger
-        result = packaging_cost_ledger.load(project_id)
+        result = (packaging_cost_ledger.load(project_id) if include_details else
+                  packaging_cost_ledger.load(project_id, include_details=False))
         counts = result.get('counts') or {}
         # 「能不能用」只有**一个**裁决源（Spec `chain-consistency-batch1.md` §2.2 / §8）：
         # 提示缺口不阻断、依据漂移（stale）阻断；账本侧的「缺件 / 零元 / 失配」照旧要求齐整。
@@ -395,9 +396,10 @@ def waiver_summary(review: CostReview) -> Optional[dict]:
     }
 
 
-def payload(project_id: str, ir: Optional[DesignIR], plan, review: CostReview, *, data=None) -> dict:
+def payload(project_id: str, ir: Optional[DesignIR], plan, review: CostReview, *, data=None, include_details=True) -> dict:
     """接口统一返回体。前端只认这一种形状。"""
-    data = data if data is not None else summarize(project_id, ir, plan)
+    data = data if data is not None else (summarize(project_id, ir, plan) if include_details else
+                                        summarize(project_id, ir, plan, include_details=False))
     written = plan.material_writes[-1] if plan.material_writes else None
     # 「整合参数」这个收口环节从 2.2 搬到了这里：报价必填项要在**出成本、发报价之前**
     # 补齐，而发报价已经是财务的动作。表格的行由 DA 字典定，见 product_params。

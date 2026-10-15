@@ -31,11 +31,6 @@
     return null; // 知识库工作簿等专用业务导入不改白名单。
   }
   function enhance(){
-    const host=document.querySelector('.unified-input-card') || document.querySelector('.chat-input-wrapper')?.parentElement || document.querySelector('.tech-chat-pane') || document.querySelector('.upload-form');
-    if(host && !document.getElementById('filePolicySummary')){
-      const summary=document.createElement('p');summary.id='filePolicySummary';summary.className='file-policy-hint';summary.style.cssText='font-size:12px;color:var(--text-secondary,#64748b);line-height:1.5;margin:6px 0';
-      summary.textContent='单文件≤16MiB。可直接解析 / 需转换后解析 / 仅保存并交接，按用途区分；报价图片与旧DOC/XLS仅保存，包装图纸优先DWG/DXF。';host.appendChild(summary);
-    }
     document.querySelectorAll('input[type="file"]').forEach(input=>{
       const purpose=purposeOf(input);if(!purpose || input.dataset.filePolicyApplied)return;
       input.dataset.filePolicyApplied='1';input.dataset.filePurpose=purpose;
@@ -43,7 +38,6 @@
       input.title='单文件≤16MiB；'+accept(purpose);
       input.addEventListener('change',()=>{
         input.title=Array.from(input.files || []).map(file=>file.name+'：'+describe(purpose,file.name)).join('；') || '单文件≤16MiB；原文件随项目交接。';
-        const summary=document.getElementById('filePolicySummary');if(summary && input.files.length)summary.textContent=input.title;
       });
     });
   }
