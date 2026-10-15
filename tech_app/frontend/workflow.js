@@ -1,4 +1,7 @@
 /* Shared client for the ten enterprise workflow pages. No action here calls an LLM. */
+if(!window.CPQFilePolicy && !document.querySelector('script[data-file-policy]')){
+  const script=document.createElement('script');script.src='/file-policy.js?v=20261015-1';script.dataset.filePolicy='1';document.head.appendChild(script);
+}
 const qp = new URLSearchParams(location.search);
 // 所有流程页共用的可展开、可校验导航；按需加载，不影响旧页面的业务逻辑。
 if (!document.querySelector('script[data-workflow-navigation]')) {

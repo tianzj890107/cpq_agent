@@ -36,9 +36,9 @@ PARSE_PATH = "/api/file/parse"
 CAPABILITY_PATH = "/api/file/parse/capability"
 QUICK_QUOTE_PARSE_PATH = "/api/quick-quote/parse"
 
-DWG_EXTS = (".dwg", ".dxf")
-DOC_EXTS = (".txt", ".md", ".csv", ".xlsx", ".xls", ".pdf", ".docx",
-            ".png", ".jpg", ".jpeg")
+from cpq_file_policy import extensions
+DWG_EXTS = tuple(ext for ext in extensions('quick_parse') if ext in ('.dwg','.dxf'))
+DOC_EXTS = tuple(ext for ext in extensions('quick_parse') if ext not in DWG_EXTS)
 
 #: 报价快速通道只索取这些字段（技术工艺侧才要完整几何 / 部件 / 证据）。
 QUICK_FIELDS = ("units", "annotated_dimensions", "outline_size", "box_features",
@@ -183,6 +183,10 @@ def parse_file(name, raw, *, transport=None) -> dict:
     data = raw if isinstance(raw, (bytes, bytearray)) else bytes(raw or b"")
     if not data:
         raise QuickQuoteFileError("空文件：%s 里没有任何内容，请重新导出后再传" % (_text(name) or "该文件"))
+    from cpq_file_policy import validate
+    try:validate(name,len(data),'quick_parse')
+    except ValueError as exc:
+        raise QuickQuoteFileError(str(exc)+'；可解析格式：'+', '.join(extensions('quick_parse'))+'；资料接收范围以文件能力说明为准') from exc
     if ext in DWG_EXTS:
         return _parse_drawing(_text(name), bytes(data), transport=transport)
     if ext in DOC_EXTS:

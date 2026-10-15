@@ -5,15 +5,19 @@ import uuid
 import cpq_auth
 import cpq_wf
 
-MAX_FILE_BYTES=16*1024*1024
+import cpq_file_policy
+MAX_FILE_BYTES=cpq_file_policy.max_bytes()
 
 
-def validate_file(name,data):
+def validate_file(name,data,*,stored=False):
     name=str(name or '').strip()
-    if not name or len(name)>240 or '/' in name or '\\' in name or name in ('.','..'):
+    if not name or len(name)>240 or any(c in name for c in ('/','\\','\x00','\r','\n')) or name in ('.','..'):
         raise cpq_wf.WfError('附件名称无效')
     if not isinstance(data,bytes) or not data or len(data)>MAX_FILE_BYTES:
         raise cpq_wf.WfError('附件为空或超过16MB')
+    if not stored:
+        try:cpq_file_policy.validate(name,len(data))
+        except ValueError as exc:raise cpq_wf.WfError(str(exc)) from exc
     return name,hashlib.sha256(data).hexdigest()
 
 
@@ -97,7 +101,8 @@ def task_files(task,user):
         for ref in refs:
             row=cpq_auth._exec(conn,'SELECT name,sha256,size_bytes,content,session_id FROM cpq_quote_attachment WHERE file_id=%s',(ref.get('file_id'),)).fetchone()
             if not row or row[4]!=task.get('session_id'):raise cpq_wf.WfError('任务附件与报价不一致')
-            data=bytes(row[3]);name,sha=validate_file(row[0],data)
+            # 新上传白名单不追溯封禁已存原件；权限、名称、大小和SHA仍全量校验。
+            data=bytes(row[3]);name,sha=validate_file(row[0],data,stored=True)
             if sha!=row[1] or len(data)!=row[2]:raise cpq_wf.WfError('附件完整性校验失败')
             result.append({'name':name,'sha256':sha,'data':base64.b64encode(data).decode()})
         return result

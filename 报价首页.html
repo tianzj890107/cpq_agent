@@ -1338,7 +1338,7 @@
           <!-- 技术工艺：图纸 / 需求文档 分开上传（仅 tech 模式显示） -->
           <div class="upload-section" id="techUploadDraw" style="display:none">
             <i class="ti ti-photo"></i>
-            <span id="techDrawLabel">上传图纸</span>
+            <span id="techDrawLabel">上传资料</span>
             <input id="techDrawInput" type="file" multiple hidden
               accept="image/*,.pdf,.dwg,.dxf,.step,.stp,.sldprt,.stl,.sat">
           </div>
@@ -1591,7 +1591,8 @@
   <!-- 批次 10 / ## 139：首页唯一口径模块（三页签 + 待办口径 + 卡片渲染口径），必须在业务脚本之前加载 -->
   <script src="tech-home-board.js?v=b11"></script>
   <script src="packaging-quote-panel.js?v=20261010-styles"></script>
-  <script src="quick-quote-panel.js?v=20261014-continuity1"></script>
+  <script src="/file-policy.js?v=20261015-1"></script>
+  <script src="quick-quote-panel.js?v=20261015-files1"></script>
   <script src="cpq_auth.js"></script>
   <script>
     // 导航展开/收起
@@ -2218,6 +2219,8 @@
     }
     // 文本类浏览器直接读；PDF/Word/Excel 交后端 /api/extract 提取文字。
     async function extractHomeFile(file) {
+      await window.CPQFilePolicy.ready;
+      const error=window.CPQFilePolicy.validate(file,'asset');if(error)throw Error(error);
       if (currentMode === 'quote') {
         try {
           const saved = await window.cpqAuth.api('/wf/quote-files', {method:'POST', body:{name:file.name,data:await fileToBase64(file)}});
@@ -2226,7 +2229,8 @@
           sessionStorage.setItem('cpq:quoteFileRefs', JSON.stringify(pickedQuoteRefs));
         } catch (e) { quoteUploadError = e.message || '原文件保存失败'; alert(quoteUploadError); return {}; }
       }
-      if (TEXT_EXT_H.test(file.name)) {
+      if(window.CPQFilePolicy.capability('quote_text',file.name).mode==='save_only')return {notice:window.CPQFilePolicy.describe('quote_text',file.name)};
+      if (TEXT_EXT_H.test(file.name) || /\.(yaml|yml|ini)$/i.test(file.name)) {
         try { return { text: (await file.text()).slice(0, 200000) }; } catch (e) { return {}; }
       }
       if (DOC_EXT_H.test(file.name)) {
@@ -2254,7 +2258,7 @@
         pickedQuoteRefs = []; quoteUploadError = '';
         homeParsing = true;
         for (const file of files) {
-          const res = await extractHomeFile(file);
+          let res;try{res=await extractHomeFile(file);}catch(error){quoteUploadError=error.message;alert(error.message);res={};}
           if (res.text) pickedContents.push({ name: file.name, text: res.text, truncated: res.truncated });
         }
         homeParsing = false;
@@ -2787,7 +2791,7 @@
     // 技术工艺：用首页两槽上传的文件在 tech_app 建项目，再进入统一工作台 1.1（图纸已关联）。
     async function techCreateAndGo() {
       const industry = techIndustry();
-      if (!techDrawFiles.length) {
+      if (!techDrawFiles.length && !techReqFiles.length) {
         // 没传图纸 → 进入统一工作台 1.1，在页面内现场分开上传。行业用 URL 带过去，
         // 否则这里选的「电池」到了需求页会静默变回默认的「半导体」。
         window.location.href = 'tech-workbench.html?stage=requirement-create&industry=' + encodeURIComponent(industry);
@@ -2797,7 +2801,7 @@
       if (sendBtnEl) sendBtnEl.disabled = true;
       try {
         const fd = new FormData();
-        fd.append('file', techDrawFiles[0]);                 // 2D 工程图作为项目源图
+        if(techDrawFiles[0])fd.append('file', techDrawFiles[0]);
         fd.append('note', (textarea && textarea.value.trim()) || '');
         for (let i = 1; i < techDrawFiles.length; i++) fd.append('attachments', techDrawFiles[i]);
         for (const f of techReqFiles) fd.append('attachments', f);
@@ -3062,7 +3066,7 @@
         homeParsing = true;
         for (const file of fs) {
           if (!pickedFiles.includes(file.name)) pickedFiles.push(file.name);
-          const res = await extractHomeFile(file);
+          let res;try{res=await extractHomeFile(file);}catch(error){quoteUploadError=error.message;alert(error.message);res={};}
           if (res.text) pickedContents.push({ name: file.name, text: res.text, truncated: res.truncated });
         }
         homeParsing = false;

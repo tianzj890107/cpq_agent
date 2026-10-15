@@ -1250,6 +1250,13 @@ def delete_project(project_id: str, user: dict = Depends(current_user)):
 async def _read_upload_limited(file: UploadFile, *, label: str = "文件") -> bytes:
     """分块读取 multipart 文件，并在超过服务端限额时立即终止。"""
     declared_size = getattr(file, "size", None)
+    from cpq_file_policy import validate
+    if file.filename:
+        try:validate(file.filename,declared_size if isinstance(declared_size,int) else 1)
+        except ValueError as exc:
+            if '文件为空' in str(exc):
+                raise HTTPException(400,file_preflight.FileCapabilityError('FILE_EMPTY').as_detail()) from exc
+            raise HTTPException(413 if '上限' in str(exc) else 400,str(exc)) from exc
     if isinstance(declared_size, int) and declared_size > MAX_UPLOAD_BYTES:
         raise HTTPException(413, f"{label}超过大小上限（{MAX_UPLOAD_BYTES // 1024 // 1024} MiB）")
     chunks: list[bytes] = []
@@ -1262,6 +1269,7 @@ async def _read_upload_limited(file: UploadFile, *, label: str = "文件") -> by
         if total > MAX_UPLOAD_BYTES:
             raise HTTPException(413, f"{label}超过大小上限（{MAX_UPLOAD_BYTES // 1024 // 1024} MiB）")
         chunks.append(chunk)
+    if not chunks:raise HTTPException(400,file_preflight.FileCapabilityError('FILE_EMPTY').as_detail())
     return b"".join(chunks)
 
 
@@ -1349,17 +1357,19 @@ async def upload_project(
     """
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
     drawing_files = [item for item in ([file] if file else []) + list(files or []) if item and item.filename]
-    if not drawing_files:
-        raise HTTPException(400, "请至少上传一份模型图纸")
-    primary = drawing_files[0]
-    content = await _read_upload_limited(primary, label="需求图纸")
-    if not content:
-        raise HTTPException(400, "空文件")
+    if not drawing_files and not attachments:
+        raise HTTPException(400, "请至少上传一份资料")
+    from cpq_file_policy import primary_name
+    all_files=drawing_files+[f for f in (attachments or []) if f and f.filename]
+    selected=primary_name([f.filename for f in all_files])
+    primary=next((f for f in all_files if f.filename==selected),None)
+    content=await _read_upload_limited(primary,label='需求图纸') if primary else b''
+    if primary and not content:raise HTTPException(400,'空文件')
     project_id = store.create_project(
         primary.filename or "source.png", content, note=note,
         owner=user.get("username", "system"),
         owner_display_name=user.get("display_name") or user.get("username", "system"),
-    )
+    ) if primary else store.create_requirement_project(note=note,owner=user.get('username','system'),owner_display_name=user.get('display_name') or '')
     extra_drawings = []
     author = user.get("username", "system")
     entry = entry_origin.classify_entry(
@@ -1383,13 +1393,14 @@ async def upload_project(
             "by": author, "entry_origin": entry["origin"],
             "internal_test": True, "reason": entry["reason"],
         })
-    for drawing in drawing_files[1:]:
+    for drawing in [f for f in drawing_files if f is not primary]:
         data = await _read_upload_limited(drawing, label="补充模型图纸")
         if data:
             name = drawing.filename or "drawing"
             store.add_attachment(project_id, name, data, author)
             extra_drawings.append(name)
     for att in attachments or []:
+        if att is primary:continue
         data = await _read_upload_limited(att, label="补充文件")
         if data:
             store.add_attachment(project_id, att.filename or "attachment", data, author)
@@ -1399,11 +1410,11 @@ async def upload_project(
         })
     # 建项就把"这份图该走哪条链路"定下来（Spec §3.1）：前端不必自己猜后缀，
     # 也不会出现 .dwg 被送进视觉解析的那条岔路。
-    dispatch = dispatch_project_drawing_parse(project_id, filename=primary.filename)
+    dispatch = dispatch_project_drawing_parse(project_id, filename=primary.filename if primary else '')
     store.audit(project_id, "project:drawing_parse_dispatched",
                 {"route": dispatch["route"], "suffix": dispatch["suffix"],
                  "by": author})
-    return {"project_id": project_id, "source_filename": primary.filename,
+    return {"project_id": project_id, "source_filename": primary.filename if primary else '',
             "additional_drawings": extra_drawings, "entry_origin": entry,
             "drawing_parse": dispatch}
 

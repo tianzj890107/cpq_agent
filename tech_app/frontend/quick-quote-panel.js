@@ -832,7 +832,7 @@
     return {
       kind: ok ? String(parse.kind || "ok") : String(result.kind || "error"),
       ok: ok,
-      headline: ok
+      headline: result.attachment_only ? String(result.notice || '原文件已保存，本步骤不解析此格式') : ok
         ? ("解析成功，读出 " + inputs.length + " 项匹配输入，还有 " + missing.length + " 项要人工补")
         : String(result.error || "解析失败"),
       advice: String(result.advice || ""),
@@ -941,7 +941,9 @@
   /** 选中的文件 → `POST /api/quick-quote/parse`（Spec 批 11 C2）：浏览器只读字节 + base64。 */
   function parseFile(file, options) {
     options = options || {};
-    return new Promise(function (resolve, reject) {
+    return (global.CPQFilePolicy ? global.CPQFilePolicy.ready : Promise.resolve()).then(function(){
+      if(global.CPQFilePolicy){var invalid=global.CPQFilePolicy.validate(file,'asset');if(invalid)throw new Error(invalid);}
+      return new Promise(function (resolve, reject) {
       var reader = new global.FileReader();
       reader.onerror = function () {
         reject(new Error("文件读不出来：" + ((file && file.name) || "")));
@@ -952,15 +954,27 @@
         resolve(comma >= 0 ? text.slice(comma + 1) : text);   // 去掉 data:…;base64, 前缀
       };
       reader.readAsDataURL(file);
+      });
     }).then(async function (b64) {
-      if (quickQuoteSessionId() && !options.originalSaved) {
+      var mode=null;
+      if(global.CPQFilePolicy){
+        await global.CPQFilePolicy.ready;
+        var invalid=global.CPQFilePolicy.validate(file,'asset');if(invalid)throw new Error(invalid);
+        mode=global.CPQFilePolicy.capability('quick',file.name);
+      }
+      if ((quickQuoteSessionId() || global.CPQFilePolicy) && !options.originalSaved) {
         var saved = await apiFetch('/wf/quote-files', {
           method:'POST', headers:{'Content-Type':'application/json'},
           body:JSON.stringify({name:file.name,data:b64,session_id:quickQuoteSessionId()})
         });
         var savedData = await saved.json();
         if (!saved.ok || !savedData.file) throw new Error(savedData.error || '图纸原文件保存失败');
+        if(!quickQuoteSessionId() && global.sessionStorage){
+          var refs=JSON.parse(global.sessionStorage.getItem('cpq:quoteFileRefs') || '[]');refs.push(savedData.file);
+          global.sessionStorage.setItem('cpq:quoteFileRefs',JSON.stringify(refs));
+        }
       }
+      if(mode && mode.mode==='save_only')return {ok:true,json:async function(){return {ok:true,attachment_only:true,notice:global.CPQFilePolicy.describe('quick',file.name)};}};
       return apiFetch(agentBase() + PARSE_PATH, {
         method: "POST",
         headers: {"Content-Type": "application/json"},
@@ -1025,7 +1039,7 @@
               for(var i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);
               var parsed=await parseFile(new global.File([bytes],ref.name),Object.assign({},options,{originalSaved:true}));
               lastParseView=quickQuoteParseView(parsed);holder.innerHTML='';holder.appendChild(renderParse(lastParseView,options));
-              if(parsed.ok && options.onParsed)await options.onParsed(parsed);
+              if(parsed.ok && !parsed.attachment_only && options.onParsed)await options.onParsed(parsed);
             } catch(exc){holder.appendChild(el('p','qq-error',String(exc)));}
             finally{button.disabled=false;}
           });
@@ -1043,7 +1057,7 @@
         lastParseView = quickQuoteParseView(result);
         holder.innerHTML = "";
         holder.appendChild(renderParse(lastParseView, options));
-        if (result && result.ok === true && typeof options.onParsed === 'function') {
+        if (result && result.ok === true && !result.attachment_only && typeof options.onParsed === 'function') {
           Promise.resolve(options.onParsed(result)).catch(function (exc) {
             holder.appendChild(el('p', 'qq-error', '解析结果匹配失败：' + String(exc)));
           });
@@ -1166,6 +1180,16 @@
         workspaceState.quick_quote_session_id = data.quick_quote_session_id;
       }
       return rememberCommandResult("session", data);
+    }).then(async function(data){
+      if(data && data.quick_quote_session_id && global.CPQFilePolicy && global.sessionStorage){
+        var refs=JSON.parse(global.sessionStorage.getItem('cpq:quoteFileRefs') || '[]');
+        if(refs.length){
+          var response=await apiFetch('/wf/quote-files',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bind:true,session_id:data.quick_quote_session_id,refs:refs})});
+          var saved=await response.json();if(!response.ok)throw Error(saved.error || '原件绑定失败');
+          global.sessionStorage.removeItem('cpq:quoteFileRefs');
+        }
+      }
+      return data;
     });
   }
 

@@ -2080,6 +2080,9 @@ def _handle_quick_quote_parse(data=None) -> dict:
         return {"ok": False, "error": "缺少文件名（name）"}
     if not raw_b64:
         return {"ok": False, "error": "缺少文件内容（data，base64）"}
+    from cpq_file_policy import max_bytes
+    if len(raw_b64)>max_bytes()*4//3+8:
+        return {'ok':False,'error':'单文件超过16MiB上限'}
     try:
         raw = base64.b64decode(raw_b64, validate=False)
     except Exception:                                          # noqa: BLE001 - 统一收敛
@@ -4906,6 +4909,14 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/extract":
             data = self._read_body()
             name = (data.get("name") or "file").strip()
+            from cpq_file_policy import capability,max_bytes,validate
+            mode=capability('quote_text',name)
+            if mode['mode']!='direct':
+                self._send_json({'ok':False,'name':name,'mode':mode['mode'],'error':mode['label']+'；此入口不提取该格式文字'})
+                return
+            if len(str(data.get('data') or ''))>max_bytes()*4//3+8:
+                self._send_json({'ok':False,'name':name,'error':'单文件超过16MiB上限'})
+                return
             try:
                 raw = base64.b64decode(data.get("data") or "", validate=False)
             except Exception:
@@ -4913,6 +4924,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if not raw:
                 self._send_json({"ok": False, "name": name, "error": "空文件"})
+                return
+            try:validate(name,len(raw),'quote_text')
+            except ValueError as exc:
+                self._send_json({'ok':False,'name':name,'error':str(exc)})
                 return
             text, err = _extract_text(name, raw)
             if text is None:

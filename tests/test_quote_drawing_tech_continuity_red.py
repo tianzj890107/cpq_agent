@@ -120,6 +120,18 @@ class QuoteFiles(unittest.TestCase):
         with sqlite3.connect(self.db) as conn:conn.execute('UPDATE cpq_quote_attachment SET content=?',(b'bad',))
         with self.assertRaises(Exception):self.files.read_file('QUOTE1',ref['file_id'],self.user)
 
+    def test_existing_unlisted_format_remains_readable_but_new_upload_denied(self):
+        import hashlib
+        raw=b'existing-original-presentation'
+        conn=sqlite3.connect(self.db,isolation_level=None)
+        self.files.ensure_table(conn)
+        conn.execute('INSERT INTO cpq_quote_attachment VALUES (?,?,?,?,?,?,?)',
+            ('legacy',1,'QUOTE1','历史.pptx',hashlib.sha256(raw).hexdigest(),len(raw),raw))
+        conn.close()
+        result=self.files.read_file('QUOTE1','legacy',self.user)
+        self.assertEqual(raw,base64.b64decode(result['data']))
+        with self.assertRaises(Exception):self.files.save('新资料.pptx',base64.b64encode(raw),self.user,'QUOTE1')
+
 class FrontendContinuity(unittest.TestCase):
     def test_attachment_denial_does_not_break_existing_quote_restore(self):
         source=(ROOT/'确认需求解析结果.html').read_text()

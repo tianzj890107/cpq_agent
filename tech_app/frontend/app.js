@@ -6030,7 +6030,7 @@ async function openProject(pid) {
     // 走哪条链路由 renderDrawingEntry() 一处判定；这里只把结论翻译成界面事实。
     const entry = renderDrawingEntry(fname);
     currentDrawingEntry = entry;
-    const blockedReason = !fname ? "报价需求已承接，请在本步骤上传图纸后开始解析。"
+    const blockedReason = !fname ? "项目资料已保存，请在本步骤上传图纸后开始解析。"
       : (entry === "vision" || entry === "drawing_flow") ? ""
       : entry === "blocked_3d"
         ? `这是 3D 模型导入项目（${fname}）：几何已由原始实体生成，无需也不应再按图纸重建。`
@@ -6053,7 +6053,7 @@ async function openProject(pid) {
         d.className = "placeholder";
         d.textContent = blockedReason;
         if (!fname) {
-          const pick=document.createElement('input');pick.type='file';pick.hidden=true;
+          const pick=document.createElement('input');pick.type='file';pick.hidden=true;pick.dataset.filePurpose='drawing';
           pick.accept='image/*,.pdf,.dwg,.dxf,.step,.stp,.sldprt,.stl,.sat';
           const upload=document.createElement('button');upload.type='button';upload.className='inline-action';upload.textContent='上传项目图纸';
           upload.onclick=()=>pick.click();

@@ -23,7 +23,8 @@ from ..config import (
 from . import llm_client
 from . import llm_output
 
-_TEXT_SUFFIXES = (".txt", ".md", ".csv", ".json", ".log", ".yaml", ".yml", ".ini")
+from cpq_file_policy import registry
+_TEXT_SUFFIXES = tuple(registry()['groups']['text'])
 _MAX_DOCUMENTS = LLM_MAX_DOCUMENTS
 _MAX_CHARS_PER_DOCUMENT = LLM_MAX_DOCUMENT_CHARS
 _MAX_TOTAL_CHARS = LLM_MAX_TOTAL_DOCUMENT_CHARS
@@ -334,6 +335,11 @@ def _text_from_file(name: str, data: bytes) -> str:
         return _extract_docx(data)
     if lower.endswith(".pdf"):
         return _extract_pdf(data)
+    if lower.endswith('.xlsx'):
+        from cpq_agent_server import _extract_xlsx
+        text,error=_extract_xlsx(data)
+        if error:raise ValueError(error)
+        return text or ''
     raise ValueError("不支持提取文本")
 
 

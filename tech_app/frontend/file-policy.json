@@ -1,0 +1,31 @@
+{
+  "version": "20261015-1",
+  "max_bytes": 16777216,
+  "groups": {
+    "cad": [".dwg", ".dxf"],
+    "raster": [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"],
+    "text": [".txt", ".md", ".csv", ".tsv", ".json", ".log", ".yaml", ".yml", ".ini"],
+    "modern": [".pdf", ".docx", ".xlsx"],
+    "legacy": [".doc", ".xls"],
+    "native_model": [".step", ".stp"],
+    "stored_model": [".sldprt", ".stl", ".sat", ".igs", ".iges"]
+  },
+  "purposes": {
+    "asset": {"accept": ["cad", "raster", "text", "modern", "legacy", "native_model", "stored_model"], "direct": [], "converted": []},
+    "quote_text": {"accept": ["cad", "raster", "text", "modern", "legacy", "native_model", "stored_model"], "direct": ["text", "modern"], "converted": []},
+    "requirement": {"accept": ["text", "modern", "legacy", "raster"], "direct": ["text", "modern"], "converted": []},
+    "drawing": {"accept": ["cad", "raster", ".pdf"], "direct": [".dxf", "raster"], "converted": [".dwg", ".pdf"]},
+    "source": {"accept": ["cad", "raster", ".pdf", "native_model", "stored_model"], "direct": [".dxf", "raster"], "converted": [".dwg", ".pdf"]},
+    "model_upload": {"accept": ["native_model", "stored_model"], "direct": [], "converted": []},
+    "model_import": {"accept": ["native_model"], "direct": ["native_model"], "converted": []},
+    "quick": {"accept": ["cad", "raster", "text", "modern", "legacy", "native_model", "stored_model"], "direct": ["text", "modern", ".dxf"], "converted": [".dwg"]},
+    "quick_parse": {"accept": ["cad", "text", "modern"], "direct": ["text", "modern", ".dxf"], "converted": [".dwg"]}
+  },
+  "labels": {"direct": "可直接解析", "converted": "需转换后解析", "save_only": "仅保存并随项目交接", "unsupported": "此入口不支持"},
+  "notes": {
+    ".dwg": "使用现有DWG转换服务，实际可用性以服务探测为准",
+    ".pdf": "文本型PDF可提取文字；二维PDF图纸需转为图片，当前不自动转图或OCR",
+    ".doc": "旧版Word仅保存，请另存DOCX后提取需求",
+    ".xls": "旧版Excel仅保存，请另存XLSX后提取需求"
+  }
+}

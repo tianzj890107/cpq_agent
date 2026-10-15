@@ -1014,7 +1014,8 @@
   <script src="cpq_auth.js"></script>
   <!-- 快速报价面板（批 1 建、批 3 追加四列对比表 renderDiffTable）。
        同源相对路径：8010 根上没有这个文件时会按既有规则转发给 tech_app 前端。 -->
-  <script src="quick-quote-panel.js?v=20261014-continuity1"></script>
+  <script src="/file-policy.js?v=20261015-1"></script>
+  <script src="quick-quote-panel.js?v=20261015-files1"></script>
   <!-- 包装报价面板（Spec packaging-quote-draft-and-card-visibility §3.2）：图纸项目回传的整包
        （快照里的 packaging_package）由它定价，并渲染第 3–5 步四段分区（草稿/正式的分界在服务端）。 -->
   <script src="packaging-quote-panel.js?v=pqp1"></script>
@@ -3022,15 +3023,17 @@
       });
     }
     async function extractFileText(file) {
+      try{await window.CPQFilePolicy.ready;}catch(error){return {text:null,err:'文件能力配置读取失败，请刷新后重试'};}
+      const invalid=window.CPQFilePolicy.validate(file,'asset');if(invalid)return {text:null,err:invalid};
       let ref;
       try {
         const saved = await wfApi('/wf/quote-files', {method:'POST',body:{name:file.name,data:await fileToBase64(file),session_id:currentSessionId}});
         if (!saved.file) throw new Error(saved.error || '原文件保存失败');
         ref = saved.file;
       } catch (e) { return {text:null,err:e.message || '原文件保存失败'}; }
-      if (/\.(dwg|dxf|step|stp|stl|sat|sldprt|png|jpg|jpeg)$/i.test(file.name)) return {text:null,err:null,ref};
-      if (TEXT_EXT.test(file.name)) {
-        try { return { text: (await file.text()).slice(0, MAX_EMBED), err: null }; }
+      if(window.CPQFilePolicy.capability('quote_text',file.name).mode==='save_only')return {text:null,err:null,ref,notice:window.CPQFilePolicy.describe('quote_text',file.name)};
+      if (TEXT_EXT.test(file.name) || /\.(yaml|yml|ini)$/i.test(file.name)) {
+        try { return { text: (await file.text()).slice(0, MAX_EMBED), err: null, ref }; }
         catch (e) { return { text: null, err: '读取失败' }; }
       }
       if (DOC_EXT.test(file.name)) {
@@ -3041,9 +3044,9 @@
             body: JSON.stringify({ name: file.name, data: b64 }),
           });
           const d = await r.json();
-          if (d && d.ok) return { text: d.text, err: null, truncated: d.truncated };
-          return { text: null, err: (d && d.error) || '解析失败' };
-        } catch (e) { return { text: null, err: '无法连接解析服务（请确认 Agent 已启动）' }; }
+          if (d && d.ok) return { text: d.text, err: null, truncated: d.truncated, ref };
+          return {text:null,err:null,ref,notice:'原文件已保存，文字提取未成功：'+((d && d.error) || '未读到文字')};
+        } catch (e) { return {text:null,err:null,ref,notice:'原文件已保存，解析服务暂时不可用，可稍后重传重试'}; }
       }
       return { text: null, err: '该类型暂不支持提取文字' };
     }
@@ -3060,9 +3063,9 @@
         else if (f.status === 'ok') icon = 'ti-file-check';
         chip.innerHTML = '<i class="ti ' + icon + '"></i><span></span><i class="ti ti-x rm" title="移除"></i>';
         chip.querySelector('span').textContent = f.name;
-        chip.title = f.status === 'parsing' ? (f.name + '（解析中…）')
+        chip.title = f.notice || (f.status === 'parsing' ? (f.name + '（解析中…）')
           : f.status === 'err' ? (f.name + '（' + (f.err || '解析失败') + '）')
-          : (f.name + (f.text ? '（已解析 '+f.text.length+' 字）' : '（原文件已保存，随项目交接）'));
+          : (f.name + (f.text ? '（已解析 '+f.text.length+' 字）' : '（原文件已保存，随项目交接）')));
         chip.querySelector('.rm').onclick = () => { chatFiles.splice(i, 1); renderAttachChips(); };
         box.appendChild(chip);
       });
@@ -3078,6 +3081,7 @@
         const res = await extractFileText(file);
         entry.text = res.text; entry.err = res.err; entry.truncated = res.truncated;
         entry.ref = res.ref;
+        entry.notice = res.notice;
         entry.status = res.err ? 'err' : 'ok';
         renderAttachChips();
       }

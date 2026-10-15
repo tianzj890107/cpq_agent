@@ -177,8 +177,11 @@ class TestANamingContract(Base):
 
     def test_a7_document_exts_cover_blueprint_added_formats(self):
         module = self.module()
-        for ext in (".txt", ".xlsx", ".pdf", ".png", ".jpg"):
+        # 2026-10-15：允许图片存档不等于具备图片OCR；解析集合以共享用途注册表为准。
+        for ext in (".txt", ".xlsx", ".pdf", ".docx"):
             self.assertIn(ext, tuple(module.DOC_EXTS))
+        for ext in ('.png','.jpg','.xls','.doc'):
+            self.assertNotIn(ext,tuple(module.DOC_EXTS))
 
 
 # --------------------------------------------------------------------------- #

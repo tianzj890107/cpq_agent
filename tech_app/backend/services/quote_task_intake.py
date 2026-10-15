@@ -7,7 +7,8 @@ from ..storage import store
 from . import requirement_service,industry_templates
 
 _LOCK=threading.RLock()
-DRAWINGS={'.dwg','.dxf','.step','.stp','.stl','.sldprt','.sat','.png','.jpg','.jpeg'}
+from cpq_file_policy import extensions,max_bytes
+DRAWINGS=set(extensions('source'))-{'.pdf'}  # 普通需求PDF不自动认作权威工程图。
 
 
 def requirement_data(task):
@@ -42,7 +43,7 @@ def accept_task(task,user,*,attachments):
     if len(attachments)>20:raise ValueError('任务附件超过20份')
     for file in attachments:
         name=file.get('name') or '';raw=file.get('data')
-        if not name or len(name)>240 or name in ('.','..') or '/' in name or '\\' in name or not isinstance(raw,bytes) or not raw or len(raw)>16*1024*1024:
+        if not name or len(name)>240 or name in ('.','..') or '/' in name or '\\' in name or not isinstance(raw,bytes) or not raw or len(raw)>max_bytes():
             raise ValueError('任务附件无效')
     key=str(task['task_id'])
     with _LOCK:

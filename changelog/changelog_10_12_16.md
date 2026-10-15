@@ -408,3 +408,12 @@
 - 判据顺序固定：相似路线同名工序工时 → 相似工序模板同名工时（同盒型优先，缺工时的同行跳过、不当 0） → 兜底口径 30 秒；三档都在 `estimate.origin` 里如实标注，不冒充标准工时、不写 `approved`、不写回 DA。桥不可用（unavailable）不编工时。
 - 落点：新增纯模块 `packaging_process_estimate`；`packaging_process_instances.expand()` 加两个可选入参（不给 templates 时行为一字不变）；`packaging_route.build_route()` 才传模板。精确命中的件、已有时工的步、成本公式与费率都不动。
 - 本机：新专项22项通过；相关保护网 `part_route_constrained_match`/`analogical_process`/`process_route`/`unified_route_cost`/`cost_engine`/`cost_red_closure`/`demo_native_and_analogy` 通过；`multipart_sections_complete`(4) 与 `whole_part_process_unit`(1) 的失败与 `demo_flow_end_to_end` a5 在改动前同样失败（已 stash 复核），非本批引入。
+
+## 2026-10-15 报价 / 工艺统一文件资产、按用途解析
+
+- 用户授权直接实现、提交双远端推送、部署34并验证。新增Spec `unified-file-assets-and-purpose-policy`与实际失败红测，前后端共用JSON格式注册表，统一通用资料范围及16MiB单文件上限；需求提取、二维图纸、3D实体导入、专用知识库工作簿仍按用途限制，不把上传等同于可解析。
+- 报价和快速报价保留原件交接；图片、旧DOC/XLS、快速报价中的3D文件只保存并提示，不冒充OCR或解析成功，不清空已有匹配参数。无会话的快速报价先保存小引用，建单后绑定；提取失败也保留原件。
+- 独立工艺允许仅文档建需求草稿，不伪造CAD源；混合资料在主文件与补充附件中优先选CAD，避免文档先选导致漏图。静态页、独立解析页、动态输入都接共享策略，沿用现有控件风格、不改字体；服务端保留空文件结构化错误并校验解码后实际大小。
+- 新白名单不封禁历史已存附件的读取和交接，权限、名称、大小、SHA校验不放松；不改历史会话、价格、成本、项目记录，不新增解析器。
+- 回归范围覆盖共享策略、真实Chrome静态/动态入口、原件交接、快速报价、DWG预检、成本回传/对账及需求流。额外工作簿保护网存在一条既有失败：接口文本引用数断言11、基线HEAD与本次均12；本次不新增该接口，未改断言掩盖。
+- 最终相关回归667项：664通过、3跳过；Python编译、四份JS及三个入口HTML内联脚本语法、diff检查通过。线上发布按双推回读后的精确提交执行，保留原业务数据，验证共享策略、用途过滤、文字提取及真实DWG转换。

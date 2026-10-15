@@ -26,7 +26,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 SERVICE_NAME = "cpq-unified-parse"
 SERVICE_VERSION = "unified_parse_v1"
-MAX_PARSE_BYTES = 64 * 1024 * 1024
+from cpq_file_policy import max_bytes
+MAX_PARSE_BYTES = max_bytes()
 MAX_LIST_ITEMS = 200                 # 列表类字段的截断上限
 MAX_MATERIAL_NOTES = 50
 #: HTTP 路由（唯一事实源：main.py 的免登录白名单按这两个常量登记，免得两处字符串漂移；
@@ -37,9 +38,9 @@ CAPABILITY_PATH = "/api/file/parse/capability"
 #: 转换产物落这个**隔离解析项目**的目录（不是业务项目：不建卡片、不写需求/零件/成本）。
 PARSE_PROJECT_ID = "cpq-unified-parse"
 
-DWG_EXTS = (".dwg", ".dxf")
-DOC_EXTS = (".txt", ".md", ".csv", ".xlsx", ".xls", ".pdf", ".docx",
-            ".png", ".jpg", ".jpeg")
+from cpq_file_policy import extensions
+DWG_EXTS = tuple(ext for ext in extensions('quick_parse') if ext in ('.dwg','.dxf'))
+DOC_EXTS = tuple(ext for ext in extensions('quick_parse') if ext not in DWG_EXTS)
 
 #: 快速通道只提供这些字段。**必须与 cpq_quick_quote_file.QUICK_FIELDS 逐字一致**
 #: （红测直接比对两个元组；两侧不许各自漂移）。

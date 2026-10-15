@@ -142,7 +142,8 @@ LLM_MAX_DOCUMENT_CHARS = max(0, int(os.getenv("LLM_MAX_DOCUMENT_CHARS", "100000"
 LLM_MAX_TOTAL_DOCUMENT_CHARS = max(0, int(os.getenv("LLM_MAX_TOTAL_DOCUMENT_CHARS", "500000")))
 # HTTP 上传上限与模型上下文预算是两回事：原文件仍会完整保存，因此需要单独
 # 限制，避免服务把超大 multipart 文件一次性读入内存。默认 50 MiB，部署时可调。
-MAX_UPLOAD_BYTES = max(1, int(os.getenv("MAX_UPLOAD_BYTES", str(50 * 1024 * 1024))))
+from cpq_file_policy import max_bytes as _file_max_bytes
+MAX_UPLOAD_BYTES = min(_file_max_bytes(), max(1, int(os.getenv("MAX_UPLOAD_BYTES", str(_file_max_bytes())))))
 
 
 def active_model() -> str:
