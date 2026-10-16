@@ -3552,7 +3552,7 @@ async def generate_integration_process(
         if packaging_project:
             tasks.report_progress('只编制零件之间新增的组装工序，不重复零件制造工艺')
             if automatic_demo:
-                plan=packaging_demo_flow.prepare_route(project_id,user,regenerate_assembly=True,note=note,attachments=atts)
+                plan=packaging_demo_flow.prepare_route(project_id,user,regenerate_assembly=True,note=note,attachments=atts,prepare_associations=False)
             else:
                 from .services import packaging_assembly
                 packaging_demo_flow.sync_integration(project_id,user)
@@ -3560,7 +3560,11 @@ async def generate_integration_process(
             result = _integration_payload(project_id,plan)
             from .services import packaging_assembly
             result['task_status'] = packaging_assembly.recommendation_state(plan)
-            tasks.report_progress(f'已编制 {len(plan.process.steps) if plan.process else 0} 道跨零件组装工序；'
+            attempt=plan.packaging_assembly_attempt or {}
+            result['assembly_attempt']=attempt
+            if attempt.get('retained_previous'):
+                tasks.report_progress('本次未生成可用新工序，保留上次组装结果；请查看未采用原因')
+            tasks.report_progress(f'本次有效 {attempt.get("generated_step_count",len(plan.process.steps) if plan.process else 0)} 道跨零件组装工序；'
                                   f'连接待补 {len(plan.process.open_questions) if plan.process else 0} 项')
             return result
         plan = integration.load_plan(project_id)

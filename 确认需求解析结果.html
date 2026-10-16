@@ -1771,7 +1771,7 @@
         ensureStep1Context().then(ok => { if (ok && shownStep === 1) showStep(1); }).catch(() => {});
       }
       // 第 5 步：把这一步的快照与**历史报价版本**一起补回来（只读；重开卡片要能打开旧版本）
-      if (n === 5 && currentSessionId && wfUser()) {
+      if (n === 5 && n !== currentStep && currentSessionId && wfUser()) {
         wfRestoreStepData(5).catch(() => {});
       }
       // 第 6 步不再反查技术项目读零件（Spec `packaging-quote-card-sales-view-parity.md` C2）：
@@ -2186,12 +2186,6 @@
         updateRowCount(sec);
       };
       content.appendChild(toolbar);
-      if(currentIndustry()==='packaging' && ['s3_markup','s4_markup'].includes(ui.section_id)){
-        const recalculate=document.createElement('button');recalculate.type='button';recalculate.className='btn btn-secondary';
-        recalculate.textContent='读取系统库并重算';recalculate.dataset.systemRuleStep=String(sec.step);
-        recalculate.disabled=busy || (typeof WF!=='undefined'&&WF.loaded&&!WF.canEdit);
-        recalculate.onclick=()=>runMarkupStep(sec.step);toolbar.prepend(recalculate);
-      }
       if (ui.footer) {
         const note = document.createElement('div');
         note.className = 'table-footer-note';
@@ -2311,6 +2305,14 @@
         };
       }
       content.appendChild(toolbar);
+      if (['s3_markup','s4_markup'].includes(ui.section_id)) {
+        const recalculate=document.createElement('button');
+        recalculate.type='button';recalculate.className='btn btn-secondary';
+        recalculate.textContent='读取系统库并重算';recalculate.dataset.systemRuleStep=String(sec.step);
+        recalculate.disabled=busy || !WF.canEdit || sec.step!==currentStep;
+        recalculate.onclick=()=>runQuoteStepOnEntry(sec.step, true);
+        toolbar.prepend(recalculate);
+      }
       if (ui.footer) {
         const note = document.createElement('div');
         note.className = 'table-footer-note';
@@ -2933,6 +2935,9 @@
       }
       const att = $('chatAttachBtn');
       if (att) att.disabled = GATE_BLOCKED;
+      document.querySelectorAll('[data-system-rule-step]').forEach(button=>{
+        button.disabled=lock || !WF.canEdit || Number(button.dataset.systemRuleStep)!==currentStep;
+      });
       // 自愈：一轮结束时若仍被锁着、但其实已登录，说明是之前某次状态拉取失败留下的陈旧锁，
       // 重新拉一次并复评，避免「智能体干完了、页面却动不了」。
       if (!v && GATE_BLOCKED && wfUser()) healGate();
@@ -3309,7 +3314,9 @@
       // 同一人顺流程继续做下一步：静默标记开工（无需再问一次「是否开始」）
       // 注意别写成 .then(wfRefresh)：那会把 wfStartStep 的返回值(true/false)当成 syncStep 传进去，
       // 误触发「按卡片纠正步骤 + 快照恢复」，把刚推进的步骤又拉回去、表格被旧快照覆盖。
-      wfStartStep(next, { silent: true }).then(() => wfRefresh());
+      const started = await wfStartStep(next, { silent: true });
+      await wfRefresh();
+      if (!started) { addErrorBubble('本步骤启动失败，请重新打开当前卡片后重试。'); return; }
       if (manualMode) {
         // 无模型模式：本地推进 + 静默落档（进度与数据进入历史/首页卡片，不调模型）
         sendToAgent('【人工确认】第 ' + cur + ' 步「' + stepName + '」已人工填写确认，进入第 ' + next + ' 步。数据(JSON)：\n' + JSON.stringify(data),
@@ -3326,14 +3333,9 @@
         );
         return;
       }
-      if (next === 3 || next === 4) {
-        // 定价-利润加成 / 报价-其他加价项：各一次流式大模型调用（规则取自数据库），不进智能体循环
-        runMarkupStep(next);
-        return;
-      }
-      if (next === 5) {
-        // 报价方案：纯前端用前面步骤的数据填两张表（报价明细为联动计算表），不调模型
-        fillStep5();
+      if (next >= 3 && next <= 6) {
+        // 共用进入执行入口：规则计算、方案汇总、文档生成；先恢复已保存结果。
+        await runQuoteStepOnEntry(next);
         return;
       }
       sendToAgent(
@@ -3534,12 +3536,60 @@
     let QUOTE_REPLAYING = false;
     let QUOTE_RESUME_KEY = '';
     const WF_AUTO = { inflight: false, failedFor: '' };
+    const QUOTE_STEP_JOBS = new Map();
+    async function runQuoteStepOnEntry(step, force = false) {
+      if (step < 3 || step > 6 || step !== currentStep || manualMode ||
+          !WF.loaded || !WF.canEdit || WF.awaiting || WF.pendingTask ||
+          ['completed','awaiting_handoff'].includes(WF.card?.overall_status)) return false;
+      const session=currentSessionId,key=session+'#'+step;
+      if (QUOTE_STEP_JOBS.has(key)) return QUOTE_STEP_JOBS.get(key);
+      if (busy) return false;
+      const job=(async()=>{
+        await ensureStep1Context();
+        if (!extractSectionRows('s2_techparams').length) await wfRestoreStepData(2);
+        if (step>=4 && !extractSectionRows('s3_products').length) await wfRestoreStepData(3);
+        if (step>=5 && !extractSectionRows('s4_products').length) await wfRestoreStepData(4);
+        await ensureCarryData(step);
+        if (step>=5) await wfRestoreStepData(5);
+        if(currentSessionId!==session || currentStep!==step || !WF.canEdit) return false;
+        if (step===3 || step===4) {
+          if (!force && currentIndustry()==='packaging' && !PACKAGING_PRICING_DIRTY &&
+              LAST_PACKAGING_QUOTE?.rule_pricing?.stages?.[String(step)]) return true;
+          if (!force && currentIndustry()!=='packaging' && extractSectionRows('s'+step+'_markup').length) return true;
+          return runMarkupStep(step);
+        }
+        if (step===5) {
+          if (!force && (currentIndustry()!=='packaging' || (LAST_PACKAGING_QUOTE && !PACKAGING_PRICING_DIRTY)) &&
+              extractSectionRows('s5_detail').length &&
+              (collectStepData(5).s5_basic?.数据?.['报价单号'])) return true;
+          if (!fillStep5()) return false;
+          if (currentIndustry()==='packaging') return repricePackagingWorkspace(5);
+          return true;
+        }
+        const doc=sections.get('s6_doc');
+        if (!force && doc?.markdown?.trim()) return true;
+        beginUserTurn('生成第 6 步「输出报价单」。');
+        return sendToAgent('【开始步骤】当前为第6步「输出报价单」。只根据第5步已确认的报价方案生成报价单，调用 render_document（section_id=s6_doc）。禁止重新匹配产品、重新计算加价或回退步骤。已保存数据(JSON)：'+JSON.stringify(collectStepData(5)),
+          {echo:false,display:'生成报价单',step:6});
+      })();
+      QUOTE_STEP_JOBS.set(key,job);
+      try { return await job; }
+      catch(error) { if(currentSessionId===session)addErrorBubble('本步自动计算失败：'+(error.message||String(error)));return false; }
+      finally { if(QUOTE_STEP_JOBS.get(key)===job)QUOTE_STEP_JOBS.delete(key); }
+    }
     function wfMaybePromptStart() {
       const el = $('wfStartPrompt');
       if (el) el.remove();               // 旧版确认气泡（若有残留）一律清掉
       const u = wfUser();
       const need = u && WF.loaded && WF.canEdit && !WF.stepStarted && !WF.awaiting && !WF.pendingTask;
       const key = (currentSessionId || '') + '#' + currentStep;
+      if (need === false && u && WF.loaded && WF.canEdit && WF.stepStarted && !WF.awaiting &&
+          !WF.pendingTask && currentStep>=3 && !BOOT_PENDING && !QUOTE_REPLAYING && !busy &&
+          !WF_AUTO.inflight && WF_AUTO.failedFor!==key && QUOTE_RESUME_KEY!==key) {
+        QUOTE_RESUME_KEY=key;
+        runQuoteStepOnEntry(currentStep);
+        return;
+      }
       if (!need || BOOT_PENDING || busy || QUOTE_REPLAYING || QUOTE_RESUME_KEY === key) return;
       if (WF_AUTO.inflight || WF_AUTO.failedFor === key) return;   // 失败过就不无限重试
       WF_AUTO.inflight = true;
@@ -3587,6 +3637,7 @@
         return true;
       }
       const name = STEPS[step - 1];
+      if (step>=3 && step<=6) return runQuoteStepOnEntry(step);
       // 唯一 turn helper：开始某一步也是用户主动触发的新回合（隔离执行时退回底层气泡原语）。
       const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
       say('开始第 ' + step + ' 步「' + name + '」。');
@@ -3602,29 +3653,6 @@
           `第 1 步的需求描述与产品推荐表已回显在左侧、产品信息列表与产品技术参数已沿用到右侧，` +
           `你无需查库或填表，只用一句话提示用户核对（如工艺上有问题可在左侧改选产品）后点「进入下一大步骤」即可。`,
           { echo: false, display: '开始第 2 步', step: 2 });
-        return true;
-      }
-      if (step === 5) {
-        // 报价方案：纯前端填写（不调用智能体）。接手人本地可能没数据，先把前面步骤恢复齐：
-        // ① 第 1 步快照（s1_basic 税率/币种等）→ ② 产品沿用 → ③ 第 3/4 步确认快照（含加价）覆盖
-        await ensureStep1Context();
-        if (!extractSectionRows('s4_products').length) {
-          await ensureCarryData(4);
-          await wfRestoreStepData(3);
-          await wfRestoreStepData(4);
-        }
-        fillStep5();
-        return true;
-      }
-      if (step === 3 || step === 4) {
-        // 定价/加价：一次流式大模型调用。
-        // ⚠️ 顺序要紧：先把第 1 步整步上下文与上一步的产品快照恢复回来，**再**沿用到本步 ——
-        // 反过来的话第 4 步会从第 1 步的原始行带入，把第 3 步算出的利润加成丢掉。
-        await ensureStep1Context();                       // 测算基本信息/目的地/付款/物流…
-        if (!extractSectionRows('s2_techparams').length) await wfRestoreStepData(2);
-        if (step === 4 && !extractSectionRows('s3_products').length) await wfRestoreStepData(3);
-        if (CARRY_MAP[step]) await ensureCarryData(step);
-        runMarkupStep(step);
         return true;
       }
       // 其余步骤：接手人本地可能没有前面步骤的数据，先恢复并把选定产品带入该步的产品表
@@ -5397,6 +5425,8 @@
       } catch (e) { data = null; }
       if (!data || !data.id) { alert('无法打开该历史记录；不会新建或覆盖原会话，请重试。'); return false; }
       currentSessionId = data.id;
+      QUOTE_RESUME_KEY = '';
+      WF_AUTO.failedFor = '';
       opened = true;
       pinQuoteSession(data.id);
       closeOverlays();
@@ -5420,8 +5450,8 @@
       await checkTechResultHandoff();
       return true;
       } finally {
-        if (opened) QUOTE_RESUME_KEY = (currentSessionId || '') + '#' + currentStep;
         QUOTE_REPLAYING = false;
+        if (opened && !BOOT_PENDING) wfMaybePromptStart();
       }
     }
     async function deleteSession(src, id, title) {
@@ -5681,6 +5711,7 @@
           if (restored) {
             try { sessionStorage.removeItem('cpq:openSession'); } catch (e) {}
             BOOT_PENDING = false;
+            wfMaybePromptStart();
           } else {
             $('stepBadge').textContent = '恢复失败';
             addErrorBubble('原报价会话暂时读取失败，请重试或从历史记录打开；不会从头新建报价。');

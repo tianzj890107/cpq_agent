@@ -5133,7 +5133,8 @@ class Handler(BaseHTTPRequestHandler):
                 first=cpq_wf.step_snapshot(sid,1) or {}
                 code=(pkg.get('box_type') or {}).get('confirmed_box_type') or (pkg.get('requirement') or {}).get('box_type')
                 if not code:raise ValueError('回传产品编码缺失')
-                products=[{'成品编码':code,'成品描述':(pkg.get('requirement') or {}).get('packaging_product_name'),**product_cost_fields(pkg)}]
+                products=[{'产品系列':'包装','产品型号':code,'成品编码':code,
+                    '成品描述':(pkg.get('requirement') or {}).get('packaging_product_name'),**product_cost_fields(pkg)}]
                 payload={'sid':sid,'step':step,'products':products,'techparams':[technical_fields(pkg)]}
                 for key,suffix in (('basic','basic'),('dest','dest'),('payment','payment'),('logistics','logistics')):
                     section=first.get('s1_'+suffix) or {};payload[key]=section.get('数据',section.get('data'))

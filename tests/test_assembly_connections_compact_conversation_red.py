@@ -69,7 +69,12 @@ class AssemblyConnections(unittest.TestCase):
 
     def test_unknown_model_ids_are_rejected_not_saved(self):
         def run(*a):return {'assembly_connections':[{'id':'J','name':'粘合','method':'粘合','part_codes':['X1','invented'],'evidence':'模型猜测'}], 'summary':'错误候选','steps':[]}
-        with self.assertRaises(ValueError):self.prepare(run,automatic=False)
+        # 新合同：坏关系被隔离，已有的有效接口仍保留，而不是整份丢掉。
+        result=self.prepare(run,automatic=False)
+        self.assertTrue(result.packaging_assembly_attempt['issues'])
+        self.assertEqual(2,len(result.process.steps))
+        self.assertNotIn('invented',str([s.part_codes for s in result.process.steps]))
+        self.assertNotIn('J',[r['id'] for r in result.process.assembly_connections])
 
     def test_substring_names_do_not_fake_an_already_covered_connection(self):
         renamed=copy.deepcopy(DOC);renamed['business_parts'][0]['name']='面纸';renamed['business_parts'][1]['name']='盖面纸'

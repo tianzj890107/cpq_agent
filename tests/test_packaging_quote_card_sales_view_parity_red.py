@@ -185,9 +185,8 @@ class CPanelStepScoped(unittest.TestCase):
 
     def test_c3_pricing_inputs_are_kept(self):
         text = html_text() + (ROOT/'tech_app/frontend/packaging-quote-workspace.js').read_text()
-        # 新Spec quote-industry-fields-without-extra-cards：入口迁入已有字段，不再保留额外面板。
-        for token in ('毛利率（%）','data-packaging-reprice','repricePackagingWorkspace'):
-            if token=='data-packaging-reprice':token='dataset.packagingReprice'
+        # 系统库规则取代旧毛利率输入；重算入口在普通规则表，仍保留方案保存能力。
+        for token in ('dataset.systemRuleStep','runQuoteStepOnEntry','repricePackagingWorkspace'):
             self.assertIn(token, text, "定价入口迁移不能丢失（缺 %s）" % token)
 
 

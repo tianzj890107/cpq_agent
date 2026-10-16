@@ -345,6 +345,8 @@ class IntegrationPlan(BaseModel):
     packaging_assembly_scope: Optional[str] = None
     packaging_assembly_input_hash: Optional[str] = None
     packaging_assembly_part_count: Optional[int] = None
+    packaging_assembly_attempt: dict = Field(default_factory=dict, description='最近一次组装推荐的有效数量、隔离原因与历史保留状态')
+    packaging_assembly_history: List[dict] = Field(default_factory=list, description='被新有效结果替换的组装工艺及原输入版本，只追加')
     cost: Optional[CostAnalysis] = Field(None, description="整机成本测算")
     # 「参数推荐」的确认：整机参数与连接关系、BOM 由人核对过一遍才往下走。
     # 与 params_final 分开 —— 那个是最后交给报价前的收口，这个是这一环节本身的定稿。

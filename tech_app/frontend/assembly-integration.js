@@ -441,6 +441,7 @@ async function aiPost(path, opts) {
   // 参数默认值同样不写成花括号字面量，避免静态提取在参数表处提前收尾。
   opts = opts || {};
   const { form, label, quantity, keepTab } = opts;
+  const operationProject=aiPid;
   if (aiBusy) return { ok: false, error: { code: 'busy', message: '已有任务在执行，请稍候。' } };
   const blocked = aiBlocker(path);
   if (blocked) { aiToast(blocked, true); return { ok: false, error: { code: 'blocked', message: blocked } }; }
@@ -464,7 +465,10 @@ async function aiPost(path, opts) {
     const partial = aiData?.task_status==='partial'
       || (aiIndustry==='packaging' && path==='process' && aiBusinessParts?.workspace?.assembly_result_state==='partial');
     card.done(partial ? 'partial' : true);
-    if(partial)card.log([path==='name-associations' ? '语义模型不可用，已保留规则关联与未匹配项；请查看工作区缺口。' : '连接依据尚未齐全，已保留有效推荐；请查看工作区缺口，可重新生成。']);
+    if(partial)card.log([path==='name-associations' ? '语义模型不可用，已保留规则关联与未匹配项；请查看工作区缺口。'
+      : aiData?.assembly_attempt?.retained_previous ? '本次未生成可用新工序，已保留上次结果；请查看工作区未采用原因。'
+      : aiData?.assembly_attempt?.generated_step_count===0 ? '本次未生成可用组装工序，请查看工作区的未采用原因与连接待补项。'
+      : '连接依据尚未齐全，已保留有效推荐；请查看工作区缺口，可重新生成。']);
     aiStatus(partial ? `${title}部分完成，连接依据待补` : `${title}已完成`);
     aiPublishTask(partial ? 'task-partial' : 'task-completed', { taskId: taskId, label: title, status: partial ? 'partial' : 'succeeded' });
     if (!keepTab) aiTab = path;
@@ -472,6 +476,9 @@ async function aiPost(path, opts) {
     return { ok: true, partial };
   } catch (error) {
     const message = error.message || `${title}失败`;
+    if(aiIndustry==='packaging' && aiPid===operationProject){
+      try{await aiRefreshPackagingWorkspace();aiRender();}catch(refreshError){ /* 原始任务错误仍由下方卡片报告。 */ }
+    }
     const interrupted = aiTaskInterrupted(error);
     card.done(interrupted ? 'interrupted' : false, message);
     aiStatus(interrupted ? `${title}已中断：${message}` : `${title}失败：${message}`, !interrupted);

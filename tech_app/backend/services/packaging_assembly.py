@@ -42,6 +42,7 @@ connection_candidates仅为名称角色线索，不是已确认连接；结合�
 
 
 def recommendation_state(plan):
+    if (getattr(plan,'packaging_assembly_attempt',{}) or {}).get('status')=='partial':return 'partial'
     process=plan.process
     if process is None:return 'not_generated'
     if process.open_questions:return 'partial'
@@ -109,6 +110,8 @@ def prepare(project_id, actor, *, run=None, force=False, note='', automatic=Fals
     doc,records=active_inputs(project_id)
     if not doc.get('business_parts'):raise ValueError('assembly_parts_missing')
     plan=integration.load_plan(project_id)
+    previous=plan.process.model_copy(deep=True) if plan.process is not None else None
+    previous_valid=valid(plan,doc,records)
     if not force and valid(plan,doc,records) and (len(doc['business_parts'])<2
             or plan.process.steps or plan.process.assembly_connections):return plan
     interfaces=plan.params.interfaces if plan.params else []
@@ -128,18 +131,20 @@ def prepare(project_id, actor, *, run=None, force=False, note='', automatic=Fals
         'connection_candidates':connections.candidate_pairs(doc),'unresolved_connections':unresolved,
         'requirement':plan.requirement_note,'note':note},ensure_ascii=False)}]
     content.extend(llm_client.attachment_blocks(attachments or []))
+    from .packaging_assembly_validation import AssemblyProposal,isolate
+    issues=[]
     try:
         if len(context)<2:
             result=ProcessPlan(part_class='packaging',summary='当前只有一个完整零件，无跨零件新增组装工序。')
         else:
-            result=(run or llm_client.run)(SYSTEM,content,ProcessPlan)
-            result=result if isinstance(result,ProcessPlan) else ProcessPlan.model_validate(result)
-        result=connections.enrich(result,doc,records,known)
-        validate(result,doc)
+            result=(run or llm_client.run)(SYSTEM,content,AssemblyProposal)
+        result,issues=isolate(result,doc,records,known,validate)
     except Exception as exc:
-        if not automatic:raise
         result=ProcessPlan(part_class='packaging',summary='模型方案不可用，按已有接口逐项估算；没有依据的连接不编造。',
             overall_note='模型推荐降级：'+type(exc).__name__)
+        issues.append({'stage':'模型','index':1,'code':type(exc).__name__,
+            'reason':'模型请求超时，未取得本次推荐' if isinstance(exc,TimeoutError) else '模型请求或结果解析失败（'+type(exc).__name__+'），保留已有有效依据'})
+        result.open_questions.append(OpenQuestion(field='模型推荐',reason=issues[-1]['reason']))
         result=connections.enrich(result,doc,records,known)
     if len(context)>1 and not result.assembly_connections and not result.steps:
         result.summary='尚未识别可用零件连接关系，不能用一道总装代替；已有零件制造工艺保留。'
@@ -152,6 +157,19 @@ def prepare(project_id, actor, *, run=None, force=False, note='', automatic=Fals
     for reason in unresolved:
         result.open_questions.append(OpenQuestion(field='接口归属',reason=reason))
     validate(result,doc)
+    attempt={'status':'partial' if issues or result.open_questions or (len(context)>1 and not result.steps and not result.assembly_connections) else 'succeeded',
+        'generated_step_count':len(result.steps),'issues':issues,'retained_previous':False,
+        'input_hash':input_hash(doc,records,interfaces),'at':now_cst_str()}
+    plan.packaging_assembly_attempt=attempt
+    if attempt['status']=='partial' and not result.steps and previous is not None and previous.steps:
+        plan.process=previous
+        attempt.update(status='partial',retained_previous=True,previous_input_matches=previous_valid)
+        if not issues:
+            attempt['issues']=[{'stage':'结果','index':1,'code':'no_usable_steps','reason':result.summary or '本次未生成可用的新增组装工序'}]
+        if not previous_valid:
+            plan.process_confirmed=False;plan.process_confirmed_by=None;plan.process_confirmed_at=None
+        integration.save_plan(project_id,plan,actor.get('username',''))
+        return plan
     result.part_id=integration.ASSEMBLY_PART_ID
     result.part_class='packaging'
     unknown=[s for s in result.steps if s.standard_seconds is None]
@@ -167,6 +185,11 @@ def prepare(project_id, actor, *, run=None, force=False, note='', automatic=Fals
                                   'labor_rate':36.,'mock':True,'source':'assembly_estimate'}
             step.note=(step.note or '')+'；未知工时按整盒30秒预算分配，人工费率采用估算，来源保留'
         else:step.time_source=step.time_source or 'unknown'
+    if previous is not None and previous.model_dump()!=result.model_dump():
+        plan.packaging_assembly_history.append({'process':previous.model_dump(),
+            'input_hash':plan.packaging_assembly_input_hash,'scheme_id':plan.packaging_route_scheme_id,
+            'scope':plan.packaging_assembly_scope,'confirmed':plan.process_confirmed,'at':now_cst_str(),
+            'replaced_by':actor.get('username','')})
     plan.process=result;plan.packaging_assembly_scope=SCOPE
     plan.packaging_assembly_part_count=len(context)
     plan.packaging_assembly_input_hash=input_hash(doc,records,interfaces)
@@ -191,6 +214,7 @@ def save(project_id, result, actor):
     for step in result.steps:step.scope='project'
     result.part_class='packaging'
     plan.process=result;plan.packaging_assembly_scope=SCOPE
+    plan.packaging_assembly_attempt={}
     plan.packaging_assembly_part_count=len(doc.get('business_parts') or [])
     plan.packaging_assembly_input_hash=input_hash(doc,records,interfaces)
     plan.packaging_route_scheme_id=doc.get('selected_scheme_id')

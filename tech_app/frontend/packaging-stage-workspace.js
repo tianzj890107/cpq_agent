@@ -45,8 +45,14 @@
   }
   function processes(board) {
     let html=`<section class="inline-card"><div class="inline-card-title">3.2 组装工艺</div><div class="inline-hint">只列零件之间新增的工序，零件制造工艺在2.1查看。</div><div class="inline-totals"><span>新增工序 ${(board.assembly_steps||[]).length}</span><span>${board.status?.['3.2']?.completed?'已采用':'待采用'}</span></div>`;
+    const attempt=board.assembly_attempt||{};
+    if(attempt.status==='partial'){
+      html+='<div class="inline-warn">'+(attempt.retained_previous?'本次未生成可用的新工序，保留上次组装工艺。':Number(attempt.generated_step_count||0)===0?'本次未生成可用的组装工序，请查看未采用原因。':'本次推荐部分完成，已保留有效工序。')+'</div>';
+      html+='<div class="inline-hint">本次有效工序 '+esc(attempt.generated_step_count??0)+' 道；下面列出的工艺'+(attempt.retained_previous?'来自上次保存结果。':'为本次核对后的结果。')+'</div>';
+      if(attempt.issues?.length)html+='<details class="inline-row"><summary>本次未采用原因 · '+attempt.issues.length+' 项</summary>'+attempt.issues.map(r=>'<div class="inline-hint">'+esc(r.stage||'')+' '+esc(r.index??'')+' '+esc(r.name||'')+'：'+esc(r.reason||'原因未提供')+'</div>').join('')+'</details>';
+    }
     if(board.assembly_scope_changed)html+='<div class="inline-hint">旧工艺或当前方案已变化，请重新生成新增组装工艺；历史结果保留。</div>';
-    if(board.assembly_result_state==='partial')html+='<div class="inline-warn">组装推荐尚未完整：未取得可靠连接的零件不会编造工序，可点击「生成新增组装工艺」重试；排模缺口单独保留，不阻止推荐。</div>';
+    if(board.assembly_result_state==='partial' && !attempt.status)html+='<div class="inline-warn">组装推荐尚未完整：未取得可靠连接的零件不会编造工序，可点击「生成新增组装工艺」重试；排模缺口单独保留，不阻止推荐。</div>';
     if(board.process_missing)html+=`<div class="inline-hint">${esc(board.process_missing)} 个零件制造工艺待补齐，生成组装工艺时只补缺失零件。</div>`;
     if((board.assembly_questions||[]).length)html+='<details class="inline-row"><summary>连接依据待补 · '+board.assembly_questions.length+' 项</summary>'+board.assembly_questions.map(q=>'<div class="inline-hint">'+esc(q.field||'连接关系')+'：'+esc(q.reason||'')+'</div>').join('')+'</details>';
     html+='</section>';

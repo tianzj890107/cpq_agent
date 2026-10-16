@@ -146,8 +146,8 @@ def prepare_names(project_id, actor):
     return True
 
 
-def prepare_route(project_id,actor, *, regenerate_assembly=False, note='', attachments=None):
-    prepare_names(project_id,actor)
+def prepare_route(project_id,actor, *, regenerate_assembly=False, note='', attachments=None, prepare_associations=True):
+    if prepare_associations:prepare_names(project_id,actor)
     ensure_inputs(project_id,actor)
     from . import packaging_process_instances
     from . import tasks
@@ -160,12 +160,26 @@ def prepare_route(project_id,actor, *, regenerate_assembly=False, note='', attac
         tasks.report_progress('全部零件工艺已齐，直接复用，不调用模型')
     from . import packaging_assembly
     tasks.report_progress('编制零件之间新增的组装工序，保留整件制造工艺')
-    packaging_assembly.prepare(project_id,actor,force=regenerate_assembly,note=note,attachments=attachments,automatic=True)
+    plan=packaging_assembly.prepare(project_id,actor,force=regenerate_assembly,note=note,attachments=attachments,automatic=True)
+    attempt=plan.packaging_assembly_attempt or {}
+    if (attempt.get('retained_previous') and not attempt.get('previous_input_matches')) or (
+            not plan.process.steps and packaging_assembly.recommendation_state(plan)=='partial'):
+        tasks.report_progress('本次没有可用于更新项目路线的新工序，保留结果与具体原因，不冒充路线更新完成')
+        return plan
     tasks.report_progress('汇总整件制造工艺与新增组装工序，生成当前包装项目路线')
     req_no=(store.load_requirement(project_id) or {}).get('requirement_no') or ''
-    packaging_bom.build_bom(project_id,req_no)
-    packaging_route.build_route(project_id,req_no)
-    route=packaging_route.confirm_route(project_id,req_no,actor=actor)
+    try:
+        packaging_bom.build_bom(project_id,req_no)
+        packaging_route.build_route(project_id,req_no)
+        route=packaging_route.confirm_route(project_id,req_no,actor=actor)
+    except (packaging_bom.BomError,packaging_route.RouteError,ValueError) as exc:
+        plan.packaging_assembly_attempt.update(status='partial')
+        plan.packaging_assembly_attempt.setdefault('issues',[]).append({'stage':'项目路线','index':1,
+            'code':type(exc).__name__,'reason':'组装工序已保存，但项目路线/BOM更新未完成；后续成本需重新核对（'+type(exc).__name__+'）'})
+        from . import integration
+        integration.save_plan(project_id,plan,actor.get('username',''))
+        tasks.report_progress('组装工序已保存，项目路线更新未完成；请查看工作区原因')
+        return plan
     return sync_integration(project_id,actor,route)
 
 def run(project_id, *, actor, run_model=None, progress=None):

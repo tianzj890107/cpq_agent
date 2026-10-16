@@ -200,6 +200,7 @@ def build(project_id, doc, data, plan, records):
         'individual_cuts':cuts,'part_processes':processes,'layout_parts':layout_parts,
         'assembly_steps':assembly_steps,'postprocess_steps':assembly_steps,
         'assembly_result_state':assembly_state,
+        'assembly_attempt':copy.deepcopy(getattr(plan,'packaging_assembly_attempt',{}) or {}),
         'assembly_scope_changed':process is not None and not packaging_assembly.valid(plan,active,records),
         'assembly_summary':getattr(process,'summary','') if process else '',
         'assembly_questions':[q.model_dump() for q in process.open_questions] if process else [],

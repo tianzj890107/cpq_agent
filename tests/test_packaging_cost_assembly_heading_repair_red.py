@@ -146,7 +146,7 @@ class LoadingAndAssembly(unittest.TestCase):
         source=(FRONT/'assembly-integration.js').read_text()
         has=source[source.index('const aiHasProcess ='):source.index(';',source.index('const aiHasProcess ='))+1]
         node(r'''
-        let aiBusy=false,aiTab='process',aiIndustry='packaging',aiData={status:{has_process:true}};
+        let aiBusy=false,aiPid='p',aiTab='process',aiIndustry='packaging',aiData={status:{has_process:true}};
         const aiBusinessParts={workspace:{assembly_result_state:'partial'}},states=[],events=[],aiEditing={};
         const $ai=()=>null,aiBlocker=()=>'',aiRenderActions=()=>{},aiStatus=()=>{},aiUserSay=()=>{},aiUrl=x=>x;
         const AI_TAB_NAMES={process:'组装工艺'},AI_TABS={},api=async()=>({task_id:'t'});

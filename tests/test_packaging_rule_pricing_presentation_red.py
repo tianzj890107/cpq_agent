@@ -49,6 +49,8 @@ class Presentation(unittest.TestCase):
         def merge(sid,step,snapshot,**kwargs):snapshots[step]=copy.deepcopy(snapshot)
         def fill(data,emit=None):
             self.assertEqual(47.74,data['products'][0]['基础成本'])
+            self.assertEqual('包装',data['products'][0]['产品系列'])
+            self.assertEqual(data['products'][0]['成品编码'],data['products'][0]['产品型号'])
             self.assertEqual('裕同包装',data['basic']['所属组织'])
             amount=2.345 if data['step']==3 else .675
             return {'ok':True,'product_markup':{data['products'][0]['成品编码']:amount},
