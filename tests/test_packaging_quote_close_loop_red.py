@@ -989,7 +989,7 @@ class EPrice(PriceCase):
 class FDocument(PriceCase):
     def test_f1_document_sections(self):
         quote = self.price(gross_margin_rate=MARGIN)
-        document = self.module.document(quote)
+        document = self.module.internal_document(quote)
         self.assertEqual([item["title"] for item in document["sections"]],
                          [title for _, title in self.module.DOC_SECTIONS],
                          "报价单八节与顺序见 Spec §2.5")
@@ -997,7 +997,7 @@ class FDocument(PriceCase):
 
     def test_f2_markdown_carries_the_numbers(self):
         quote = self.price(gross_margin_rate=MARGIN)
-        markdown = self.module.document(quote)["markdown"]
+        markdown = self.module.internal_document(quote)["markdown"]
         self.assertIn("103.59", markdown, "报价单必须写出未税单价（Spec §2.5）")
         self.assertIn("117.06", markdown, "报价单必须写出按分计算的含税单价")
         self.assertIn("117060.00", markdown, "报价单必须写出含税总额")
@@ -1005,7 +1005,7 @@ class FDocument(PriceCase):
     def test_f3_document_numbers_match_quote(self):
         quote = self.price(gross_margin_rate=MARGIN, addons={"tech_premium": 1.0},
                            discount={"rate": 0.1})
-        document = self.module.document(quote)
+        document = self.module.internal_document(quote)
         flat = json.dumps(document, ensure_ascii=False)
         for key in ("untaxed_unit_price", "net_unit_price", "taxed_unit_price",
                     "taxed_total", "cost_total"):
@@ -1018,7 +1018,7 @@ class FDocument(PriceCase):
         package = package_fixture()
         package["source"]["handoff_id"] = "h-pkg-1"
         quote = self.price(package=package, gross_margin_rate=MARGIN)
-        document = self.module.document(quote)
+        document = self.module.internal_document(quote)
         flat = json.dumps(document, ensure_ascii=False)
         for token in (PID, "h-pkg-1", "packaging_quote_v1", "packaging_v1",
                       "packaging_margin_v1"):
@@ -1032,7 +1032,7 @@ class FDocument(PriceCase):
 
     def test_f6_title_is_readable(self):
         quote = self.price(gross_margin_rate=MARGIN)
-        title = self.module.document(quote)["title"]
+        title = self.module.internal_document(quote)["title"]
         self.assertIn("包装", title)
         self.assertIn(BOX_MAIN, title)
 
@@ -1049,8 +1049,8 @@ class FDocument(PriceCase):
 
     def test_f7_document_is_deterministic(self):
         quote = self.price(gross_margin_rate=MARGIN)
-        first = self.module.document(quote)
-        second = self.module.document(copy.deepcopy(quote))
+        first = self.module.internal_document(quote)
+        second = self.module.internal_document(copy.deepcopy(quote))
         self.assertEqual(json.dumps(first, ensure_ascii=False, sort_keys=True),
                          json.dumps(second, ensure_ascii=False, sort_keys=True),
                          "报价单不许带时间戳/随机数（历史打开要能逐字恢复）")

@@ -41,7 +41,7 @@ PRICING_PROFILE = "packaging_margin_v1"
 PACKAGE_SECTIONS = ("industry", "requirement", "box_type", "params", "bom", "route",
                     "cost", "gaps", "formulas", "source")
 
-#: 回传（落库 + 发送）的写权限闭集：财务 / 工艺侧的动作，与报价侧定价互不越界。
+#: 回传（落库 + 发送）的写权限闭集：报价人员 / 工艺侧的动作，与报价侧定价互不越界。
 HANDOFF_WRITE_ROLES = {"finance_manager", "process_manager", "process_director", "admin"}
 
 #: 参数段从需求字段里挑出来的几何与工艺输入（Spec §2.2「即展开输入」）。
@@ -586,7 +586,7 @@ def send_to_quote(project_id: str, requirement_no: str = "", *, scenario: Option
     user = user or {}
     role = _text(user.get("role_code") or user.get("role"))
     if role not in HANDOFF_WRITE_ROLES:
-        raise HandoffError("只有财务经理、工艺经理、工艺技术总监或管理员能回传包装报价，"
+        raise HandoffError("只有报价人员、工艺经理、工艺技术总监或管理员能回传包装报价，"
                            f"当前是「{_text(user.get('role_name')) or role or '未登录'}」",
                            403, "role_not_allowed")
     package = handoff_package(project_id, requirement_no, scenario=scenario)
@@ -625,7 +625,7 @@ def send_to_quote(project_id: str, requirement_no: str = "", *, scenario: Option
     gaps = list(package.get("gaps") or [])
     has_gaps = _has_gaps(package)
     # 放行留痕必须跟着包一起过桥（Spec 批 12 §2.1）：技术侧留了痕、报价侧那道门才认得出
-    # "财务写明原因放行"这条官方路径；没有缺口时不放这个键，正文与今天逐字一致。
+    # "报价人员写明原因放行"这条官方路径；没有缺口时不放这个键，正文与今天逐字一致。
     body = bridge_result(package)
     if waiver:
         body = {**body, "gap_waiver": waiver}

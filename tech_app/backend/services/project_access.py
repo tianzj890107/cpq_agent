@@ -63,7 +63,7 @@ CONTRIBUTE_ROUTES = (
 
 
 #: 包装成本的四条路由（Spec `packaging-cost-write-role-single-source.md` §2.1 / §2.2）。
-#: 这一组是**唯一**允许「项目还没算出成本也按动作放行 / 给可判码」的动作：财务在成本算出来
+#: 这一组是**唯一**允许「项目还没算出成本也按动作放行 / 给可判码」的动作：报价人员在成本算出来
 #: 之前按 `_packaging_cost_visible()` 本来就看不见项目，一律回 404「项目不存在」的话，用户
 #: 分辨不出「我没权限」「项目被删了」和「还没算过」。逐条白名单，不写成推断式规则（Spec §18.5）。
 PACKAGING_COST_ROUTES = (
@@ -82,7 +82,7 @@ PACKAGING_INDUSTRY = "packaging"
 #: 中间件）把它翻成 403 + `{code, message}`；真不存在的项目仍然是 404「项目不存在」，一字不改。
 COST_NOT_COMPUTED_CODE = "cost_not_computed_yet"
 COST_NOT_COMPUTED_MESSAGE = (
-    "项目存在，但还没有算过包装成本 —— 财务在成本算出来之前看不到它。"
+    "项目存在，但还没有算过包装成本 —— 报价人员在成本算出来之前看不到它。"
     "请先让工艺经理（或你本人）算出这一版成本，算完即可见。")
 
 
@@ -102,7 +102,7 @@ def _route_matcher(template: str):
 # 模块导入期编译一次：真实请求路径里是具体 id（/parts/P-001/cost），正则按段匹配。
 CONTRIBUTE_MATCHERS = tuple((method, _route_matcher(path)) for method, path in CONTRIBUTE_ROUTES)
 
-# 包装成本回传的动作级 ACL：财务经理可读已有成本时，还必须能进入本接口自己的
+# 包装成本回传的动作级 ACL：报价人员可读已有成本时，还必须能进入本接口自己的
 # 角色/缺口门禁。独立列出，避免改变上方 21 条历史白名单的精确基线。
 PACKAGING_QUOTE_SEND_MATCHERS = (
     ("POST", _route_matcher("/api/projects/{project_id}/requirement/packaging-quote/send")),
@@ -155,10 +155,10 @@ def packaging_cost_action_basis(user: dict, project_id: str, action=None,
                                 meta: dict = None) -> bool:
     """「算一次包装成本」这条动作的**动作级** ACL 依据（Spec §2.1 方案 A）。纯读。
 
-    财务算包装成本是通用流程本来的口径（`auth.COST_ROLES` / `main.py` 的 `can_cost` 一直这么
+    报价人员算包装成本是通用流程本来的口径（`auth.COST_ROLES` / `main.py` 的 `can_cost` 一直这么
     告诉前端），但这个项目的**读**依据是「成本算出来才可见」—— 于是「第一次算成本」这件事自己
-    把自己挡在门外（34 实测：财务点测算 → 404「项目不存在」）。
-    这里按 Spec 的要求逐条放行**这一个动作**：财务 + 项目存在 + 未归档 + 行业是包装。
+    把自己挡在门外（34 实测：报价人员点测算 → 404「项目不存在」）。
+    这里按 Spec 的要求逐条放行**这一个动作**：报价人员 + 项目存在 + 未归档 + 行业是包装。
     只放行这个动作：不给项目读权（`can_read` 一字不改），更不给写权（`can_write` 一字不改）。
     """
     if not _is_finance(user):
@@ -176,7 +176,7 @@ def packaging_cost_action_basis(user: dict, project_id: str, action=None,
 
 def packaging_cost_state_code(user: dict, project_id: str, action=None,
                               meta: dict = None) -> str:
-    """§2.2 的可判分支码：**只有**「财务 + 包装成本动作 + 包装项目 + 项目存在未归档 +
+    """§2.2 的可判分支码：**只有**「报价人员 + 包装成本动作 + 包装项目 + 项目存在未归档 +
     成本还没算过」这一种组合才拿到它自己的码；其余组合一律沿用既有的 not_found / forbidden，
     行为一个字不变（不泄露其它项目、其它行业的存在性）。纯读。"""
     if not _is_finance(user) or not project_id:
@@ -200,7 +200,7 @@ READ_ALL_ROLES = {"admin", "process_manager", "process_director", "reviewer",
                   "general_manager"}
 WRITE_ALL_ROLES = {"admin", "process_manager"}
 # 跨系统的两个角色码：技术工艺侧的 ROLE_MAP 会把 sales_mgr 压成 viewer，只有同时看
-# cpq_role_code 才认得出「他是销售经理 / 财务经理」，来源报价 / 成本任务的关联才判得出来。
+# cpq_role_code 才认得出「他是销售经理 / 报价人员」，来源报价 / 成本任务的关联才判得出来。
 SALES_ROLE_CODES = {"sales_mgr", "sales_manager", "sales_director"}
 FINANCE_ROLE_CODES = {"finance_mgr", "finance_manager"}
 # 参与者来源 → 谁由此获得只读可见性。
@@ -273,7 +273,7 @@ def _is_finance(user: dict) -> bool:
 
 
 def _finance_handoff_visible(project_id: str) -> bool:
-    """财务角色池依据（Spec §18.3）：项目存在**有效的财务交接**。
+    """报价人员角色池依据（Spec §18.3）：项目存在**有效的报价人员交接**。
 
     判据是项目状态本身（`plan.finance_handoff` 非空且 sent_at / task_id 有值），不是
     具体领取人 —— CPQ 的任务派给角色池，领取人在报价侧决定，绑到人会在换班时变成
@@ -304,9 +304,9 @@ def _quote_link_visible(project_id: str) -> bool:
 
 
 def _packaging_cost_visible(project_id: str) -> bool:
-    """财务角色池依据（Spec `packaging-cost-finance-access.md` §2.1）：项目**已经算出包装成本**。
+    """报价人员角色池依据（Spec `packaging-cost-finance-access.md` §2.1）：项目**已经算出包装成本**。
 
-    判据是项目状态本身（成本记录 built），不是具体领取人 —— 包装链路没有「送财务」这一步、
+    判据是项目状态本身（成本记录 built），不是具体领取人 —— 包装链路没有「送报价人员」这一步、
     也不写 `plan.finance_handoff`，而全仓 `store.add_participant` 的生产调用点为 0；于是
     「钱已经算出来了，做成本的人却看不到项目」。成本记录本身就是关联事实，这不是放宽权限，
     是把断掉的链路接回来。纯读：不写项目、不写参与者、不产生审计。
@@ -326,9 +326,9 @@ def _packaging_cost_visible(project_id: str) -> bool:
 
 
 def claimed_task_project_access(project_id: str, user: dict) -> bool:
-    """财务「领取人」依据（Spec `e2e-packaging-downstream-handoff-report.md` §3.2）。纯读。
+    """报价人员「领取人」依据（Spec `e2e-packaging-downstream-handoff-report.md` §3.2）。纯读。
 
-    与 `_finance_handoff_visible()` 的区别：那条判的是「项目有没有送过财务」（角色池），
+    与 `_finance_handoff_visible()` 的区别：那条判的是「项目有没有送过报价人员」（角色池），
     这条判的是「这条待办到底归谁领」—— 领取人在报价侧才确定，技术项目这一侧由
     `cost_flow.grant_task_project_access()` 在领取/创建任务时落一条 `cost_task_assignee`
     参与者与一条任务记录。有了它，FI 领取正确任务后打开成本工作台不再是
@@ -397,7 +397,7 @@ def can_read(user: dict, meta: dict) -> bool:
         return True
     sources = mine_sources(user, meta)
     if meta.get("deleted_at"):
-        # 归档：工程师仅「我创建」的可读；销售 / 财务 / 其它不可见（Spec §5/§6）。
+        # 归档：工程师仅「我创建」的可读；销售 / 报价人员 / 其它不可见（Spec §5/§6）。
         return "owner" in sources
     if sources:
         return True
@@ -406,7 +406,7 @@ def can_read(user: dict, meta: dict) -> bool:
     project_id = _text(meta.get("project_id"))
     if _has_source(meta, _username(user), COST_TASK_SOURCE):
         return True
-    # 领取人依据（Spec §6 PE1）：这条财务待办是本人领的 —— 角色池判的是"项目送过财务"，
+    # 领取人依据（Spec §6 PE1）：这条报价人员待办是本人领的 —— 角色池判的是"项目送过报价人员"，
     # 这里判的是"这条任务归我"，两者都要。
     if project_id and claimed_task_project_access(project_id, user):
         return True
@@ -457,16 +457,16 @@ def require_project_access(project_id: str, user: dict, mode: str = "read", *,
 
     `action=(method, path)`：动作级判定的补充依据（Spec
     `packaging-cost-write-role-single-source.md` §2.1/§2.2）——包装成本那一条动作，
-    财务在「成本还没算过」时也允许执行；读它的时候则给**可判的状态码**而不是 404。
+    报价人员在「成本还没算过」时也允许执行；读它的时候则给**可判的状态码**而不是 404。
     不传 action 的老调用点行为逐字不变。
     """
     meta = store.load_meta(project_id)
     if not meta:
         raise ProjectAccessError("not_found", NOT_FOUND_MESSAGE)
-    # 「财务算包装成本」这条动作的依据（Spec §2.1 方案 A）：它只对那一个 POST 成立（GET 一律
+    # 「报价人员算包装成本」这条动作的依据（Spec §2.1 方案 A）：它只对那一个 POST 成立（GET 一律
     # 不认），且自带「项目存在 + 未归档 + 行业是包装」三个前提。先算出来，是因为它要在**未算过**
-    # （项目还读不到）与**算过之后**（项目能读、但项目级写权仍不给财务）两种状态下给同一个答案 ——
-    # 否则财务只能算第一版、重算又被挡，等于把两套口径换个方向再来一次。
+    # （项目还读不到）与**算过之后**（项目能读、但项目级写权仍不给报价人员）两种状态下给同一个答案 ——
+    # 否则报价人员只能算第一版、重算又被挡，等于把两套口径换个方向再来一次。
     build_basis = packaging_cost_action_basis(user, project_id, action, meta)
     if not can_read(user, meta):
         if build_basis:
@@ -487,7 +487,7 @@ def require_project_access(project_id: str, user: dict, mode: str = "read", *,
     if mode == "write":
         if meta.get("deleted_at"):
             raise ProjectAccessError("not_found", NOT_FOUND_MESSAGE)
-        # 命中动作级依据的那一条动作不按项目级写权判：`can_write()` 一字不改（财务仍然不是这个
+        # 命中动作级依据的那一条动作不按项目级写权判：`can_write()` 一字不改（报价人员仍然不是这个
         # 项目的"能改的人"），只是「算一次包装成本」不属于"改项目"这个动作。
         if not can_write(user, meta) and not build_basis:
             raise ProjectAccessError("forbidden", FORBIDDEN_MESSAGE)

@@ -47,7 +47,7 @@
   }
 
   // 「4 成本测算已开始」判定。注意：integration.cost.items 是 3 组装与整合自己算的整机成本，
-  // 不算 4 成本测算已开始 —— 否则工艺刚确认、成本还没交给财务的项目会被误判进 4 成本测算。
+  // 不算 4 成本测算已开始 —— 否则工艺刚确认、成本还没交给报价人员的项目会被误判进 4 成本测算。
   function costStarted(integration, costReview, costDetail) {
     var plan = integration || {};
     var review = costReview || {};
@@ -82,7 +82,7 @@
     // 1-3 需求单状态优先：草稿 / 已退回、待确认、待审核各有自己的页面。
     if (status === 'draft' || status === 'rejected') return 'requirement-create';
     if (status === 'pending_confirmation') return 'requirement-confirm';
-    if (status === 'pending_review') return 'requirement-review';
+    if (status === 'pending_review') return (requirement.data||{}).industry==='packaging'?'requirement-confirm':'requirement-review';
 
     // 4 已有报告时以报告状态为准（草稿回到汇总页继续写）。
     var report = wf.report || null;
@@ -97,7 +97,7 @@
     // 5 既没有需求单也没有解析结果：只能从 1.1 重新开始。
     if (!status && !parsed) return 'requirement-create';
 
-    // 6 财务把成本退回工艺经理复核：落到第 5 阶段（与报价侧同义任务的既有落点一致）。
+    // 6 报价人员把成本退回工艺经理复核：落到第 5 阶段（与报价侧同义任务的既有落点一致）。
     var actions = (data.cost_review || {}).actions;
     if (Array.isArray(actions)) {
       for (var i = 0; i < actions.length; i += 1) {
@@ -105,11 +105,11 @@
       }
     }
 
-    // 7 4 成本测算已经开始（已发财务 / 已有逐件成本 / 已确认）：不能被退回 3 组装与整合。
+    // 7 4 成本测算已经开始（已发报价人员 / 已有逐件成本 / 已确认）：不能被退回 3 组装与整合。
     if (costStarted(data.integration, data.cost_review, data.cost_detail)) return 'cost';
 
     // 8 已解析但还没进 4 成本测算：3 组装与整合。
-    if (parsed) return 'process';
+    if (parsed) return (requirement.data||{}).industry==='packaging'?'cost':'process';
 
     // 9 有需求单、还没解析：2.1 图纸解析。
     return 'drawing';

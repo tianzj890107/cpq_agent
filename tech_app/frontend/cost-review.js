@@ -1,20 +1,20 @@
 /* 【CPQ 定制 · 本文件不来自 process_drawing，同步上游时保留】
  *
- * 4 成本测算 —— 财务经理的步骤。
+ * 4 成本测算 —— 报价人员的步骤。
  *
- * 分工：工艺经理在 2.1 图纸解析与 3 组装与整合出工艺、参数与用量，3 组装与整合的结束点「确认工艺并发送至财务做
- * 成本测算」把项目交过来；财务在这里逐个零件 + 整机算成本、汇总，然后选三个去向：
+ * 分工：工艺经理在 2.1 图纸解析与 3 组装与整合出工艺、参数与用量，3 组装与整合的结束点「确认工艺并发送至报价人员做
+ * 成本测算」把项目交过来；报价人员在这里逐个零件 + 整机算成本、汇总，然后选三个去向：
  * 写入数据库 / 回传销售经理继续报价 / 提交工艺经理确认。
  *
  * 两条要一直记着的口径：
  *   · **本步不联网**。只用企业成本库里已有的物料价、费率、系数，加模型的工程经验。
- *     库里没有的写进待确认让财务去询价 —— 一个"网上搜来的"单价，报价那头没法追溯。
+ *     库里没有的写进待确认让报价人员去询价 —— 一个"网上搜来的"单价，报价那头没法追溯。
  *   · **对外用整机成本，不是零件之和**。整机成本的材料项就是逐个零件引过来的，
  *     两者相加会把零件成本算两遍。界面上两个数都给，但送出去的只有整机那个。
  */
 let crPid = TechProjectContext.bind().project;
 // 统一工作台从待办点进来时 URL 上带着来源 task_id / tech_task：完成正式去向时原样带回，
-// 由后端把原来那条已领取的财务待办关闭（cpq_wf.complete_claimed_task，幂等）。
+// 由后端把原来那条已领取的报价人员待办关闭（cpq_wf.complete_claimed_task，幂等）。
 const crTaskId = new URLSearchParams(location.search).get('task_id')
   || new URLSearchParams(location.search).get('tech_task') || '';
 // 待办恢复通道要带当前账号令牌：/wf/task 按账号裁剪任务可见性，归属仍由服务端判定。
@@ -30,14 +30,14 @@ let crBusy = false;
 // deferred 长任务（runCostReview / costStep）自己的并发闸门：启动即回执，
 // 后台链路没结束前不允许再排一条。
 let crDeferredBusy = false;
-/* 4 成本测算是财务经理的步骤。别人（工艺经理、销售）能打开这一页看数，但不能算、不能发。
+/* 4 成本测算是报价人员的步骤。别人（工艺经理、销售）能打开这一页看数，但不能算、不能发。
    后端才是权威（main.py 的 COST_ROLES），这里只是提前说清楚 —— 否则要等点下去
    才收到 403，还容易被读成"系统坏了"。取不到身份时不拦：让后端去判。 */
 let crUser = null;
 /* 角色码有两套口径：CPQ 登录态（window.cpqAuth → /auth/me，见 cpq_auth.ROLES）给的是
    CPQ 口径 finance_mgr / process_mgr / sales_mgr；技术工艺内部则是 finance_manager /
    process_manager（cpq_sso.ROLE_MAP 映射过来）。只认其中一套就会出现「显示身份是
-   财务经理、却被判成只读」——真财务经理点「回传销售经理继续报价」被前端挡下就是这个 bug。 */
+   报价人员、却被判成只读」——真报价人员点「回传销售经理继续报价」被前端挡下就是这个 bug。 */
 const CR_COST_ROLES = ['finance_manager', 'finance_mgr', 'admin'];
 const crRoleCode = () => String((crUser && (crUser.role_code || crUser.role)) || '');
 /* 服务端按技术工艺角色算好的能力位（main.py 的 sso.can_cost）才是权威：
@@ -56,8 +56,8 @@ const crReadOnly = () => {
   return Boolean(crRoleCode()) && !CR_COST_ROLES.includes(crRoleCode());
 };
 const crReadOnlyWhy = () =>
-  `4 成本测算是财务经理的步骤；当前登录的是「${crUser && crUser.role_name || '其他角色'}」，`
-  + '这一页只能查看。请用财务经理账号登录后测算。';
+  `4 成本测算是报价人员的步骤；当前登录的是「${crUser && crUser.role_name || '其他角色'}」，`
+  + '这一页只能查看。请用报价人员账号登录后测算。';
 
 const $cr = id => document.getElementById(id);
 const crUrl = (suffix = '') => `/api/projects/${encodeURIComponent(crPid)}/cost-review${suffix}`;
@@ -907,9 +907,9 @@ function crRenderActions() {
     return;
   }
   // 工艺经理侧：零件 / 整机页签里都不再摆「测算未完成的 N 个零件」这类他点不动的按钮，
-  // 只说清楚成本归财务经理、入口是左栏同一颗「发送给财务」。
+  // 只说清楚成本归报价人员、入口是左栏同一颗「发送给报价人员」。
   if (crReadOnly()) {
-    host.innerHTML = `<span class="ai-hint">成本由财务经理测算；你可以点「发送给财务」把`
+    host.innerHTML = `<span class="ai-hint">成本由报价人员测算；你可以点「发送给报价人员」把`
       + `工艺、整机参数与用量交给他。</span>`;
     return;
   }
@@ -968,7 +968,9 @@ function crRender() {
                       total: crRenderTotal };
   document.querySelectorAll('#crTabs [data-cr-tab]').forEach(button => {
     button.classList.toggle('active', button.dataset.crTab === crTab);
-    if (button.dataset.crTab === 'assembly') button.textContent = crData?.packaging_cost ? '4.2 整单成本' : '4.2 组装成本';
+    if (crData?.packaging_cost) {
+      button.textContent=({parts:'3.1 零件成本',assembly:'3.2 整单成本',total:'3.3 汇总'})[button.dataset.crTab]||button.textContent;
+    } else if (button.dataset.crTab === 'assembly') button.textContent='4.2 组装成本';
   });
   $cr('crBody').innerHTML = renderers[crTab]();
   const packagingCost = crData?.packaging_cost;
@@ -1042,13 +1044,13 @@ function crRenderOps() {
     box.textContent = '完成测算后显示成品成本';
   }
   const readOnly = crReadOnly();
-  // 工艺经理侧：这一页不摆他点不动的财务按钮，只留同一颗「发送给财务」主按钮；
-  // 财务经理侧相反。左栏聊天卡里的「一键测算全部成本」同理。
+  // 工艺经理侧：这一页不摆他点不动的报价人员按钮，只留同一颗「发送给报价人员」主按钮；
+  // 报价人员侧相反。左栏聊天卡里的「一键测算全部成本」同理。
   const sendBtn = $cr('crSendToFinance');
   if (sendBtn) {
     sendBtn.hidden = !readOnly;
     sendBtn.disabled = crBusy;
-    sendBtn.title = readOnly ? '把整机参数、工艺路线与用量交给财务做成本测算' : '';
+    sendBtn.title = readOnly ? '把整机参数、工艺路线与用量交给报价人员做成本测算' : '';
   }
   [$cr('crConfirm'), $cr('crWriteDb'), $cr('crToQuote'), $cr('crReturn')]
     .forEach(btn => { if (btn) btn.hidden = readOnly; });
@@ -1073,7 +1075,7 @@ function crRenderOps() {
 
   // 去向提示：前置条件来自 crConfirmBlocker()（唯一判定），确认之后才是三个去向。
   const why = crBusy ? '正在处理…'
-    : readOnly ? '成本由财务经理测算；你可以点「发送给财务」把工艺与参数交给他'
+    : readOnly ? '成本由报价人员测算；你可以点「发送给报价人员」把工艺与参数交给他'
     : crConfirmBlocker()
     || (!review.confirmed ? '先点「确认成本」，写库与发报价都以确认过的数为准' : '');
   const badge = $cr('crWhy');
@@ -1196,22 +1198,22 @@ async function crRunOp(kind) {
   }
 }
 
-/* 4 成本测算对工艺经理的唯一出口：把工艺与整机参数交给财务做成本测算。
+/* 4 成本测算对工艺经理的唯一出口：把工艺与整机参数交给报价人员做成本测算。
    复用 3 组装与整合的既有出口 POST /integration/send-to-finance（同一 service、同一闸门、
-   同一对外调用）；收件人留空由报价侧落到默认角色（成本测算＝财务经理），所以这里
+   同一对外调用）；收件人留空由报价侧落到默认角色（成本测算＝报价人员），所以这里
    不需要重写 3 组装与整合的派发弹窗，也不新建第二套发送实现。 */
 async function crSendToFinance() {
   if (!crData || crData.verification_pending) { crStatus(crConfirmBlocker(), true);return false; }
   if (crBusy) return { ok: false, error: { code: 'busy', message: '正在处理，请稍候。' } };
   crBusy = true;
   crRender();
-  crStatus('发送给财务中…');
+  crStatus('发送给报价人员中…');
   // 用户点按钮触发：先出用户气泡，再出执行卡。
-  if (typeof crUserSay === "function") crUserSay('确认工艺后发送给财务经理做成本测算。');
+  if (typeof crUserSay === "function") crUserSay('确认工艺后发送给报价人员做成本测算。');
   const taskKey = 'cost-send-to-finance';
-  const card = crCard('发送给财务');
-  crPublishTask('task-progress', { taskId: taskKey, label: '发送给财务',
-                                   progress: '发送给财务中…' });
+  const card = crCard('发送给报价人员');
+  crPublishTask('task-progress', { taskId: taskKey, label: '发送给报价人员',
+                                   progress: '发送给报价人员中…' });
   try {
     const body = {
       product_name: $cr('crProductName')?.value.trim() || '',
@@ -1221,22 +1223,22 @@ async function crSendToFinance() {
       `/api/projects/${encodeURIComponent(crPid)}/integration/send-to-finance`,
       { method: 'POST', body: JSON.stringify(body) });
     const finance = crData.finance || {};
-    card.log([`任务 ${finance.task_no || ''} 已发给${finance.target_role_name || '财务经理'}`,
+    card.log([`任务 ${finance.task_no || ''} 已发给${finance.target_role_name || '报价人员'}`,
       '  随包带上整机参数、工艺路线与用量',
       '  落点：本步（4 成本测算）']);
-    crSay(`已发送给${finance.target_role_name || '财务经理'}做成本测算`
+    crSay(`已发送给${finance.target_role_name || '报价人员'}做成本测算`
       + `（任务 ${finance.task_no || ''}）。`);
     card.done(true);
-    crStatus('已发送给财务');
-    crPublishTask('task-completed', { taskId: taskKey, label: '发送给财务',
+    crStatus('已发送给报价人员');
+    crPublishTask('task-completed', { taskId: taskKey, label: '发送给报价人员',
                                       status: 'succeeded' });
     return { ok: true };
   } catch (error) {
-    const message = (error && error.message) || '发送给财务失败';
+    const message = (error && error.message) || '发送给报价人员失败';
     card.done(false, message);
-    crStatus(`发送给财务失败：${message}`, true);
+    crStatus(`发送给报价人员失败：${message}`, true);
     crToast(message, true);
-    crPublishTask('task-failed', { taskId: taskKey, label: '发送给财务',
+    crPublishTask('task-failed', { taskId: taskKey, label: '发送给报价人员',
                                    status: 'failed', error: message });
     return { ok: false, error: { code: 'send-to-finance-failed', message: message } };
   } finally {
@@ -1575,7 +1577,7 @@ function crBind() {
   $cr('crReturn').onclick = () => crRunOp('return-to-process');
   $cr('crNote').onchange = () => crSaveNote();
   $cr('crQuantity').onchange = () => crSaveNote();
-  $cr('crPrev').onclick = () => window.CadWorkflowNavigation?.navigate('3.1');
+  $cr('crPrev').onclick = () => window.CadWorkflowNavigation?.navigate(crData?.packaging_cost?'2.1':'3.1');
   $cr('crNext').onclick = () => window.CadWorkflowNavigation?.navigate('5.1');
 }
 
@@ -1607,7 +1609,7 @@ const crLoadCoordinator = CPQCostReviewLoader.create({
     }
     crRender();
     crStatus(crData.verification_pending ? '已显示保存的成本，正在核验…'
-      : crReadOnly() ? '只读：本步归财务经理' : crData.review?.confirmed ? '成本已确认' : '就绪');
+      : crReadOnly() ? '只读：本步归报价人员' : crData.review?.confirmed ? '成本已确认' : '就绪');
   },
   failed: error => {
     if(!crData)$cr('crBody').innerHTML = `<div class="inline-empty error">成本读取失败：${esc(error.message)}</div>`;
@@ -1630,7 +1632,7 @@ async function crStart() {
   if(crBusy || crDeferredBusy)return;
   if(crData){crData.verification_pending=true;crRender();}
   if (!crPid && crTaskId) {
-    // URL 没带 project（财务从待办直接进入）：用 task_id 走共享模块唯一恢复项目身份。
+    // URL 没带 project（报价人员从待办直接进入）：用 task_id 走共享模块唯一恢复项目身份。
     // 关联 0 个 / 多个不同项目、接口读不到 —— 都停下来提示，不加载任何项目数据，
     // 也绝不退回上一次打开的项目。
     try {
@@ -1673,8 +1675,8 @@ async function crStart() {
 
 crStart();
 
-/* 身份核对完（CpqSso 拿到 can_cost）后翻一次：主按钮在「发送给财务」与财务动作之间切换，
-   页内的财务按钮组同步显隐 —— 不能等用户再点一次才变。 */
+/* 身份核对完（CpqSso 拿到 can_cost）后翻一次：主按钮在「发送给报价人员」与报价人员动作之间切换，
+   页内的报价人员按钮组同步显隐 —— 不能等用户再点一次才变。 */
 document.addEventListener('cpq-sso-ready', () => {
   if (crData) crRender();
   crPublishState();
@@ -1707,15 +1709,15 @@ document.addEventListener('cpq-sso-ready', () => {
       }).catch(error => crSettleIfNeeded('task-failed',action,{status:'failed',error:error.message || `${label}失败`}));
       return {ok:true};
     },
-    // 非财务身份（工艺经理）不占操作栏：这一页他只有「发送给财务」一个出口。
+    // 非报价人员身份（工艺经理）不占操作栏：这一页他只有「发送给报价人员」一个出口。
     getState: () => ({ visible: !crReadOnly(), enabled: true, busy: Boolean(crBusy || crData?.verification_pending) }),
   });
   window.TechBoardRuntime.registerActions({
-    // 4 成本测算是财务经理的步骤：工艺经理打开这一页时五颗财务动作一个也点不动（crReadOnly 全挡），
-    // 他真正该做的只有一件 —— 把工艺与整机参数交给财务。所以非财务身份下唯一可见的主按钮
-    // 是它；财务动作注册与 run 都保留（Agent / 看板仍可调用），只是不占用户操作栏。
+    // 4 成本测算是报价人员的步骤：工艺经理打开这一页时五颗报价人员动作一个也点不动（crReadOnly 全挡），
+    // 他真正该做的只有一件 —— 把工艺与整机参数交给报价人员。所以非报价人员身份下唯一可见的主按钮
+    // 是它；报价人员动作注册与 run 都保留（Agent / 看板仍可调用），只是不占用户操作栏。
     sendCostReviewToFinance: {
-      label: '发送给财务',
+      label: '发送给报价人员',
       order: 5,
       deferred: true,
       run: () => crSendToFinance(),

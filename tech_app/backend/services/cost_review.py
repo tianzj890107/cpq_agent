@@ -1,17 +1,17 @@
 """
-2.3 成本测算 —— CPQ 技术工艺，财务经理的步骤。
+2.3 成本测算 —— CPQ 技术工艺，报价人员的步骤。
 
-分工：**工艺经理出工艺与用量（2.1 / 2.2），财务经理据此核算成本并对数字负责。**
-2.2 结束时工艺经理点「确认工艺并发送至财务做成本测算」，任务落到财务这里；
-财务在本页把零件成本与组装成本逐项算出来、汇总，然后选三个去向之一：
+分工：**工艺经理出工艺与用量（2.1 / 2.2），报价人员据此核算成本并对数字负责。**
+2.2 结束时工艺经理点「确认工艺并发送至报价人员做成本测算」，任务落到报价人员这里；
+报价人员在本页把零件成本与组装成本逐项算出来、汇总，然后选三个去向之一：
 写入数据库 / 发送至报价 / 退回工艺经理复核。
 
 三条硬约束：
 
 1. **不联网**。这一步只依据企业成本库里已有的物料价、费率、计价系数，以及模型的
    工程经验来估。原来零件与整机测算都会在库内有缺口时开 web_search 补行情价 ——
-   财务口径不接受一个来路是"网上搜的"的单价，报价那头也没法追溯。所以这里一律
-   web=False，库里没有的写进 open_questions 让财务自己询价。
+   报价人员口径不接受一个来路是"网上搜的"的单价，报价那头也没法追溯。所以这里一律
+   web=False，库里没有的写进 open_questions 让报价人员自己询价。
 2. **口径唯一**。仍然走 cost_model：材料逐项累加，人工/制费/加工按固定系数推导。
    零件、整机、汇总三处用的是同一套 breakdown，不另起炉灶。
 3. **不复制数据**。零件成本读写 store.save_cost(project_id, part_id)，整机成本读写
@@ -402,14 +402,14 @@ def payload(project_id: str, ir: Optional[DesignIR], plan, review: CostReview, *
                                         summarize(project_id, ir, plan, include_details=False))
     written = plan.material_writes[-1] if plan.material_writes else None
     # 「整合参数」这个收口环节从 2.2 搬到了这里：报价必填项要在**出成本、发报价之前**
-    # 补齐，而发报价已经是财务的动作。表格的行由 DA 字典定，见 product_params。
+    # 补齐，而发报价已经是报价人员的动作。表格的行由 DA 字典定，见 product_params。
     # 4.3 的价格测算单按行业锁定的族出清单：包装项目看的是盒型/内尺寸，不是工作温度。
     family = integration.project_family(project_id)
     checklist = product_params.checklist(plan.params, family) if plan.params else None
     review_dict = review.model_dump()
     review_dict["params_final"] = bool(plan.params_final)
-    # 「带缺口继续」的签字与"报价必填到底齐没齐"要一并交给财务：缺口是**人签过字的**，
-    # 就不能再按同一批缺口把财务拦在门口（L1 生成依赖与 L4 写库 / 发报价 / 审核发布
+    # 「带缺口继续」的签字与"报价必填到底齐没齐"要一并交给报价人员：缺口是**人签过字的**，
+    # 就不能再按同一批缺口把报价人员拦在门口（L1 生成依赖与 L4 写库 / 发报价 / 审核发布
     # 仍各自硬校验，不受影响）。复用 integration 的唯一实现，这里不另算一份。
     review_dict["params_complete"] = (bool(plan.params)
                                       and not integration.missing_required(plan, family))
@@ -442,7 +442,7 @@ def payload(project_id: str, ir: Optional[DesignIR], plan, review: CostReview, *
         # 参数表里「成品编码」那一格要按它决定是显示「由系统生成」还是给出警告，
         # 说明手上这个号主数据里并不存在。
         "has_material_code": bool(plan.material_writes),
-        # 财务看板要能一眼看出"缺的这几项工艺经理签过字了"：params_complete 说数齐没齐，
+        # 报价人员看板要能一眼看出"缺的这几项工艺经理签过字了"：params_complete 说数齐没齐，
         # waiver 说缺口是谁在什么时候签字放行的（没有签字时为 None）。
         "params_complete": review_dict["params_complete"],
         "waiver": review_dict["waiver"],
@@ -478,7 +478,7 @@ def run_part(project_id: str, ir: DesignIR, part_id: str, quantity: int,
         progress=progress,
     )
     # needs_web_search 原本用来决定"要不要联网补价"；这一步不联网，但它仍然是
-    # "库里够不够"的现成判据 —— 不够就明说，让财务知道哪些数是估的、需要去询价。
+    # "库里够不够"的现成判据 —— 不够就明说，让报价人员知道哪些数是估的、需要去询价。
     _report(progress, "按库内依据与工程经验测算（本步不联网检索行情价）"
                       + ("；库内价格有缺口，缺的项会写进待确认，请人工询价"
                          if cost_svc.needs_web_search(lookup) else "；库内价格与费率齐全"))

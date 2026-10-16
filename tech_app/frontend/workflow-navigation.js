@@ -20,7 +20,7 @@
   let packagingIndustry = false;
   const stepKey = {
     '1.1':'create', '1.2':'confirm', '1.3':'review', '2.1':'drawing',
-    // 3.x 组装与整合：工艺经理的步骤；4.x 成本测算：财务经理的步骤（工艺经理在 3.x 末尾交过来）
+    // 3.x 组装与整合：工艺经理的步骤；4.x 成本测算：报价人员的步骤（工艺经理在 3.x 末尾交过来）
     '3.1':'drawing', '3.2':'params', '3.3':'process',
     '4.1':'costParts', '4.2':'costAssembly', '4.3':'costTotal',
     '5.1':'summary', '5.2':'reportReview', '5.3':'publish',
@@ -212,7 +212,7 @@
     return timing.completed === true || timing.status === 'done' || Object.keys(value).some((k) => !['timing', 'project_id', 'updated_at', 'history'].includes(k) && value[k]);
   }
   // 3 组装与整合：参数与组装工艺都有产出才算做完。
-  // **不再要求成本** —— 成本从组装阶段拆出去了，归财务经理在 4 成本测算做。
+  // **不再要求成本** —— 成本从组装阶段拆出去了，归报价人员在 4 成本测算做。
   function integrationDone(progress) {
     if(packagingStepStatus)return ['3.1','3.2'].every(k=>packagingStepStatus[k]?.completed);
     const doc = progress?.aggregate?.steps?.integration;
@@ -273,7 +273,7 @@
     if(packagingStepStatus) ['3.1','3.2'].forEach(code=>{
       doneCodes.delete(code);if(packagingStepStatus[code]?.completed)doneCodes.add(code);
     });
-    // 4.x 以"财务确认过成本"为完成 —— 算过但没确认不算，那是还在核的状态。
+    // 4.x 以"报价人员确认过成本"为完成 —— 算过但没确认不算，那是还在核的状态。
     if (costConfirmed) ['4.1', '4.2', '4.3'].forEach((code) => doneCodes.add(code));
     if (['in_review', 'approved', 'published'].includes(report.status)) doneCodes.add('5.1');
     if (['approved', 'published'].includes(report.status)) doneCodes.add('5.2');

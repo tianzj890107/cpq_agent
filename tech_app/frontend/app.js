@@ -1487,7 +1487,7 @@ function packagingPartActionsHtml(part) {
   const title = esc(verdict.reason || "");
   // 包装 2.1 的单件动作只剩「工艺推荐」一颗紧凑按钮（Spec
   // `packaging-28-part-auto-resolution-and-2d-board-cleanup.md` §6.2/§6.3）：成本属于第 4 阶段
-  // （财务经理在成本工作台处理，2.1 不许提前生成或编辑成本），挤出预览与批量挤出也从这一页撤掉。
+  // （报价人员在成本工作台处理，2.1 不许提前生成或编辑成本），挤出预览与批量挤出也从这一页撤掉。
   return `<button id="packagingPartProcess" class="part-row-action" type="button"${off}`
     + ` title="${title}">工艺推荐</button>`
     + (verdict.ok ? "" : `<div class="packaging-part-note">${esc(verdict.reason)}</div>`);
@@ -3458,6 +3458,16 @@ function packagingBusinessPartEvidenceRows(row, components, source) {
 function packagingBusinessPartRows(doc) {
   const rows = (doc && Array.isArray(doc.business_parts)) ? doc.business_parts : [];
   return rows.filter(row => row && typeof row === "object");
+}
+
+async function sendPackagingPartsToPricing(){
+  if(!currentProject)return {ok:false,error:{message:'请先打开项目'}};
+  const response=await fetch(`${API}/api/projects/${currentProject}/integration/send-to-finance`,{
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:'role',target_role_code:'finance_mgr'})});
+  const result=await response.json();
+  if(!response.ok)return {ok:false,error:{message:typeof result.detail==='string'?result.detail:(result.detail?.message||'发送失败')}};
+  window.TechEmbed?.requestNavigate('cost',currentProject);
+  return {ok:true,result:{message:'已发送报价人员核算成本',task_id:result.finance?.task_id}};
 }
 
 // 业务部件行的「单件工艺 / 成本」目标解析（Spec
@@ -6320,7 +6330,7 @@ function buildPartSubActions(part) {
 
   const row = document.createElement("div");
   row.className = "part-nav part-subactions-row";   // 复用原右侧按钮的既有样式
-  // 2.1 只出工艺，不出成本 —— 成本测算已拆成 2.3，由财务经理做（services/cost_review.py）。
+  // 2.1 只出工艺，不出成本 —— 成本测算已拆成 2.3，由报价人员做（services/cost_review.py）。
   // 工艺经理在这里交的是工序与用量，成本的数字不该由他给。
   [["process", "工艺推荐", processWrenchNavIcon]]
     .forEach(([mode, label, icon]) => {
@@ -7713,13 +7723,23 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
           return { ok: false, error: { code: "no-navigation",
             message: "当前页面缺少嵌入导航通道，无法进入下一步。" } };
         }
+        const requirement=await fetch(`${API}/api/projects/${currentProject}/requirement`).then(r=>r.json());
+        const packaging=Boolean(requirement?.requirement?.data?.industry==='packaging');
+        if(packaging)return sendPackagingPartsToPricing();
         window.TechEmbed.requestNavigate("process", currentProject);
         return { ok: true };
       },
       // 单行对象字面量：与同文件既有条目一致，避免多行 `})` 打断按行取块的静态契约。
       // 主按钮三段式：只有全部零件都有工艺推荐之后，确认才是主按钮。
-      getState: () => ({ visible: drawingParsed(), enabled: true, busy: false,
+      getState: () => ({ label:packagingBusinessPartRows(currentPackagingBusinessParts).length?'确认工艺并发送报价人员':'确认解析结果',
+                         visible: drawingParsed(), enabled: true, busy: false,
                          role: partsProcessComplete() ? "primary" : "aux" }),
+    },
+    sendPartsToPricing: {
+      label:'发送至报价人员',role:'aux',order:26,
+      prompt:'将当前零件工艺发送给报价人员核算成本。',
+      run:()=>sendPackagingPartsToPricing(),
+      getState:()=>({visible:Boolean(currentPackagingBusinessParts?.business_parts?.length),enabled:partsProcessComplete(),busy:false}),
     },
     runAllPartProcesses: {
       label: "一键生成全部工艺推荐",
@@ -8499,7 +8519,7 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerViews === 
     "part-detail": { label: "零件详情", run: (payload) => runBoardView("part-detail", payload) },
     "part-process": { label: "工艺推荐", run: (payload) => runBoardView("part-process", payload) },
     // 成本属第 4 阶段（Spec `packaging-28-part-auto-resolution-and-2d-board-cleanup.md` §6.1）：
-    // 财务经理在成本工作台处理，包装 2.1 不再把「成本测算」当零件动作。技术侧的历史视图链
+    // 报价人员在成本工作台处理，包装 2.1 不再把「成本测算」当零件动作。技术侧的历史视图链
     // 仍保留这个入口，文案据此写明阶段；包装（drawing_flow）项目里它不出现在左侧。
     "part-cost": {
       label: "成本（第 4 阶段）",

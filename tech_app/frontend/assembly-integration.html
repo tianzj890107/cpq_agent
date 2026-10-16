@@ -28,7 +28,7 @@
          + ":" + event.lineno + "）" : "");
   });
   </script>
-  <script src="cpq-sso.js?v=sso6"></script>
+  <script src="cpq-sso.js?v=20261016-slim1"></script>
   <script src="tech-embed.js?v=twb5"></script>
 </head>
 <body>
@@ -151,7 +151,7 @@
                 <div class="oc-empty" id="aiEmpty">
                   <div style="font-size:30px;">✦</div>
                   <div style="font-size:14px;">组装与整合助手</div>
-                  <div style="font-size:12.5px;">它把 2.1 拆出来的零件装回一台整机：先推荐整机参数与连接关系，<br/>再按企业工艺库排组装工序，两项都确认后把任务交给财务经理在 4.1 零件成本起算。</div>
+                  <div style="font-size:12.5px;">它把 2.1 拆出来的零件装回一台整机：先推荐整机参数与连接关系，<br/>再按企业工艺库排组装工序，两项都确认后把任务交给报价人员在 4.1 零件成本起算。</div>
                 </div>
               </div>
             </div>
@@ -166,20 +166,20 @@
                   <input id="aiProductName" type="text" maxlength="120"
                          placeholder="例如：836kWh 分体式储能模块柜" />
                 </label>
-                <div class="ai-op-cost" id="aiOpCost">确认参数推荐与组装工艺后，把任务交给财务经理测算成本</div>
+                <div class="ai-op-cost" id="aiOpCost">确认参数推荐与组装工艺后，把任务交给报价人员测算成本</div>
               </div>
-              <!-- 本步（3 组装与整合）的出口是**发给财务**：成本不归工艺经理算，他交的是工艺、参数与
-                   用量，成本的数字由财务经理在 4 成本测算负责（写库与发报价也移到那一步）。
+              <!-- 本步（3 组装与整合）的出口是**发给报价人员**：成本不归工艺经理算，他交的是工艺、参数与
+                   用量，成本的数字由报价人员在 4 成本测算负责（写库与发报价也移到那一步）。
                    点它先开派发弹窗：发给角色 / 指派到人 / 公共任务池，与报价助手一致。 -->
               <div class="ai-ops">
                 <button id="aiToFinance" class="ai-op-btn primary" type="button" disabled>
-                  ✓ 确认工艺并发送至财务做成本测算…</button>
+                  ✓ 确认工艺并发送至报价人员做成本测算…</button>
                 <button id="aiFinanceDraft" class="inline-action" type="button" hidden>发送内部草稿核算…</button>
               </div>
               <!-- 按钮为什么是灰的，就贴在按钮下面 —— 不要让人去下面那段说明里找。 -->
               <div class="ai-op-why" id="aiOpsWhy" hidden></div>
               <div class="ai-op-hint" id="aiOpsHint">
-                工艺与整机参数在这一步定稿；<strong>成本由财务经理在 4 成本测算完成</strong>，
+                工艺与整机参数在这一步定稿；<strong>成本由报价人员在 4 成本测算完成</strong>，
                 写入数据库与发送至报价也都移到了那一步。
               </div>
             </div>
@@ -228,9 +228,9 @@
   <script src="/cpq_auth.js"></script>
   <script src="/cpq_msg.js"></script>
   <script src="llm-settings-panel.js?v=llm-set3"></script>
-  <script src="quote-params-table.js?v=qp1"></script>
+  <script src="quote-params-table.js?v=20261016-slim1"></script>
   <script src="packaging-process-presentation.js?v=20261013-reference1"></script><script src="packaging-stage-workspace.js?v=20261016-partial3"></script>
-  <script src="tech-board-runtime.js?v=20260924-progress1"></script><script src="tech-session-timeline.js?v=20261015-handoff1"></script><script src="assembly-integration.js?v=20261016-partial3"></script>
+  <script src="tech-board-runtime.js?v=20260924-progress1"></script><script src="tech-session-timeline.js?v=20261015-handoff1"></script><script src="assembly-integration.js?v=20261016-slim1"></script>
   <script src="home-link.js?v=home6"></script>
 </body>
 </html>

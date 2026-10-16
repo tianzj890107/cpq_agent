@@ -54,10 +54,10 @@ TARGET_TYPES = ("role", "user", "public")
 # 报价卡片留在原步骤等新产品出来，所以它不能走 handoff 那套推进步骤的逻辑。
 TASK_KIND_HANDOFF = "handoff"
 TASK_KIND_TECH_NEW = "tech_new_product"
-# 技术工艺 2.2 做完工艺与参数之后，成本不归工艺经理算 —— 交给财务经理去 2.3 测算。
+# 技术工艺 2.2 做完工艺与参数之后，成本不归工艺经理算 —— 交给报价人员去 2.3 测算。
 # 和「新增工艺」一样是支线：报价卡片留在原处等成本，不推进步骤。
 TASK_KIND_TECH_COST = "tech_cost"
-# 财务测完把结果退回工艺经理复核（工艺有问题要他改工序/用量，不是财务改）。
+# 报价人员测完把结果退回工艺经理复核（工艺有问题要他改工序/用量，不是报价人员改）。
 TASK_KIND_TECH_COST_RETURN = "tech_cost_return"
 TASK_KINDS = (TASK_KIND_HANDOFF, TASK_KIND_TECH_NEW,
               TASK_KIND_TECH_COST, TASK_KIND_TECH_COST_RETURN)
@@ -539,7 +539,7 @@ def close_source_task(conn, task_id, user: dict, *, comment: str = "",
               " WHERE task_id = %s AND status IN ('open', 'claimed')", (_ts(_now()), tid))
     _log(conn, cid, tid, uid, "complete", None, None,
          (comment or "技术工艺回传报价：来源待办已随本次交接完成")
-         + ("（包装成本由财务经理代完成来源工艺待办，原领取人保留审计）"
+         + ("（包装成本由报价人员代完成来源工艺待办，原领取人保留审计）"
             if delegated_packaging_cost and claimed_by != uid else ""))
     return {"task_id": str(tid), "status": "completed", "closed": True, "already": False,
             "skipped": ""}
@@ -883,7 +883,7 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "",
     在同一事务里完成。
 
     on_behalf_of：**代技术侧完成**。第 2 步「工艺确认」归工艺经理，但成本测算拆给
-    财务之后，这一步的收尾动作（技术工艺 2.3「发送至报价」）是财务经理点的 ——
+    报价人员之后，这一步的收尾动作（技术工艺 2.3「发送至报价」）是报价人员点的 ——
     他做完成本才轮到报价定价。他不是在报价界面上冒名点"完成第 2 步"，而是走
     cpq_tech_bridge 那条集成通道，那里已经按自己的规则鉴过权（finance_mgr /
     process_mgr）。所以这里只认一件事：代办的角色必须**正是这一步的归属角色**，
@@ -1135,7 +1135,7 @@ def complete_claimed_task(task_id, user: dict, *, card_session_id: str = "",
     """把当前用户已领取的任务置为 completed（幂等）。
 
     技术工艺完成正式去向（提交工艺经理确认 / 回传销售经理继续报价）后调用：原 claimed
-    的财务待办必须随之关闭，否则它会一直挂在领取人的「我的任务」里。
+    的报价人员待办必须随之关闭，否则它会一直挂在领取人的「我的任务」里。
 
     校验四件事：任务存在、当前用户是领取人（或有管理角色）、任务确实属于该卡片、
     状态只能是 claimed（已经是 completed 时直接返回 already，不重复写审计）。

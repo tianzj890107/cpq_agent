@@ -12,7 +12,7 @@ if (!document.querySelector('script[data-workflow-navigation]')) {
   navCss.rel = 'stylesheet'; navCss.href = '/workflow-navigation.css?v=workflow-nav4';
   document.head.appendChild(navCss);
   const navScript = document.createElement('script');
-  navScript.src = '/workflow-navigation.js?v=workflow-nav6'; navScript.dataset.workflowNavigation = '1';
+  navScript.src = '/workflow-navigation.js?v=20261016-slim1'; navScript.dataset.workflowNavigation = '1';
   document.head.appendChild(navScript);
 }
 if (!document.querySelector('script[data-session-guard]')) {

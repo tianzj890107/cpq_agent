@@ -2295,6 +2295,9 @@ def packaging_step6_document(session_id: str):
     quote = snapshot.get("packaging_quote")
     if not isinstance(quote, dict) or not quote:
         return None
+    basic=(snapshot.get('s5_basic') or {}).get('数据') or {}
+    from cpq_commercial_quote import with_context
+    quote=with_context(quote,package,basic)
     document = cpq_packaging_quote.document(quote, publish=False)
     cost = package.get("cost") or {}
     blocked = bool(quote.get("draft") or quote.get("publish_blocked") or quote.get("gap_count")
@@ -3817,10 +3820,14 @@ def _build_quote_docx(data: dict):
     if saved is not None:
         # 演示也只导出服务端落库值，不能把客户端传入的金额伪装成核验后的报价。
         from cpq_packaging_quote import document as packaging_document
-        markdown = packaging_document(saved)['markdown']
+        sid=str(data.get('session_id') or data.get('sid') or '')
+        basic=((cpq_wf.step_snapshot(sid,5) or {}).get('s5_basic') or {}).get('数据') or {}
+        from cpq_commercial_quote import with_context
+        package=(cpq_wf.step_snapshot(sid,2) or {}).get('packaging_package') or {}
+        commercial=packaging_document(with_context(saved,package,basic))
         label='演示报价单，不得用于正式交易' if demo_only else '报价单'
-        data = dict(data, steps=[{'step':6,'name':label, 'sections':[
-            {'title':label,'kind':'document','markdown':markdown}]}])
+        data = dict(data,projectName=saved.get('product_name') or '包装产品',customer=basic.get('客户') or saved.get('customer') or '',
+            projectCode='',steps=[{'step':6,'name':label,'sections':commercial['sections']}])
     try:
         import docx
     except ImportError:
@@ -3835,11 +3842,11 @@ def _build_quote_docx(data: dict):
         meta.append("客户：" + str(data["customer"]))
     if data.get("projectCode"):
         meta.append("项目编码：" + str(data["projectCode"]))
-    meta.append("生成时间：" + _now_iso())
-    doc.add_paragraph("　｜　".join(meta))
+    if saved is None:meta.append("生成时间：" + _now_iso())
+    if meta:doc.add_paragraph("　｜　".join(meta))
 
     for st in (data.get("steps") or []):
-        doc.add_heading(f"{st.get('step','')}. {st.get('name','')}", level=1)
+        if saved is None:doc.add_heading(f"{st.get('step','')}. {st.get('name','')}", level=1)
         for sec in (st.get("sections") or []):
             doc.add_heading(str(sec.get("title") or ""), level=2)
             kind = sec.get("kind")
@@ -3879,13 +3886,13 @@ def _build_quote_docx(data: dict):
 
 
 # ---------------------------------------------------------------------------
-# 报价会话身份 / 步骤完成门禁 / 财务回传结构化载荷
+# 报价会话身份 / 步骤完成门禁 / 报价人员回传结构化载荷
 # （Spec `e2e-quote-session-and-completion-closure.md` §2 / §3 / §4）
 # ---------------------------------------------------------------------------
 #: 业务实例身份链的四个键（Spec §2.2）：任一环退化都必须显式报错，不许猜。
 BUSINESS_IDENTITY_KEYS = ("session_id", "business_case_id", "tech_project_id", "source_task_id")
 
-#: 技术/财务回传成本**必须**带的结构化字段（Spec §3）：只写进备注不算落地。
+#: 技术/报价人员回传成本**必须**带的结构化字段（Spec §3）：只写进备注不算落地。
 FINANCE_HANDOFF_FIELDS = ("business_case_id", "quote_session_id", "tech_project_id",
                           "source_task_id", "industry", "quantity", "unit_cost",
                           "currency", "cost_status", "gap_count", "cost_fingerprint",
@@ -3972,7 +3979,7 @@ def validate_business_identity(session_id: str, *, business_case_id: str = "") -
 
 
 def normalize_finance_handoff(payload, *, session_id: str = "") -> dict:
-    """技术/财务回传载荷 → 结构化成本记录（Spec §3）。
+    """技术/报价人员回传载荷 → 结构化成本记录（Spec §3）。
 
     字段名固定（`FINANCE_HANDOFF_FIELDS`）：缺什么进 ``missing`` 显式说出来，**不猜数**、
     也不把成本只写进备注——报价侧据此落产品行（基础成本 + ``provisional`` 暂估标记）。
@@ -4053,7 +4060,7 @@ def _handle_quote_identity(params) -> dict:
 
 
 def _handle_quote_cost_handoff(data: dict) -> dict:
-    """POST /api/quote/cost-handoff —— 把财务回传归一成结构化成本记录（只读，不落库）。"""
+    """POST /api/quote/cost-handoff —— 把报价人员回传归一成结构化成本记录（只读，不落库）。"""
     body = data if isinstance(data, dict) else {}
     return {"ok": True, "cost": normalize_finance_handoff(
         body.get("payload") or body.get("task") or body,
@@ -4968,7 +4975,7 @@ class Handler(BaseHTTPRequestHandler):
             payload = _handle_quote_step_gate(data)
             self._send_json(payload, 200 if payload.get("ok") else 409)
         elif path == "/api/quote/cost-handoff":
-            # 财务/技术回传载荷归一成结构化成本记录（Spec §3）：只读，不落库。
+            # 报价人员/技术回传载荷归一成结构化成本记录（Spec §3）：只读，不落库。
             self._send_json(_handle_quote_cost_handoff(self._read_body()))
         elif self._quick_quote_write(path):
             # 快速报价工作区命令（Spec `e2e-quick-quote-executable-path.md` §3）：

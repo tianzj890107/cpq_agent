@@ -25,12 +25,12 @@ function srEmptyReport(){return {project_id:srPid,report_no:'',requirement_no:''
 // 「4 成本测算」→「5.1 汇总结果」：金额只做展示格式化，前端不对成本求和（合计由后端成本口径给出）。
 function srMoney(value){const number=Number(value);if(!Number.isFinite(number))return '';return `¥${number.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}`;}
 // 成本确认状态优先取聚合层顶层口径 aggregate.cost（backend services/summary.py 复用
-// cost_review 生成），老接口只有 steps.cost_review 时也能拿到财务确认信息。
+// cost_review 生成），老接口只有 steps.cost_review 时也能拿到报价人员确认信息。
 function srCostInfo(cost,review){const data=cost||{},confirm=(review&&srHas(review))?review:(data.review||{}),final=data.final||{},assembly=data.assembly||{},parts=data.parts_total||{},total=[final.total,(assembly.breakdown||{}).total,assembly.subtotal,assembly.unit_cost].find(value=>Number.isFinite(Number(value))&&Number(value)>0);return {confirm,confirmed:Boolean(confirm.confirmed),measured:Boolean(data.ready||confirm.confirmed||total),total,partsTotal:parts.total,assemblyTotal:((assembly.breakdown||{}).total??assembly.subtotal)};}
 function srCostConfirmedText(info){const who=info.confirm.confirmed_by||'',at=info.confirm.confirmed_at||'';return `已由${who?' '+who:''}${at?' 于 '+at:''}确认`;}
 function srCostAmounts(info){const bits=[];if(Number.isFinite(Number(info.partsTotal)))bits.push(`零件成本合计 ${srMoney(info.partsTotal)}`);if(Number.isFinite(Number(info.assemblyTotal)))bits.push(`组装成本 ${srMoney(info.assemblyTotal)}`);if(Number.isFinite(Number(info.total)))bits.push(`整机成本合计 ${srMoney(info.total)}`);return bits;}
 // 经济可行性只有三种状态：成本已确认 → 可行；已测算未确认 / 没做 → 待评估。
-function srCostEconomic(cost,review){const info=srCostInfo(cost,review);if(info.confirmed)return {item:'经济可行性',status:'可行',conclusion:`${srCostAmounts(info).join('，')||'成本已确认'}；${srCostConfirmedText(info)}，可用于报价定价。`};if(info.measured)return {item:'经济可行性',status:'待评估',conclusion:`成本已测算${Number.isFinite(Number(info.total))?`（整机成本合计 ${srMoney(info.total)}）`:''}，财务尚未确认，确认后再出经济可行性结论。`};return {item:'经济可行性',status:'待评估',conclusion:'成本测算尚未完成，暂无成本结论。'};}
+function srCostEconomic(cost,review){const info=srCostInfo(cost,review);if(info.confirmed)return {item:'经济可行性',status:'可行',conclusion:`${srCostAmounts(info).join('，')||'成本已确认'}；${srCostConfirmedText(info)}，可用于报价定价。`};if(info.measured)return {item:'经济可行性',status:'待评估',conclusion:`成本已测算${Number.isFinite(Number(info.total))?`（整机成本合计 ${srMoney(info.total)}）`:''}，报价人员尚未确认，确认后再出经济可行性结论。`};return {item:'经济可行性',status:'待评估',conclusion:'成本测算尚未完成，暂无成本结论。'};}
 // 「4 成本测算」阶段行：只有成本已确认（结论完整）才进汇总表 —— 空着也加一行的话，那行必然带
 // 「尚未/暂无」，而后端送审门禁禁止 stage_results 出现这两个词。
 function srCostStage(cost,review){const info=srCostInfo(cost,review);if(!info.confirmed)return[];const amounts=srCostAmounts(info);return [{stage:'4 成本测算',conclusion:`${amounts.length?`${amounts.join('，')}；`:''}${srCostConfirmedText(info)}。`}];}

@@ -125,10 +125,10 @@ def send_to_finance(token: str, session_id: str, title: str, customer: str = "",
                     project_name: str = "", note: str = "",
                     payload: Optional[dict] = None, target_type: str = "",
                     target_role_code: str = "", target_user_id: str = "") -> dict:
-    """2.2 → 财务：工艺与参数定稿，请到 2.3 做成本测算。
+    """2.2 → 报价人员：工艺与参数定稿，请到 2.3 做成本测算。
 
     派发方式与报价助手的「转交任务」一致：role / user / public 三选一。留空则由
-    报价那边落到默认角色（成本测算=财务经理），保持老调用方不用改。
+    报价那边落到默认角色（成本测算=报价人员），保持老调用方不用改。
     """
     return _post("/wf/tech/finance", token, {
         "session_id": session_id, "title": title, "customer": customer,
@@ -211,7 +211,7 @@ def send_to_quote(token: str, session_id: str, title: str, customer: str = "",
     一条**真实**的报价 Agent 会话（不再拿技术项目号冒充会话号），返回的 linked_by /
     new_card 会一路带回界面说明白。
     result 是随任务带回去的整机结论（成品编码、四项成本、参数、工艺与零件成本）。
-    business_case_id 是报价—技术—财务—报告共用的稳定业务实例号：服务端拿它作**落点
+    business_case_id 是报价—技术—报价人员—报告共用的稳定业务实例号：服务端拿它作**落点
     的唯一裁决依据**（唯一候选自动关联、多候选停下来让人选、无候选不再静默新建）。
     create_new / create_reason 只在无候选、且用户明确确认"新建报价卡片"并写了原因时
     才为非空；服务端把这些字段原样带回来（business_case_id / candidates / recovery）。

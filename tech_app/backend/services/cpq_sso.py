@@ -35,7 +35,7 @@ from ..config import CPQ_AUTH_BASE_URL, CPQ_AUTH_TIMEOUT_SECONDS
 ROLE_MAP = {
     "process_mgr": "process_manager",
     "sales_mgr": "viewer",
-    # 财务经理：2.3 成本测算是他的步骤。技术工艺里本来就有 finance_manager 这个角色
+    # 报价人员：2.3 成本测算是他的步骤。技术工艺里本来就有 finance_manager 这个角色
     # （auth.ROLES），这里只是把 CPQ 的角色码接上去。他在 2.1/2.2 仍然是只读 ——
     # 工艺与参数不归他改，他只对成本负责。
     "finance_mgr": "finance_manager",
@@ -118,11 +118,11 @@ def _fetch(token: str) -> Optional[dict]:
 
 
 # 技术工艺角色 → CPQ 里对应的角色名。403 文案要说"这一步该谁来做"，而人在 CPQ
-# 界面上看到的是「财务经理」，不是技术工艺内部的 finance_manager。
+# 界面上看到的是「报价人员」，不是技术工艺内部的 finance_manager。
 TECH_ROLE_LABEL = {
     "process_manager": "工艺经理",
     "process_director": "工艺技术总监",
-    "finance_manager": "财务经理",
+    "finance_manager": "报价人员",
     "sales_manager": "销售经理",
     "viewer": "只读浏览",
 }

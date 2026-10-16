@@ -60,7 +60,7 @@ class AgentUnavailable(RuntimeError):
 _ACTOR: contextvars.ContextVar[str] = contextvars.ContextVar("oc_agent_actor",
                                                             default="system")
 
-# 发起本轮对话的用户令牌（CPQ SSO）。发送财务要代表用户去调一体化服务，而该请求
+# 发起本轮对话的用户令牌（CPQ SSO）。发送报价人员要代表用户去调一体化服务，而该请求
 # 必须带用户自己的 Bearer 令牌 —— 与 _ACTOR 同理：worker 线程拿不到请求上下文，
 # 接口层在 stream_sse 时注入。令牌只用于出站调用，绝不进日志、工具结果或异常文案。
 _TOKEN: contextvars.ContextVar[str] = contextvars.ContextVar("oc_agent_token",
@@ -830,23 +830,23 @@ PLATFORM_TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "ConfirmIntegrationProcess",
-        "description": "确认 2.2「组装工艺」。这是把任务推给财务的闸门：确认之后才允许发送财务。"
+        "description": "确认 2.2「组装工艺」。这是把任务推给报价人员的闸门：确认之后才允许发送报价人员。"
                        "复用看板同一个 POST /integration/process/confirm 实现，只改状态、不重算。",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "SendIntegrationToFinance",
-        "description": "把 2.2 定稿的工艺与整机参数发送给财务做成本测算（对外动作）。"
-                       "**必须由用户明确确认**：只有用户明确说「发送 / 交给财务」后，才能带 "
+        "description": "把 2.2 定稿的工艺与整机参数发送给报价人员做成本测算（对外动作）。"
+                       "**必须由用户明确确认**：只有用户明确说「发送 / 交给报价人员」后，才能带 "
                        "confirmed=true 调用；否则先返回回执征求意见，绝不代替用户触发外呼。"
                        "既有闸门不变：参数推荐与组装工艺都必须已确认才能发送。",
         "input_schema": {
             "type": "object",
             "properties": {
                 "confirmed": {"type": "boolean",
-                              "description": "用户是否已明确确认发送财务；必须是 true 才执行外呼"},
+                              "description": "用户是否已明确确认发送报价人员；必须是 true 才执行外呼"},
                 "product_name": {"type": "string", "description": "成品 / 任务名称，留空取整机名称"},
-                "note": {"type": "string", "description": "给财务的说明"},
+                "note": {"type": "string", "description": "给报价人员的说明"},
             },
             "required": ["confirmed"],
         },
@@ -900,7 +900,7 @@ PLATFORM_TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "UpdateCostReviewNote",
-        "description": "保存财务的补充说明与核算批量（会作为下一次测算的输入）。复用看板 "
+        "description": "保存报价人员的补充说明与核算批量（会作为下一次测算的输入）。复用看板 "
                        "PUT /cost-review 的同一份实现；只改说明与批量，不改成本数字、不改状态。",
         "input_schema": {
             "type": "object",
@@ -1221,7 +1221,7 @@ UI_ACTION_TOOLS = {
     "UpdateIntegrationProcess": "refresh-integration",
     "RequestIntegrationStep": "integration-step",
     # 2.2：整合图纸上传请用户在看板完成；参数 / 工序确认后刷新看板确认态。
-    # 发送财务是对外动作，只映射成「刷新看板」，绝不映射成 tool_use 阶段就自动执行的动作。
+    # 发送报价人员是对外动作，只映射成「刷新看板」，绝不映射成 tool_use 阶段就自动执行的动作。
     "UploadIntegrationDrawing": "open-integration-drawings",
     "ConfirmIntegrationParams": "refresh-integration",
     "ConfirmIntegrationProcess": "refresh-integration",
@@ -1349,9 +1349,9 @@ def _run_platform_tool(name: str, params: dict, cwd: str) -> str:
                 "requires_confirmation": True,
                 "action": "send-to-finance",
                 "status": _integration_status(project_id),
-                "note": "发送财务会把任务推给财务经理做成本测算，属于对外动作，必须由用户明确确认。"
+                "note": "发送报价人员会把任务推给报价人员做成本测算，属于对外动作，必须由用户明确确认。"
                         "请先复述整机参数与组装工艺的确认状态，得到同意后再带 confirmed=true 重新调用；"
-                        "参数推荐与组装工艺都必须先确认，否则财务算出来的成本没有依据。",
+                        "参数推荐与组装工艺都必须先确认，否则报价人员算出来的成本没有依据。",
             }, ensure_ascii=False)
         return json.dumps(
             _send_integration_to_finance(project_id, str(params.get("product_name") or ""),
@@ -2155,7 +2155,8 @@ def _confirm_requirement(project_id: str, comment: str) -> dict:
     from . import auth, requirement_service
 
     user = _actor_user()
-    if user.get("role") not in auth.MANAGER_ROLES:
+    packaging=((store.load_requirement(project_id) or {}).get('data') or {}).get('industry')=='packaging'
+    if user.get("role") not in (auth.WRITE_ROLES if packaging else auth.MANAGER_ROLES):
         return {"applied": False, "error": "通过需求确认需要工艺技术经理或管理员权限。"}
     try:
         out = requirement_service.confirm_requirement(project_id, user, comment)
@@ -2163,7 +2164,7 @@ def _confirm_requirement(project_id: str, comment: str) -> dict:
         return {"applied": False, "error": str(exc)}
     return {"applied": True, "status": out.get("status", ""),
             "requirement_no": out.get("requirement_no", ""),
-            "note": "需求已进入 1.3 待审核；请刷新右侧看板查看状态与流程留痕。"}
+            "note": "确认及审核已完成，下一步解析图纸。" if packaging else "需求已进入 1.3 待审核；请刷新右侧看板查看状态与流程留痕。"}
 
 
 def _return_requirement_to_draft(project_id: str, comment: str) -> dict:
@@ -2492,7 +2493,7 @@ def _confirm_integration_process(project_id: str) -> dict:
 
 
 def _send_integration_to_finance(project_id: str, product_name: str, note: str) -> dict:
-    """2.2 出口：把工艺与整机参数发送给财务。对外调用与看板同一份实现，只在这里翻译错误。"""
+    """2.2 出口：把工艺与整机参数发送给报价人员。对外调用与看板同一份实现，只在这里翻译错误。"""
     from . import cpq_bridge, integration
 
     try:
@@ -2503,16 +2504,16 @@ def _send_integration_to_finance(project_id: str, product_name: str, note: str) 
         return {"applied": False, "action": "send-to-finance", "error": str(exc)}
     except cpq_bridge.BridgeRejected as exc:
         return {"applied": False, "action": "send-to-finance",
-                "error": f"CPQ 服务拒绝了这次发送财务：{exc}"}
+                "error": f"CPQ 服务拒绝了这次发送报价人员：{exc}"}
     except cpq_bridge.BridgeUnavailable as exc:
         return {"applied": False, "action": "send-to-finance",
-                "error": f"发送财务失败：{exc}"}
+                "error": f"发送报价人员失败：{exc}"}
     handoff = plan.finance_handoff
     return {"applied": True, "action": "send-to-finance",
             "task_no": handoff.task_no if handoff else "",
             "sent_to": handoff.target_role_name if handoff else "",
             "status": _integration_status(project_id),
-            "note": "已发送财务做成本测算；请刷新右侧看板查看发送状态与接收人。"}
+            "note": "已发送报价人员做成本测算；请刷新右侧看板查看发送状态与接收人。"}
 
 
 # --------------------------------------------------------------------------- #
@@ -2543,7 +2544,7 @@ def _cost_review_status(project_id: str) -> dict:
 
 
 def _update_cost_review_note(project_id: str, params: dict) -> dict:
-    """保存财务说明与核算批量：与看板 PUT /cost-review 同一份实现。"""
+    """保存报价人员说明与核算批量：与看板 PUT /cost-review 同一份实现。"""
     from . import cost_flow
 
     try:
@@ -2953,7 +2954,7 @@ class ProjectAgent:
         self.conv.system_prompt = f"{self.conv.system_prompt}\n{SYSTEM_APPENDIX}"
         requirement=store.load_requirement(project_id) or {}
         if (requirement.get('data') or {}).get('industry')=='packaging':
-            self.conv.system_prompt+='\n包装行业覆盖上述第3阶段口径：只显示3.1排版排模（params视图）与3.2组装工艺（process视图）。drawings是旧入口，兼容跳转排模。组装只新增不同零件之间的工序并绑定相关整件，不能重复零件制造工艺；成本仍读取完整制造+组装路线。'
+            self.conv.system_prompt+='\n包装行业覆盖上述旧流程：当前只有需求确认及审核、图纸解析与零件工艺、成本测算、报告发布四阶段。确认及审核一次完成，不再单独需求审核。取消排模与组装阶段，不调用排模名称补全、参数推荐或独立组装工具；已有零件粘合/包盒/组装只计一次。零件工艺完成后直接发送报价人员核算，使用零件尺寸加余量，不采用排模。成本显示3.x、报告显示4.x，内部stage/key保留兼容。最终报价只显示商务内容，不输出内部工艺和成本。'
         self.lock = threading.Lock()
 
     def _rebuild_tools(self) -> None:

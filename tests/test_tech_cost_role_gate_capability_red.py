@@ -1,13 +1,13 @@
 """红测：2.3 成本测算的角色判定改为「服务端能力位优先、两套角色码都认」。
 
-用户反馈：财务经理自己点 2.3 的动作，却收到
-「2.3 成本测算是财务经理的步骤；当前登录的是「财务经理」，这一页只能查看。」
+用户反馈：报价人员自己点 2.3 的动作，却收到
+「2.3 成本测算是报价人员的步骤；当前登录的是「报价人员」，这一页只能查看。」
 
 根因：`cost-review.js` 的 `CR_COST_ROLES` 只有技术工艺口径的 `finance_manager`，
 而登录态 `window.cpqAuth.user().role_code` 是 CPQ 口径的 `finance_mgr`
-（`cpq_auth.ROLES`），于是真财务经理被误判只读，动作被前端挡下。
+（`cpq_auth.ROLES`），于是真报价人员被误判只读，动作被前端挡下。
 
-红线：真闸门（非财务角色在 2.3 只读）、后端 COST_ROLES、ROLE_MAP、
+红线：真闸门（非报价人员角色在 2.3 只读）、后端 COST_ROLES、ROLE_MAP、
 读接口与业务动作一个都不能变。
 """
 from __future__ import annotations
@@ -64,32 +64,32 @@ def run_gate(user, sso_state):
 class CostRoleGateIsCapabilityFirst(unittest.TestCase):
     def test_cpq_finance_manager_is_not_read_only(self):
         # 用户遇到的场景：CPQ 角色码 finance_mgr + 服务端 can_cost=true
-        out = run_gate({"role_code": "finance_mgr", "role_name": "财务经理"},
+        out = run_gate({"role_code": "finance_mgr", "role_name": "报价人员"},
                        {"enabled": True, "checked": True, "canCost": True})
-        self.assertFalse(out["readOnly"], "财务经理被误判只读：" + out["why"])
+        self.assertFalse(out["readOnly"], "报价人员被误判只读：" + out["why"])
 
     def test_tech_finance_manager_is_not_read_only(self):
-        out = run_gate({"role": "finance_manager", "role_name": "财务经理"}, None)
-        self.assertFalse(out["readOnly"], "技术工艺口径的财务经理也要放行：" + out["why"])
+        out = run_gate({"role": "finance_manager", "role_name": "报价人员"}, None)
+        self.assertFalse(out["readOnly"], "技术工艺口径的报价人员也要放行：" + out["why"])
 
     def test_cpq_finance_code_alone_is_enough_before_sso_ready(self):
-        # 登录态已到、能力位还没就绪：退回角色码白名单也不能误拦财务经理。
-        out = run_gate({"role_code": "finance_mgr", "role_name": "财务经理"},
+        # 登录态已到、能力位还没就绪：退回角色码白名单也不能误拦报价人员。
+        out = run_gate({"role_code": "finance_mgr", "role_name": "报价人员"},
                        {"enabled": True, "checked": False, "canCost": False})
         self.assertFalse(out["readOnly"], "能力位未就绪时误拦：" + out["why"])
 
     def test_process_manager_stays_read_only(self):
         out = run_gate({"role_code": "process_mgr", "role_name": "工艺经理"},
                        {"enabled": True, "checked": True, "canCost": False})
-        self.assertTrue(out["readOnly"], "非财务角色在 2.3 必须保持只读")
-        self.assertIn("财务经理", out["why"], "只读原因要保留，说清这一步归谁")
+        self.assertTrue(out["readOnly"], "非报价人员角色在 2.3 必须保持只读")
+        self.assertIn("报价人员", out["why"], "只读原因要保留，说清这一步归谁")
 
     def test_unknown_identity_is_not_blocked(self):
         out = run_gate(None, {"enabled": False})
         self.assertFalse(out["readOnly"], "取不到身份时不拦，交给后端 403")
 
     def test_server_capability_wins_over_a_strange_role_code(self):
-        out = run_gate({"role_code": "something_else", "role_name": "财务经理"},
+        out = run_gate({"role_code": "something_else", "role_name": "报价人员"},
                        {"enabled": True, "checked": True, "canCost": True})
         self.assertFalse(out["readOnly"], "服务端能力位是权威，不能被本地角色码否决")
 
@@ -123,8 +123,8 @@ class CapabilitiesNotReduced(unittest.TestCase):
     def test_backend_ownership_unchanged(self):
         self.assertRegex(AUTH, r'COST_ROLES\s*=\s*\{"finance_manager",\s*"admin"\}')
         self.assertIn('"finance_mgr": "finance_manager"', SSO,
-                      "CPQ 财务经理 → 技术工艺财务经理 的映射不能动")
-        self.assertIn('"finance_mgr": "财务经理"', CPQ_AUTH,
+                      "CPQ 报价人员 → 技术工艺报价人员 的映射不能动")
+        self.assertIn('"finance_mgr": "报价人员"', CPQ_AUTH,
                       "CPQ 角色码本身不变")
 
     def test_cost_actions_and_routes_stay(self):

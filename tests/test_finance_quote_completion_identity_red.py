@@ -11,7 +11,7 @@ class FinanceCompletionIdentity(unittest.TestCase):
         src=(pathlib.Path(__file__).resolve().parents[1]/'tech_app/frontend/cost-review.js').read_text()
         start=src.index('function crPublishTask(')
         end=src.index('// 最近一次收尾',start)
-        script='''const events=[];const window={TechBoardRuntime:{publish:(event,action,data)=>events.push({event,action,data})}};const crRememberSettle=()=>{};'''+src[start:end]+'''
+        script='''const events=[];const crEmbeddedChat=()=>false,crBridgeTurn=null;const window={TechBoardRuntime:{publish:(event,action,data)=>events.push({event,action,data})}};const crRememberSettle=()=>{};'''+src[start:end]+'''
 crPublishTask('task-completed',{action:'sendCostReviewToQuote',taskId:'cost-op-send-to-quote'});
 if(events[0].action!=='sendCostReviewToQuote')process.exit(1);
 '''
@@ -129,7 +129,7 @@ setImmediate(()=>{if(events.length!==1 || events[0].action!=='sendCostReviewToQu
     def test_process_manager_cannot_use_finance_completion_identity(self):
         with H.Workbench(source_task_kind='tech_new_product',source_claimed_by=H.PROC_UID) as wb:
             result=self.seed(wb)
-            with self.assertRaisesRegex(cpq_tech_bridge.BridgeError,'财务'):
+            with self.assertRaisesRegex(cpq_tech_bridge.BridgeError,'报价人员'):
                 wb.handoff(uid=H.PROC_UID,result=result)
             self.assertEqual([],wb.handoffs())
 

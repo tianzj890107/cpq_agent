@@ -61,7 +61,7 @@ _PRIMARY_ACTIONS = {
 
 # 每个子步骤的角色/能力：roles 是判定用的集合（运行时读 auth，尊重
 # enable_cpq_single_manager 之类的运行期授权），label 是给用户看的角色名。
-# 4.x 是财务的步骤（COST_ROLES），1.3/5.2 仍由有权限的人提交 —— 编号变化不改权限判定。
+# 4.x 是报价人员的步骤（COST_ROLES），1.3/5.2 仍由有权限的人提交 —— 编号变化不改权限判定。
 _STEP_ROLES = {
     "1.1": ("工艺工程师", ("WRITE_ROLES",)),
     "1.2": ("工艺技术经理", ("MANAGER_ROLES",)),
@@ -70,9 +70,9 @@ _STEP_ROLES = {
     "3.1": ("工艺工程师", ("WRITE_ROLES",)),
     "3.2": ("工艺工程师", ("WRITE_ROLES",)),
     "3.3": ("工艺工程师", ("WRITE_ROLES",)),
-    "4.1": ("财务负责人", ("COST_ROLES",)),
-    "4.2": ("财务负责人", ("COST_ROLES",)),
-    "4.3": ("财务负责人", ("COST_ROLES",)),
+    "4.1": ("报价人员", ("COST_ROLES",)),
+    "4.2": ("报价人员", ("COST_ROLES",)),
+    "4.3": ("报价人员", ("COST_ROLES",)),
     "5.1": ("工艺工程师", ("WRITE_ROLES",)),
     "5.2": ("审核人", ("REVIEW_ROLES", "MANAGER_ROLES")),
     "5.3": ("工艺技术总监", ("DIRECTOR_ROLES", "MANAGER_ROLES")),
@@ -240,7 +240,8 @@ def _judge(key: str, project_id: str, facts: Dict[str, Any]) -> dict:
         if not req_status:
             return {"status": "not_started", "completed": False,
                     "missing": ["需求单还没有创建"]}
-        done = req_status in ("pending_review", "approved")
+        merged=(req.get('data') or {}).get('industry')=='packaging'
+        done = req_status == 'approved' if merged else req_status in ("pending_review", "approved")
         if done:
             return {"status": "confirmed", "completed": True}
         if req_status == "pending_confirmation":
@@ -447,15 +448,16 @@ def _rows_for(project_id: str, facts: Dict[str, Any], role: str) -> List[dict]:
                     break
 
         # 权限：不足时不可执行并写明所需角色（不影响 viewable）。
-        role_label, _ = _role_names(key)
-        if role and not _has_role(key, role):
+        permission_key='2.1' if key=='1.2' and (requirement.get('data') or {}).get('industry')=='packaging' else key
+        role_label, _ = _role_names(permission_key)
+        if role and not _has_role(permission_key, role):
             blockers.append(f"需要{role_label}角色才能执行本步" if role_label else "当前角色不能执行本步")
         elif not role and role_label:
             blockers.append(f"需要{role_label}角色才能执行本步")
 
         blocked = status == "blocked"
-        actionable = (completed or not blockers) and not blocked and _has_role(key, role)
-        if role_label and not _has_role(key, role):
+        actionable = (completed or not blockers) and not blocked and _has_role(permission_key, role)
+        if role_label and not _has_role(permission_key, role):
             actionable = False
 
         stale = bool(getattr(facts.get("meta"), "get", lambda *_: None)("derived_results_stale")) \
@@ -465,6 +467,7 @@ def _rows_for(project_id: str, facts: Dict[str, Any], role: str) -> List[dict]:
             "phase_no": int(spec["phase"]),
             "phase_title": spec['phase_title'],
             "sub": spec["sub"],
+            "display_sub":spec.get('display_sub',spec['sub']),
             "sub_title": spec['sub_title'],
             "stage_id": spec["stage_id"],
             "view": spec["view"],
@@ -487,9 +490,9 @@ def _rows_for(project_id: str, facts: Dict[str, Any], role: str) -> List[dict]:
 def _phases(rows: List[dict]) -> List[dict]:
     by_key = {row["key"]: row for row in rows}
     out: List[dict] = []
-    for phase in stages_table.PHASES:
-        subs = list(phase.get("subs") or ())
-        members = [by_key[sub] for sub in subs if sub in by_key]
+    for phase_no in dict.fromkeys(row['phase_no'] for row in rows):
+        members=[row for row in rows if row['phase_no']==phase_no]
+        phase={'no':phase_no,'title':members[0]['phase_title']}
         completed = bool(members) and all(row["completed"] for row in members)
         status = "confirmed"
         if not completed:

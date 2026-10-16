@@ -447,7 +447,7 @@
     UploadIntegrationDrawing: "上传整合图纸",
     ConfirmIntegrationParams: "确认整合参数",
     ConfirmIntegrationProcess: "确认组装工序",
-    SendIntegrationToFinance: "把工艺发送财务",
+    SendIntegrationToFinance: "把工艺发送报价人员",
     GetCostReviewState: "读取成本测算状态",
     ListCostReviewParts: "读取成本测算零件",
     RunCostReviewPart: "测算单个零件成本",

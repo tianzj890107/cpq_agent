@@ -75,7 +75,7 @@ def _stage_block(code: str, industry: str = '') -> Dict[str, Any]:
         return {"code": _text(code), "index": 0, "total": STAGE_TOTAL, "title": "", "phase": 0}
     definitions=workflow_stages.for_industry(industry)
     index=next((i for i,r in enumerate(definitions,1) if r['sub']==row['sub']),0)
-    return {"code": row["sub"], "index": index,
+    return {"code": row["sub"], "display_code":row.get('display_sub',row['sub']), "index": index,
             "total": len(definitions), "title": row["sub_title"], "phase": int(row["phase"])}
 
 

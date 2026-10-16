@@ -112,13 +112,15 @@ def build_requirement_pdf(requirement: dict, project: dict | None = None) -> byt
     lines: list[tuple[str, int]] = [
         ("工艺评估需求单", 18),
         (f"需求编号：{_plain(requirement.get('requirement_no'))}    创建时间：{_plain(requirement.get('created_at'))}", 9),
-        (f"需求名称：{_plain(requirement.get('title'))}", 10),
+        (f"需求名称：{_plain(data.get('packaging_product_name') if data.get('industry')=='packaging' else requirement.get('title'))}", 10),
         (f"创建人：{_plain(requirement.get('created_by'))}    当前状态：{_plain(requirement.get('status'))}", 9),
         (f"项目图纸：{_plain((project or {}).get('source_filename'))}", 9),
         ("", 9),
     ]
     dynamic_values = _flexible_values(data)
     sections = [*_SECTIONS[:2], _product_section(data), *_SECTIONS[2:]]
+    if data.get('industry')=='packaging':
+        sections=[_product_section(data),('数量与交期',['quote_quantity','first_sample_due','mass_production_due']),('技术要求',['technical_requirements','notes'])]
     for title, keys in sections:
         lines.append((title, 13))
         for key in keys:

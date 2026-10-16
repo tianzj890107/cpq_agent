@@ -12,7 +12,7 @@ const __techEmbedMode__ = new URLSearchParams(location.search).get('embed') === 
  * 长得不一样只会让人以为算法也不一样。
  */
 const aiPid = TechProjectContext.bind().project;
-// 本步只剩三个环节：成本测算搬去了 4 成本测算（财务经理的步骤）。
+// 本步只剩三个环节：成本测算搬去了 4 成本测算（报价人员的步骤）。
 // 整合参数（报价必填项的补全与最终确认）留在本步的「参数推荐」里 ——
 // 工艺经理在这里交的是**工艺、参数与用量**，成本的数字不由他给。
 const AI_TABS = { drawings: '整合图纸', params: '参数推荐', process: '组装工艺' };
@@ -576,7 +576,7 @@ function aiRenderActions() {
   // 参数推荐这一环节也要有人按下确认：整机参数、连接关系与 BOM 是后面工艺与成本的输入，
   // 没人点过头就往下走，错的口径会一路带到报价。
   // 参数推荐与组装工艺各有一个确认键。组装工艺那个是闸门：确认之后才允许把任务
-  // 推给财务经理去 4 成本测算 —— 工序和用量没定稿，算出来的成本没有意义。
+  // 推给报价人员去 4 成本测算 —— 工序和用量没定稿，算出来的成本没有意义。
   const confirmBtn = aiTab === 'params'
     ? `<button type="button" class="inline-action" id="aiParamsConfirm" ${!has || aiBusy ? 'disabled' : ''}>`
       + `${aiData?.status?.params_confirmed ? '重新确认' : '确认参数推荐'}</button>`
@@ -584,8 +584,8 @@ function aiRenderActions() {
     ? `<button type="button" class="inline-action" id="aiProcessConfirm" ${!has || aiBusy ? 'disabled' : ''}>`
       + `${aiData?.status?.process_confirmed ? '重新确认' : '确认组装工艺'}</button>`
       + `<span class="ai-hint">${aiData?.status?.process_confirmed
-          ? '已确认，可以在左边把任务发给财务经理做成本测算。'
-          : '确认后才能把任务推给财务经理 —— 工序与用量定稿了，成本才算得准。'}</span>`
+          ? '已确认，可以在左边把任务发给报价人员做成本测算。'
+          : '确认后才能把任务推给报价人员 —— 工序与用量定稿了，成本才算得准。'}</span>`
     : '';
   const label = `${has ? '重新生成' : '生成'}${AI_TABS[aiTab]}`;
   // 参数表始终可填：它的行是报价字典定死的，模型没推出来的那些正是要人工补的。
@@ -847,7 +847,7 @@ function aiRenderParams() {
 }
 
 /** 确认某个环节。参数推荐缺口不拦（型号未定的方案也要能往下走），但要说出来；
-    组装工艺的确认是把任务推给财务的前提。 */
+    组装工艺的确认是把任务推给报价人员的前提。 */
 async function aiConfirmStep(step) {
   if (aiBusy) return;
   aiBusy = true;
@@ -865,8 +865,8 @@ async function aiConfirmStep(step) {
     aiPublishTask('task-completed', { taskId: confirmTask, label: `${label}确认`,
                                       status: 'succeeded' });
     if (step === 'process') {
-      aiSay('组装工艺已确认。现在可以点左边「确认工艺并发送至财务做成本测算」，'
-        + '把任务交给财务经理 —— 他会在 4 成本测算逐件算零件成本与组装成本。');
+      aiSay('组装工艺已确认。现在可以点左边「确认工艺并发送至报价人员做成本测算」，'
+        + '把任务交给报价人员 —— 他会在 4 成本测算逐件算零件成本与组装成本。');
     } else {
       aiSay(missing
         ? `参数推荐已确认。注意还有 ${missing} 项报价必填的成品参数没有值 —— `
@@ -950,7 +950,7 @@ async function aiParamsAutofill(options) {
 /** 「保存补填」/「确认参数已齐」：把表里的值合进整机参数（finalize），
     confirm=true 时后端校验报价必填项 —— 缺项就退回真实原因，不把缺口带给后面。
     可选第二个参数 waiver 是「仍要继续」那条路：缺口原样留档、人签了字，
-    params_final 仍为 false（签字不等于参数已齐），发送财务时同一批缺口凭它复用。 */
+    params_final 仍为 false（签字不等于参数已齐），发送报价人员时同一批缺口凭它复用。 */
 async function aiParamsFinalize(confirm, waiver) {
   if (aiBusy) return;
   aiBusy = true;
@@ -971,7 +971,7 @@ async function aiParamsFinalize(confirm, waiver) {
     aiToast(confirm ? '参数已最终确认' : '已保存');
     aiPublishTask('task-completed', { taskId: taskId, label: label, status: 'succeeded' });
     aiSay(confirm
-      ? '参数已最终确认：报价必填的成品参数都齐了，接下来排组装工艺，再把任务发送财务。'
+      ? '参数已最终确认：报价必填的成品参数都齐了，接下来排组装工艺，再把任务发送报价人员。'
       : `补填已保存${gaps.required_missing ? `，还有 ${gaps.required_missing} 项报价必填参数没有值。` : '，报价必填项已齐。'}`);
   } catch (error) {
     const message = error.message || `${label}失败`;
@@ -1111,7 +1111,7 @@ async function aiConfirmParamsAndNext() {
     }
     // 带着缺口继续：既有的「保存补填」调用 aiParamsFinalize(false) 形态不变，只是这次
     // 多带一个签字 —— 已填的值照旧落库（params_final 仍为 false，签字不等于参数已齐），
-    // 缺口与签字一起留档，发送财务时同一批缺口凭它复用，不再要第二次签字。
+    // 缺口与签字一起留档，发送报价人员时同一批缺口凭它复用，不再要第二次签字。
     const waiver = { reason: `带缺口继续：${why}` };
     await aiParamsFinalize(false, waiver);
   }
@@ -1141,8 +1141,8 @@ function techGoNextStage(stage) {
 
 /** 「确认并进入下一步」（组装工艺页）：确认组装工艺 → 切到 4 成本测算。
     确认走既有 /integration/process/confirm，切步骤走既有嵌入导航通道；
-    确认没过就把真实原因原样返回，不往下走。交给财务的交接不在这里做 ——
-    接收人必须人工选，仍由同一页的「确认工艺并发送财务」承担。 */
+    确认没过就把真实原因原样返回，不往下走。交给报价人员的交接不在这里做 ——
+    接收人必须人工选，仍由同一页的「确认工艺并发送报价人员」承担。 */
 async function aiConfirmProcessAndNext() {
   if (aiBusy) {
     return { ok: false, error: { code: 'busy', message: '已有任务在执行，请稍候。' } };
@@ -1158,8 +1158,8 @@ async function aiConfirmProcessAndNext() {
   techGoNextStage('cost');
   aiSay('组装工艺已确认，已进入下一步 4 成本测算。'
     + (aiPlan().finance_handoff
-        ? '任务已经在财务手里，接下来由他在 4 成本测算逐件测算零件成本与组装成本。'
-        : '如果还没把任务交给财务，先在左边点「确认工艺并发送财务」（接收人要人工选），'
+        ? '任务已经在报价人员手里，接下来由他在 4 成本测算逐件测算零件成本与组装成本。'
+        : '如果还没把任务交给报价人员，先在左边点「确认工艺并发送报价人员」（接收人要人工选），'
           + '否则 4 成本测算没有可接手的测算任务。'));
   return { ok: true };
 }
@@ -1406,7 +1406,7 @@ function aiRender() {
   aiPublishState();
 }
 
-/* 每次渲染收尾重新发布一次动作快照：父壳左侧「确认工艺并发送财务」等按钮的
+/* 每次渲染收尾重新发布一次动作快照：父壳左侧「确认工艺并发送报价人员」等按钮的
    busy / 可见性不会停在上一帧。同一帧内多次渲染合并成一次；独立打开阶段页
    （没有 TechBoardRuntime）时无副作用。 */
 let aiPublishTimer = null;
@@ -1426,8 +1426,8 @@ function aiPublishState() {
  * 单价是要拿去报价的，宁可拦住，也不要写一个 0 进去。
  */
 
-/* 「确认工艺并发送财务」的 L1 硬门禁：只判**生成依赖** —— 参数推荐 / 组装工艺跑过没有。
-   没有这两样，财务连成本都算不出来，签字也不放行（L1 不可豁免）。
+/* 「确认工艺并发送报价人员」的 L1 硬门禁：只判**生成依赖** —— 参数推荐 / 组装工艺跑过没有。
+   没有这两样，报价人员连成本都算不出来，签字也不放行（L1 不可豁免）。
    L2（报价必填缺口、三项内部确认）不在这里拦：那是「仍要继续」的签字范围，
    见 aiFinanceGaps() 与 aiConfirmProcessAndSendToFinance()。
    aiRenderOps() 的页内 why 与左侧动作快照的 run() 共用这一份，两处不许漂移。 */
@@ -1505,9 +1505,9 @@ function aiRenderOps() {
   const box = $ai('aiOpCost');
   const finance = plan.finance_handoff;
   box.textContent = finance
-    ? `已交给${finance.target_role_name || '财务经理'}（任务 ${finance.task_no || ''}）`
-    : (aiIndustry === 'packaging' ? '完成排版排模与新增组装工艺后，把任务交给财务经理测算成本'
-       : '确认参数推荐与组装工艺后，把任务交给财务经理测算成本');
+    ? `已交给${finance.target_role_name || '报价人员'}（任务 ${finance.task_no || ''}）`
+    : (aiIndustry === 'packaging' ? '完成排版排模与新增组装工艺后，把任务交给报价人员测算成本'
+       : '确认参数推荐与组装工艺后，把任务交给报价人员测算成本');
 
   const financeBtn = $ai('aiToFinance');
   const draftBtn = $ai('aiFinanceDraft');
@@ -1521,7 +1521,7 @@ function aiRenderOps() {
   const gapsWhy = gaps.text && gaps.covered ? `${gaps.text}（这批缺口已签字放行）` : gaps.text;
   const why = aiBusy ? '正在处理…' : (aiFinanceBlocker() || gapsWhy);
   if (financeBtn) {
-    financeBtn.title = why || '把工艺、参数与用量交给财务经理，由他在 4 成本测算成本';
+    financeBtn.title = why || '把工艺、参数与用量交给报价人员，由他在 4 成本测算成本';
   }
   const badge = $ai('aiOpsWhy');
   if (badge) {
@@ -1545,23 +1545,23 @@ function aiRenderOps() {
       + `<div style="margin-top:6px">再点一次可以换个派发方式重发（旧任务会被作废）。</div>`
     : (aiIndustry === 'packaging' ? '本步完成排版排模和零件之间新增的组装工艺；'
        : '工艺与整机参数在这一步定稿（报价必填参数在「参数推荐」里补齐并确认）；')
-      + '<strong>成本由财务经理在 4 成本测算完成</strong>，写入数据库与发送至报价也都移到了那一步。')
+      + '<strong>成本由报价人员在 4 成本测算完成</strong>，写入数据库与发送至报价也都移到了那一步。')
     + (why ? '' : '');
 }
 
 /** 说明区节点。抽出来只是为了上面那段读起来短一点。 */
 function $cr_hint() { return $ai('aiOpsHint'); }
 
-/** 这条任务交到哪儿了 —— 三种派发方式各有各的说法，别一律写成"已发送至财务经理"。 */
+/** 这条任务交到哪儿了 —— 三种派发方式各有各的说法，别一律写成"已发送至报价人员"。 */
 function aiHandoffWhom(finance) {
-  const name = finance.target_name || finance.target_role_name || '财务经理';
+  const name = finance.target_name || finance.target_role_name || '报价人员';
   if (finance.target_type === 'public') return '发布到公共任务池（谁都能领取）';
   if (finance.target_type === 'user') return `指派给${name}`;
   return `发给${name}（该角色的人都能领取）`;
 }
 
-/* 「发送至财务」的派发弹窗 —— 与报价助手的「转交任务」同构。
-   成本测算的默认收件角色是财务经理，但公司里做这件事的往往不止一个人：
+/* 「发送至报价人员」的派发弹窗 —— 与报价助手的「转交任务」同构。
+   成本测算的默认收件角色是报价人员，但公司里做这件事的往往不止一个人：
    点一下就自动群发给整个角色，等于替发起人做了他本来要做的选择。
    三种方式都给：发给某个角色 / 指派给某个人 / 发布到公共任务池。 */
 const AI_FINANCE_ROLE = 'finance_mgr';
@@ -1573,11 +1573,11 @@ async function aiWfApi(path) {
 
 async function aiOpenFinanceDialog(waiver, draft = false) {
   if (aiBusy) {
-    const message = '正在处理中，请稍后再发送财务。';
+    const message = '正在处理中，请稍后再发送报价人员。';
     aiStatus(message, true);
     return { ok: false, error: { code: 'busy', message: message } };
   }
-  // 名单取不到也要能发：那时只剩「发给财务经理」这一种，与改造前的行为一致。
+  // 名单取不到也要能发：那时只剩「发给报价人员」这一种，与改造前的行为一致。
   let roles = [];
   let users = [];
   let listError = '';
@@ -1589,14 +1589,14 @@ async function aiOpenFinanceDialog(waiver, draft = false) {
   }
   const me = (window.cpqAuth && window.cpqAuth.user && window.cpqAuth.user()) || {};
   const roleNameOf = code =>
-    (roles.find(r => r.role_code === code) || {}).role_name || '财务经理';
+    (roles.find(r => r.role_code === code) || {}).role_name || '报价人员';
 
   const mask = document.createElement('div');
   mask.className = 'ai-send-mask';
   mask.id = 'aiSendMask';
   mask.innerHTML =
     `<div class="ai-send-box">
-      <div class="ai-send-head"><h3>发送至财务做成本测算</h3>
+      <div class="ai-send-head"><h3>发送至报价人员做成本测算</h3>
         <p>工艺、整机参数与用量在这一步定稿。接手人会在技术工艺 4 成本测算逐件测算零件成本、
            组装成本并汇总，再决定写入数据库、发送至报价，或退回给你复核。</p></div>
       <div class="ai-send-body">
@@ -1608,7 +1608,7 @@ async function aiOpenFinanceDialog(waiver, draft = false) {
           </select></div>
         <div class="ai-send-row" id="aiSendRoleRow"><label for="aiSendRole">目标角色</label>
           <select id="aiSendRole">${
-            (roles.length ? roles : [{ role_code: AI_FINANCE_ROLE, role_name: '财务经理' }])
+            (roles.length ? roles : [{ role_code: AI_FINANCE_ROLE, role_name: '报价人员' }])
               .map(r => `<option value="${aiAttr(r.role_code)}"${
                 r.role_code === AI_FINANCE_ROLE ? ' selected' : ''}>${esc(r.role_name)}</option>`)
               .join('')}</select></div>
@@ -1618,7 +1618,7 @@ async function aiOpenFinanceDialog(waiver, draft = false) {
           <input id="aiSendSearch" placeholder="输入姓名/角色筛选" />
           <select id="aiSendUser" size="5"></select></div>
         <div class="ai-send-row"><label for="aiSendNote">备注（可选）</label>
-          <input id="aiSendNote" maxlength="200" placeholder="给财务的说明，如核算批量、特殊工艺" /></div>
+          <input id="aiSendNote" maxlength="200" placeholder="给报价人员的说明，如核算批量、特殊工艺" /></div>
       </div>
       <div class="ai-send-msg" id="aiSendMsg">${listError ? esc(listError) + '：只能按角色发送。' : ''}</div>
       <div class="ai-send-foot">
@@ -1666,7 +1666,7 @@ async function aiOpenFinanceDialog(waiver, draft = false) {
   };
 }
 
-/* 「确认工艺并发送财务」的链路：组装工艺还没确认就先走既有 /process/confirm 把它
+/* 「确认工艺并发送报价人员」的链路：组装工艺还没确认就先走既有 /process/confirm 把它
    确认掉（确认没通过就带真实原因停下），再由既有 aiFinanceBlocker 判定 L1 生成依赖；
    L2 缺口（报价必填 + 三项内部确认）不硬拦 —— 用既有 aiAskProceed 取得本人签字，
    点「仍要继续」才带着签字打开既有接收人弹窗，点「取消」即停、不发送不落库。
@@ -1693,38 +1693,38 @@ async function aiConfirmProcessAndSendToFinance() {
       + `报价测算单上对应的格子仍是空白；签字：${signed.waived_by || '本人'}`
       + `${signed.waived_at ? `（${signed.waived_at}）` : ''}`
       + `${signed.reason ? `，事由：${signed.reason}` : ''}。`
-      + `现在把工艺、参数与用量发给财务，缺口按那次签字放行。`);
+      + `现在把工艺、参数与用量发给报价人员，缺口按那次签字放行。`);
     return aiOpenFinanceDialog(null);
   }
   if (gaps.text && !gaps.covered) {
     const go = await aiAskProceed(
       `${gaps.text}\n\n这些项平台推不出来，需要有人给个值。现在继续的话，报价测算单上`
       + `这几格会是空白，内部确认也按你的签字放行；平台会记下是你签的字，`
-      + `之后不再按同一批缺口拦你。确定要带着缺口发送财务吗？`,
+      + `之后不再按同一批缺口拦你。确定要带着缺口发送报价人员吗？`,
       { title: '这一步还有没完成的项' });
     if (!go) {
       return { ok: false, error: { code: 'required-missing',
-        message: `${gaps.text}已停在发送财务这一步：补填参数或点确认后再重试。` } };
+        message: `${gaps.text}已停在发送报价人员这一步：补填参数或点确认后再重试。` } };
     }
     waiver = { reason: `带缺口继续：${gaps.text}` };
   }
   return aiOpenFinanceDialog(waiver);
 }
 
-/* 发送财务的后台链路：动作条目只启动它、秒级回执，由这里在真正结束时自报收尾。
+/* 发送报价人员的后台链路：动作条目只启动它、秒级回执，由这里在真正结束时自报收尾。
    父壳那 20 秒超时只用来抓「看板没响应」，不再误伤要人选接收人的弹窗。 */
 async function aiSendToFinanceInBackground() {
   try {
     const result = await aiConfirmProcessAndSendToFinance();
     if (result && result.ok === false) {
       aiSettleIfNeeded('task-failed', 'sendIntegrationToFinance',
-        { message: (result.error && result.error.message) || '发送财务失败，请查看右侧看板提示。' });
+        { message: (result.error && result.error.message) || '发送报价人员失败，请查看右侧看板提示。' });
       return;
     }
     aiSettleIfNeeded('task-completed', 'sendIntegrationToFinance');
   } catch (error) {
     aiSettleIfNeeded('task-failed', 'sendIntegrationToFinance',
-      { message: (error && error.message) || '发送财务失败，请查看右侧看板提示。' });
+      { message: (error && error.message) || '发送报价人员失败，请查看右侧看板提示。' });
   } finally {
     aiDeferredBusy = false;
     window.TechBoardRuntime.updateActionState('sendIntegrationToFinance', { busy: false });
@@ -1733,7 +1733,7 @@ async function aiSendToFinanceInBackground() {
 
 async function aiRunOp(kind, dispatch) {
   if (aiBusy) return;
-  const labels = { 'send-to-finance': '确认工艺并发送至财务做成本测算' };
+  const labels = { 'send-to-finance': '确认工艺并发送至报价人员做成本测算' };
   if (dispatch && dispatch.draft) labels['send-to-finance'] = '发送包装内部草稿核算（不可正式发布）';
   aiBusy = true;
   aiRenderOps();
@@ -2105,7 +2105,7 @@ async function aiRunAll() {
     body: JSON.stringify({ requirement_note: note, quantity: aiPlan().quantity || 1 }),
   }).then(data => { aiData = data; }).catch(() => {});
   aiSay('开始整合分析：参数推荐 → 组装工艺，两步依次进行。'
-    + '成本测算由财务经理在第 4 阶段做（左边「确认工艺并发送财务」之后）。');
+    + '成本测算由报价人员在第 4 阶段做（左边「确认工艺并发送报价人员」之后）。');
   for (const step of ['params', 'process']) {
     await aiGenerate(step);
     if (!aiData?.status?.[{ params: 'has_params', process: 'has_process' }[step]]) {
@@ -2120,7 +2120,7 @@ async function aiRunAll() {
   aiTab = 'process';
   aiRender();
   aiSay('参数推荐与组装工艺都已生成。逐项核对后，分别点「确认参数推荐」与「确认组装工艺」，'
-    + '再把任务发给财务经理做成本测算（4 成本测算）。');
+    + '再把任务发给报价人员做成本测算（4 成本测算）。');
 }
 
 /* ------------------------------------------------------- 模型参数设置
@@ -2485,7 +2485,7 @@ async function aiStart() {
 
 aiStart();
 
-/* 统一看板协议：3 组装与整合的整合分析与发送财务注册成语义化动作，内部页签注册成语义化视图。
+/* 统一看板协议：3 组装与整合的整合分析与发送报价人员注册成语义化动作，内部页签注册成语义化视图。
  * 父壳底栏 / 标题行只发动作名 / 视图名，页面上的原按钮继续走同一份实现。 */
 (function aiRegisterTechBoardActions() {
   if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
@@ -2523,10 +2523,10 @@ aiStart();
       },
     },
     // 组装工艺页的收口动作：工艺生成后它就是这一步的主按钮 —— 没确认过就先按既有
-    // /process/confirm 确认（不做死按钮），再由既有弹窗选接收人把任务交给财务。
+    // /process/confirm 确认（不做死按钮），再由既有弹窗选接收人把任务交给报价人员。
     // 弹窗要人操作，所以是 deferred：条目只启动、秒级回执，成败由后台链路自报。
     sendIntegrationToFinance: {
-      label: '确认工艺并发送财务',
+      label: '确认工艺并发送报价人员',
       deferred: true,
       run: () => {
         // 同步回执里只判 L1 生成依赖（参数推荐 / 组装工艺跑过没有），并如实说清楚；
@@ -2549,11 +2549,11 @@ aiStart();
         const show = aiTab === 'process';
         return { visible: show, enabled: true, busy: aiBusy || aiDeferredBusy,
                  analyzed: analyzed, role: (show && aiHasProcess()) ? 'primary' : 'aux', order: 42,
-                 hint: '确认工艺并把任务交给财务做成本测算' };
+                 hint: '确认工艺并把任务交给报价人员做成本测算' };
       },
     },
     // 整合图纸页的收口动作：分析出结果后，「确认图纸并进入参数推荐」才是这一步的下一步，
-    // 财务交接不抢主按钮（它只属于组装工艺页）。role 与可见性同一个条件，全页签只此一颗。
+    // 报价人员交接不抢主按钮（它只属于组装工艺页）。role 与可见性同一个条件，全页签只此一颗。
     confirmDrawingsAndNext: {
       label: '确认图纸并进入参数推荐',
       order: 15,
@@ -2628,8 +2628,8 @@ aiStart();
                  role: aiHasProcess() ? 'aux' : 'primary', order: 40 };
       },
     },
-    // 组装工艺页的收口不再给「去 4 成本测算」单独一颗按钮：成本测算是财务经理那一步，
-    // 工艺经理在这里只需把任务交给财务。工艺生成后的主按钮是「确认工艺并发送财务」，
+    // 组装工艺页的收口不再给「去 4 成本测算」单独一颗按钮：成本测算是报价人员那一步，
+    // 工艺经理在这里只需把任务交给报价人员。工艺生成后的主按钮是「确认工艺并发送报价人员」，
     // 它自己会先把组装工艺确认掉 —— 所以这一颗退出左侧栏（动作注册与实现照旧保留，
     // Agent / 内部链路仍按名字调用）。
     confirmProcessAndNext: {

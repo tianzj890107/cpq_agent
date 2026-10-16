@@ -147,7 +147,6 @@ def prepare_names(project_id, actor):
 
 
 def prepare_route(project_id,actor, *, regenerate_assembly=False, note='', attachments=None, prepare_associations=True):
-    if prepare_associations:prepare_names(project_id,actor)
     ensure_inputs(project_id,actor)
     from . import packaging_process_instances
     from . import tasks
@@ -158,15 +157,9 @@ def prepare_route(project_id,actor, *, regenerate_assembly=False, note='', attac
         if generated['failures']:raise ValueError('demo_process_incomplete:'+str(generated['failures']))
     else:
         tasks.report_progress('全部零件工艺已齐，直接复用，不调用模型')
-    from . import packaging_assembly
-    tasks.report_progress('编制零件之间新增的组装工序，保留整件制造工艺')
-    plan=packaging_assembly.prepare(project_id,actor,force=regenerate_assembly,note=note,attachments=attachments,automatic=True)
-    attempt=plan.packaging_assembly_attempt or {}
-    if (attempt.get('retained_previous') and not attempt.get('previous_input_matches')) or (
-            not plan.process.steps and packaging_assembly.recommendation_state(plan)=='partial'):
-        tasks.report_progress('本次没有可用于更新项目路线的新工序，保留结果与具体原因，不冒充路线更新完成')
-        return plan
-    tasks.report_progress('汇总整件制造工艺与新增组装工序，生成当前包装项目路线')
+    from . import integration
+    plan=integration.load_plan(project_id)
+    tasks.report_progress('直接汇总零件已有工艺，跳过排模与新增组装')
     req_no=(store.load_requirement(project_id) or {}).get('requirement_no') or ''
     try:
         packaging_bom.build_bom(project_id,req_no)
@@ -203,8 +196,6 @@ def run(project_id, *, actor, run_model=None, progress=None):
                if collected['active'] and not collected['missing'] else
                packaging_demo_inputs.prepare_processes(project_id,actor=actor.get('username',''),run=run_model))
     if processes['failures']: raise ValueError('demo_process_incomplete:'+str(processes['failures']))
-    from . import packaging_assembly
-    packaging_assembly.prepare(project_id,actor,run=run_model,automatic=True)
     report('自动展开BOM、生成并采用项目路线')
     packaging_bom.build_bom(project_id,req_no)
     packaging_route.build_route(project_id,req_no)

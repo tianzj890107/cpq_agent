@@ -83,10 +83,17 @@
     { key: 'process', label: '组装工艺', no: '3.2', stage: 'process', view: 'process' },
   ];
   const PACKAGING_COST_TABS = CHILD_TAB_PROXY.cost.tabs.map(tab =>
-    tab.key === 'assembly' ? {...tab, label:'整单成本'} : tab);
+    ({...tab,no:'3.'+tab.no.split('.')[1],label:tab.key==='assembly'?'整单成本':tab.label}));
+  const PACKAGING_MAJOR_STEPS=MAJOR_STEPS.filter(m=>m.entry!=='process').map(m=>({...m,
+    no:Number(m.no)>3?String(Number(m.no)-1):m.no,
+    entry:m.no==='1'?'requirement-confirm':m.entry,
+    stages:m.stages.filter(id=>id!=='requirement-review'),
+    label:m.no==='1'?'确认及审核':m.label}));
+  function visibleMajors(){return state.industry==='packaging'?PACKAGING_MAJOR_STEPS:MAJOR_STEPS;}
+  function visibleStages(){return state.industry==='packaging'?STAGES.filter(s=>!['process','requirement-review'].includes(s.id)):STAGES;}
 
   function currentMajorStep() {
-    return MAJOR_STEPS.find(major => major.stages.includes(state.stage)) || MAJOR_STEPS[0];
+    return visibleMajors().find(major => major.stages.includes(state.stage)) || visibleMajors()[0];
   }
   // 大流程完成态：组内全部内部 stage 完成（来自 /workflow、/summary 的真实完成集合）才算完成。
   function isMajorDone(major) {
@@ -123,7 +130,7 @@
     'process': {
       pageContext: '3 组装与整合',
       label: '组装与整合',
-      hint: '可让我上传整合图纸、生成参数推荐与组装工艺；确认结果与发送财务请用底栏操作。',
+      hint: '可让我上传整合图纸、生成参数推荐与组装工艺；确认结果与发送报价人员请用底栏操作。',
     },
     'cost': {
       pageContext: '4 成本测算',
@@ -178,7 +185,7 @@
   function stageMeta(id) { return STAGES.find((item) => item.id === id) || null; }
   function stageIndex(id) {
     const meta = stageMeta(id);
-    return meta ? STAGES.indexOf(meta) : -1;
+    return meta ? visibleStages().indexOf(meta) : -1;
   }
 
   /* ---------------------------------------------------------- URL 状态 */
@@ -224,7 +231,7 @@
     const canNav = Boolean(state.project || state.stage === 'requirement-create');
     const activeMajor = currentMajorStep();
     let html = '';
-    MAJOR_STEPS.forEach((major, idx) => {
+    visibleMajors().forEach((major, idx) => {
       const cls = ['tech-step-btn'];
       const isActive = major === activeMajor;
       const isDone = !isActive && isMajorDone(major);
@@ -234,12 +241,12 @@
       const nodeInner = isDone ? '<i class="ti ti-check" aria-hidden="true"></i>' : major.no;
       html += `<button type="button" class="${cls.join(' ')}" data-major-step="${major.no}" data-entry="${major.entry}" ${allowed ? '' : 'disabled'} title="${major.no} ${major.label}">` +
         `<span class="tech-step-node">${nodeInner}</span><span class="tech-step-label">${major.label}</span></button>`;
-      if (idx < MAJOR_STEPS.length - 1) html += '<span class="tech-step-line" aria-hidden="true"></span>';
+      if (idx < visibleMajors().length - 1) html += '<span class="tech-step-line" aria-hidden="true"></span>';
     });
     bar.innerHTML = html;
     bar.querySelectorAll('[data-major-step]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        const step = MAJOR_STEPS.find((item) => item.no === btn.dataset.majorStep) || MAJOR_STEPS[0];
+        const step = visibleMajors().find((item) => item.no === btn.dataset.majorStep) || visibleMajors()[0];
         if (state.stage === step.entry) return;
         if (!state.project && step.entry !== 'requirement-create') {
           setStateView('error', '尚未绑定项目', '请先在「创建」中上传图纸并保存草稿创建项目，再进入后续步骤。');
@@ -255,7 +262,7 @@
     const prev = $('techPrev');
     const next = $('techNext');
     if (prev) prev.disabled = !canNav || currentIdx <= 0;
-    if (next) next.disabled = !canNav || currentIdx < 0 || currentIdx >= STAGES.length - 1;
+    if (next) next.disabled = !canNav || currentIdx < 0 || currentIdx >= visibleStages().length - 1;
     renderContextSubsteps();
   }
 
@@ -338,14 +345,18 @@
     const title = $('techContextTitle');
     if (!bar) return;
     const major = currentMajorStep();
-    const substeps = CONTEXT_SUBSTEPS[major.no] || [];
+    const originalPhase=(stageMeta(state.stage)||{}).phase || major.no;
+    const substeps = (CONTEXT_SUBSTEPS[originalPhase] || []).filter(s=>state.industry!=='packaging'||
+      (s.stage!=='requirement-review' && (s.stage!=='requirement-create'||!state.quoteOrigin))).map(s=>state.industry==='packaging'?{...s,
+        no:Number(s.no.split('.')[0])>=4?(Number(s.no.split('.')[0])-1)+'.'+s.no.split('.')[1]:s.no,
+        label:s.stage==='requirement-confirm'?'确认及审核':s.label}:s);
     const originalProxy = CHILD_TAB_PROXY[state.stage] || null;
     const proxy = state.industry === 'packaging' && state.stage === 'process'
       ? { tabs: PACKAGING_PROCESS_TABS }
       : state.industry === 'packaging' && state.stage === 'cost'
         ? { tabs: PACKAGING_COST_TABS } : originalProxy;
     const canNav = Boolean(state.project || state.stage === 'requirement-create');
-    if (title) title.textContent = state.industry==='packaging' && major.no==='3' ? '排模与组装' : major.title || major.label;
+    if (title) title.textContent = major.title || major.label;
     if (header) header.hidden = false;
     if (!substeps.length && !proxy) {
       bar.hidden = true;
@@ -422,11 +433,16 @@
     const cached = projectNames.get(project);
     if (cached && cached.project && (!taskId || cached.task)) {
       state.industry = cached.industry || '';
+      state.quoteOrigin=Boolean(cached.quoteOrigin);
+      if(state.industry==='packaging' && ['process','requirement-review'].includes(state.stage)){
+        applyStage(state.stage==='process'?'cost':'requirement-confirm');return;
+      }
       renderContextSubsteps();
       renderProjectLabel();
       return;
     }
     state.industry = '';
+    state.quoteOrigin=false;
     label.textContent = '加载项目…';
     label.title = `project=${project}` + (taskId ? ` task_id=${taskId}` : '');
     resolveProjectNames(project, taskId);
@@ -451,9 +467,15 @@
     const entry = projectNames.get(project) || {};
     const data = projectData || {};
     const requirement = (requirementData && requirementData.requirement) || {};
+    const previousIndustry=state.industry;
     state.industry = String((requirement.data && requirement.data.industry)
       || (data.meta && data.meta.industry) || '');
+    state.quoteOrigin=Boolean((data.meta||{}).quote_task_id || (requirement.data||{}).quote_session_id);
+    if(state.industry==='packaging' && ['process','requirement-review'].includes(state.stage)){
+      applyStage(state.stage==='process'?'cost':'requirement-confirm');return;
+    }
     entry.industry = state.industry;
+    entry.quoteOrigin=state.quoteOrigin;
     syncAgentStageContext();
     renderContextSubsteps();
     const projectName = String(
@@ -467,6 +489,7 @@
     const taskName = taskDisplayName(task);
     if (taskName) entry.task = taskName;
     if (entry.project || entry.task) projectNames.set(project, entry);
+    if(previousIndustry!==state.industry)renderTop();
     renderProjectLabel();
   }
 
@@ -798,9 +821,10 @@
      草稿或项目绑定；接口缺失、iframe 未加载或抛错时安全退出，流程切换照常。 */
   function stageAgentContext() {
     const baseContext = STAGE_AGENT_CONTEXT[state.stage];
-    const context = state.industry==='packaging' && state.stage==='process'
-      ? {label:'排模与组装',pageContext:'3 排模与组装',hint:'3.1处理排模、开料和用量；3.2只生成零件之间新增的组装工序并绑定零件，不重复制造工艺。成本在第4阶段计算。'}
-      : baseContext;
+    const context=state.industry==='packaging' && baseContext?{...baseContext,
+      label:state.stage==='requirement-confirm'?'确认及审核':baseContext.label,
+      pageContext:state.stage==='requirement-confirm'?'1.2 确认及审核':baseContext.pageContext.replace(/^4 /,'3 ').replace(/^5\./,'4.'),
+      hint:state.stage==='drawing'?'解析图纸并完成零件工艺，之后直接发送报价人员核算成本；无排模或独立组装步骤。':baseContext.hint}:baseContext;
     if (!context) return null;
     // 只返回模型请求需要的语义上下文（stage / project / pageContext 等），
     // 不再构造任何供可见卡片渲染的动作；用户操作走统一操作栏与看板桥。
@@ -882,6 +906,7 @@
 
   /* ---------------------------------------------------------- 步骤切换 */
   function applyStage(stageId, opts) {
+    if(state.industry==='packaging')stageId=stageId==='process'?'cost':stageId==='requirement-review'?'requirement-confirm':stageId;
     if (stageId === state.stage
         && (!opts || !opts.project || opts.project === state.project)
         && (!opts || !opts.taskId || opts.taskId === state.taskId)) {
@@ -916,14 +941,14 @@
   if (prevBtn) prevBtn.addEventListener('click', () => {
     const idx = stageIndex(state.stage);
     if (idx <= 0) return;
-    const target = STAGES[idx - 1];
+    const target = visibleStages()[idx - 1];
     if (!state.project && target.id !== 'requirement-create') return;
     guardedStage(target.id, 'prev');
   });
   if (nextBtn) nextBtn.addEventListener('click', () => {
     const idx = stageIndex(state.stage);
-    if (idx < 0 || idx >= STAGES.length - 1) return;
-    const target = STAGES[idx + 1];
+    if (idx < 0 || idx >= visibleStages().length - 1) return;
+    const target = visibleStages()[idx + 1];
     if (!state.project && target.id !== 'requirement-create') {
       setStateView('error', '尚未绑定项目', '请先在「创建」中保存草稿创建项目，再进入下一步。');
       return;

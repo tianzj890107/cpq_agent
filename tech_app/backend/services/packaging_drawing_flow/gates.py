@@ -261,7 +261,7 @@ def _stage_entry(stage: str, project_id: str, resolve: Resolver,
             blocking.append({"code": "cost_not_built", "message": "成本尚未测算，测算后才能生成正式报价",
                              "source": "packaging_cost"})
         elif cost.get("has_gaps"):
-            # 「缺口未清」这条结论一个字不改（Spec §2.3 C4）；只是若财务/工艺已经按留痕放行过，
+            # 「缺口未清」这条结论一个字不改（Spec §2.3 C4）；只是若报价人员/工艺已经按留痕放行过，
             # 就把那份留痕一并披露出来 —— 否则界面上只有一句"缺口清零后才能生成正式报价"，
             # 看不出这条缺口其实已经被人按什么原因放行了（34 实测两边说法相反）。
             handoff = read("packaging_handoff", "load_handoff", project_id)

@@ -70,11 +70,16 @@ def for_industry(industry: str) -> tuple:
     if industry != 'packaging':return STAGES
     out=[]
     for row in STAGES:
-        if row['phase']!='3':out.append(row);continue
-        if row['view']=='drawings':continue
-        sub,title=('3.1','排版排模') if row['view']=='params' else ('3.2','组装工艺')
-        out.append({**row,'sub':sub,'sub_title':title,'title':title,'phase_title':'排模与组装'})
-    return tuple(out)
+        if row['stage_id'] in ('process','requirement-review'):continue
+        item=dict(row)
+        if row['stage_id']=='requirement-confirm':item.update(sub_title='确认及审核',title='确认及审核')
+        if row['phase'] in ('4','5'):
+            item['phase']=str(int(row['phase'])-1)
+            item['display_sub']=item['phase']+'.'+row['sub'].split('.')[1]
+        else:item['display_sub']=row['sub']
+        if row['sub']=='4.2':item.update(sub_title='整单成本',title='整单成本')
+        out.append(item)
+    return tuple(sorted(out,key=lambda r:({'requirement-create':0,'requirement-confirm':1,'drawing':2}.get(r['stage_id'],int(r['phase'])+1),r['sub'])))
 
 
 _PHASE_TITLE = {row["no"]: row["title"] for row in PHASES}

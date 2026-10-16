@@ -46,7 +46,7 @@ ENGINE_VERSION = "packaging_cost_v1"
 COST_PROFILE = "packaging_v1"
 GENERIC_PROFILE = "generic_v1"
 CURRENT_PROFILE = packaging_detail_cost.PROFILE
-EXPENSE_POLICY = 'material_processing_assembly_other_no_tooling_freight/2'
+EXPENSE_POLICY = 'material_processing_other_no_layout_or_assembly/3'
 LOSS_RESOLUTION_POLICY = 'parent_section_material_consensus_process_scope/1'
 PACKAGING_INDUSTRY = "packaging"
 
@@ -139,15 +139,15 @@ STEP_RATE_MAP = {
 #: 这条写法 —— 工艺侧（工艺经理 / 工艺技术总监）与管理员可以算，但**必须留痕**：成本记录带
 #: `computed_by` / `computed_by_role`（§2.3），事后能回答「这一版是谁算的」。
 #:
-#: 与通用 2.3 的关系：`auth.COST_ROLES = {"finance_manager", "admin"}`（通用流程「成本只能财务改」）。
-#: 包装这条链路**两边都认**：财务经理（流程归属）与工艺侧（代算）都能算，但**代算必须留痕** ——
+#: 与通用 2.3 的关系：`auth.COST_ROLES = {"finance_manager", "admin"}`（通用流程「成本只能报价人员改」）。
+#: 包装这条链路**两边都认**：报价人员（流程归属）与工艺侧（代算）都能算，但**代算必须留痕** ——
 #: 成本记录带 `computed_by` / `computed_by_role`，事后能回答「这一版是谁算的」。
 #:
-#: 为什么把财务经理**加进来**（Spec `packaging-cost-write-role-single-source.md` §2.1 方案 A）：
-#: `auth.COST_ROLES` 与 `main.py` 的 `can_cost` 一直告诉前端「财务能算」，服务端却按这里把他
+#: 为什么把报价人员**加进来**（Spec `packaging-cost-write-role-single-source.md` §2.1 方案 A）：
+#: `auth.COST_ROLES` 与 `main.py` 的 `can_cost` 一直告诉前端「报价人员能算」，服务端却按这里把他
 #: 挡在外面、项目 ACL 也只给他「成本算完之后的可见性」。两套口径同时活着，用户看到的是
 #: 「按钮点得动，点完告诉你项目不存在」。本批按那份 Spec 的推荐方案把口径合成一处：
-#: 财务能算，工艺侧仍可代算且留痕。
+#: 报价人员能算，工艺侧仍可代算且留痕。
 COST_WRITE_ROLES = {"process_manager", "process_director", "finance_manager", "admin"}
 
 #: 04 `PKG-C-*` 的表达式正文（DSL 白名单内；小数常量写成整数除法，见模块头注释）。
@@ -2341,6 +2341,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     if not route or _text(route.get("status")) != "confirmed":
         raise _fatal("route_not_confirmed", "工艺路线尚未确认，人工费无从取工时（Spec §2.13）")
     steps = [dict(row) for row in da_repo.load_packaging_route_steps(project_id, req_no)]
+    steps=[step for step in steps if step.get('scope')!='project' and step.get('source')!='assembly_delta']
     from . import packaging_assembly
     assembly_drift=packaging_assembly.route_drift(project_id,steps)
     if assembly_drift:raise _fatal(assembly_drift,'新增组装工序或关联零件已变化，请重算路线后再测算')
@@ -2380,6 +2381,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     from . import packaging_parts
     demo_doc = packaging_parts.load_business_parts(project_id) or {}
     demo_doc = packaging_layout.active_business_document(demo_doc)
+    demo_doc={**demo_doc,'layout_rows':[]}
     demo_rows = {str(row.get('business_part_code')):row.get('poc_inputs') or {}
                  for row in demo_doc.get('business_parts') or []}
     for row in demo_doc.get('business_parts') or []:

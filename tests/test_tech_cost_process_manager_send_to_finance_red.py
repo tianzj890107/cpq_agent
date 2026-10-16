@@ -1,15 +1,15 @@
-"""红测：2.3 成本测算页对工艺经理只留「发送给财务」主按钮（实现前应失败）。
+"""红测：2.3 成本测算页对工艺经理只留「发送给报价人员」主按钮（实现前应失败）。
 
 现状缺口（实测）：
-  · `cost-review.js` 注册的五颗财务动作（runCostReview / confirmCostReview /
+  · `cost-review.js` 注册的五颗报价人员动作（runCostReview / confirmCostReview /
     writeCostReviewMaterial / sendCostReviewToQuote / returnCostReviewToProcess）
     对谁都是 `visible: true`：工艺经理打开 2.3，左侧操作栏摆着五颗他点不动的按钮
-    （`crReadOnly()` 全挡），而这一页他真正该做的「把工艺与整机参数交给财务」没有入口。
+    （`crReadOnly()` 全挡），而这一页他真正该做的「把工艺与整机参数交给报价人员」没有入口。
   · 页内 `.ai-ops` 同样只摆 `#crConfirm` / `#crWriteDb` / `#crToQuote` / `#crReturn`。
 
 要求：
-  · 财务经理（`crReadOnly()` 为假）：行为不变，仍是「一键测算全部成本 → 确认成本」。
-  · 工艺经理（`crReadOnly()` 为真）：五颗财务动作不占操作栏，唯一主按钮是「发送给财务」，
+  · 报价人员（`crReadOnly()` 为假）：行为不变，仍是「一键测算全部成本 → 确认成本」。
+  · 工艺经理（`crReadOnly()` 为真）：五颗报价人员动作不占操作栏，唯一主按钮是「发送给报价人员」，
     走既有 2.2 出口 `POST /api/projects/{id}/integration/send-to-finance`（不新建第二套
     发送实现、不在 2.3 重写 2.2 的派发弹窗）。
   · 动作注册、Agent 工具、看板桥协议、后端路由与权限判定都不缩水。
@@ -83,7 +83,7 @@ def action_block(text: str, marker: str) -> str:
 
 
 class ProcessSideOnlySeesSendToFinance(unittest.TestCase):
-    """R1 / R2：非财务身份只留「发送给财务」主按钮。"""
+    """R1 / R2：非报价人员身份只留「发送给报价人员」主按钮。"""
 
     @classmethod
     def setUpClass(cls):
@@ -92,11 +92,11 @@ class ProcessSideOnlySeesSendToFinance(unittest.TestCase):
     def test_send_to_finance_action_is_the_process_side_primary(self):
         block = action_block(self.cr, "sendCostReviewToFinance: {")
         self.assertTrue(block, "尚未注册 sendCostReviewToFinance 动作")
-        self.assertIn("label: '发送给财务'", block, "主按钮文案必须是「发送给财务」")
-        self.assertIn("role: 'primary'", block, "发送给财务必须是主按钮")
+        self.assertIn("label: '发送给报价人员'", block, "主按钮文案必须是「发送给报价人员」")
+        self.assertIn("role: 'primary'", block, "发送给报价人员必须是主按钮")
         self.assertIn("deferred: true", block, "对外发送是长动作，必须 deferred 先回执")
         self.assertIn("visible: crReadOnly()", block,
-                      "它只在非财务身份（工艺经理）下出现")
+                      "它只在非报价人员身份（工艺经理）下出现")
 
     def test_finance_actions_hide_for_process_side(self):
         op_factory = block_from(self.cr, "const crOpAction = (")
@@ -108,13 +108,13 @@ class ProcessSideOnlySeesSendToFinance(unittest.TestCase):
                 block = action_block(self.cr, marker)
                 self.assertTrue(block, "动作丢失：" + marker)
                 self.assertIn("visible: !crReadOnly()", block,
-                              marker + " 必须只在财务身份下占操作栏")
+                              marker + " 必须只在报价人员身份下占操作栏")
 
     def test_send_helper_reuses_the_existing_2_2_exit(self):
         block = block_from(self.cr, "async function crSendToFinance(")
         self.assertTrue(block, "尚未实现 crSendToFinance()")
         self.assertIn("/integration/send-to-finance", block,
-                      "必须复用 2.2 既有的发送财务出口，不得新建接口")
+                      "必须复用 2.2 既有的发送报价人员出口，不得新建接口")
         self.assertNotIn("/cost-review/", block, "不得绕到成本接口去发送")
         self.assertNotIn("aiOpenFinanceDialog", block,
                          "2.3 不重写 2.2 的派发弹窗（收件人选择留在 2.2）")
@@ -140,7 +140,7 @@ class PageLevelButtonsFollowIdentity(unittest.TestCase):
     def test_page_has_hidden_send_to_finance_primary(self):
         tag = re.search(r'<button[^>]*id="crSendToFinance"[^>]*>', self.html)
         self.assertIsNotNone(tag, "cost-review.html 缺少 #crSendToFinance 按钮")
-        self.assertIn("ai-op-btn primary", tag.group(0), "页内发送给财务要是主按钮样式")
+        self.assertIn("ai-op-btn primary", tag.group(0), "页内发送给报价人员要是主按钮样式")
         self.assertIn("hidden", tag.group(0), "默认隐藏，由身份决定是否显示")
 
     def test_render_ops_toggles_finance_buttons_by_identity(self):
@@ -158,7 +158,7 @@ class PageLevelButtonsFollowIdentity(unittest.TestCase):
         bind = block_from(self.cr, "function crBind()")
         self.assertIn("crSendToFinance", bind, "页内按钮必须绑定到同一发送实现")
         self.assertRegex(self.cr, r"crRunAll[\s\S]{0,200}hidden",
-                         "一键测算全部成本要在非财务身份下隐藏")
+                         "一键测算全部成本要在非报价人员身份下隐藏")
 
     def test_identity_ready_republishes_action_snapshot(self):
         self.assertIn("cpq-sso-ready", self.cr,
@@ -179,7 +179,7 @@ class CapabilitiesNotReduced(unittest.TestCase):
     def test_finance_actions_and_helpers_stay_registered(self):
         for name in FINANCE_ACTIONS:
             with self.subTest(action=name):
-                self.assertIn(name, self.cr, "财务动作被删：" + name)
+                self.assertIn(name, self.cr, "报价人员动作被删：" + name)
         for helper in ("function crRunAllInBackground(", "function crConfirmCost(",
                        "async function crRunOp(", "function crSendToFinance("):
             with self.subTest(helper=helper):
@@ -192,7 +192,7 @@ class CapabilitiesNotReduced(unittest.TestCase):
             with self.subTest(route=route):
                 self.assertIn(route, self.main, "后端路由被删：" + route)
         self.assertRegex(self.main, r'integration_send_to_finance[\s\S]{0,600}MANAGER_ROLES',
-                         "发送财务仍必须是工艺技术经理 / 管理员权限")
+                         "发送报价人员仍必须是工艺技术经理 / 管理员权限")
 
 
 if __name__ == "__main__":

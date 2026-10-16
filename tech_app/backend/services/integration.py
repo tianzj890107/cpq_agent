@@ -631,9 +631,9 @@ def status(plan: IntegrationPlan) -> dict:
         "required_missing": len(missing_required(plan)),
         # 报价必填是否一项不差。与 params_final 分开：那个是"人按过确认"，
         # 这个是"数真的齐了" —— 带缺口继续时前者会被签字补掉，后者照样是 False，
-        # 财务据此知道这台成品还有格子空着。
+        # 报价人员据此知道这台成品还有格子空着。
         "params_complete": not missing_required(plan) if plan.params else False,
-        # 最近一条「带缺口继续」的签字：下游（2.3 财务看板、报价前检查）据此知道
+        # 最近一条「带缺口继续」的签字：下游（2.3 报价人员看板、报价前检查）据此知道
         # 这个缺口是人签过字的，不再按同一批缺口拦第二次；没有签字时为 None。
         "waiver": waiver_summary(plan),
         "confirmed": bool(plan.confirmed),
@@ -861,7 +861,7 @@ def payload(project_id: str, plan: IntegrationPlan) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# 2.2 流转：参数确认 / 工序确认 / 发送财务
+# 2.2 流转：参数确认 / 工序确认 / 发送报价人员
 #
 # 这三个动作既来自 HTTP 路由（人工在看板上点按钮），也来自平台 Agent 工具
 # （ConfirmIntegrationParams / ConfirmIntegrationProcess / SendIntegrationToFinance）。
@@ -943,7 +943,7 @@ def gap_message(missing: List[dict], pending: Optional[List[str]] = None) -> str
     if labels:
         parts.append("还没点确认的环节：" + "、".join(labels))
     detail = "；".join(parts) or "依赖还没齐"
-    return (f"{detail}。可以点「仍要继续」带缺口发给财务 —— 等同于本人签字确认，"
+    return (f"{detail}。可以点「仍要继续」带缺口发给报价人员 —— 等同于本人签字确认，"
             f"平台会留下签字记录，之后不再按同一批缺口拦你。")
 
 
@@ -1020,7 +1020,7 @@ def waiver_covers(plan: IntegrationPlan, missing_codes: Optional[List[str]],
 
 
 def waiver_summary(plan: IntegrationPlan) -> Optional[dict]:
-    """最近一条「带缺口继续」的签字摘要（前端与 2.3 财务看板共用）。没有则 None。"""
+    """最近一条「带缺口继续」的签字摘要（前端与 2.3 报价人员看板共用）。没有则 None。"""
     waivers = list(plan.waivers or [])
     if not waivers:
         return None
@@ -1060,7 +1060,7 @@ def confirm_params(project_id: str, user: Optional[dict] = None) -> IntegrationP
 
 
 def confirm_process(project_id: str, user: Optional[dict] = None) -> IntegrationPlan:
-    """确认「组装工艺」。这是 2.2 的闸门：确认之后才允许把任务推给财务经理算成本。
+    """确认「组装工艺」。这是 2.2 的闸门：确认之后才允许把任务推给报价人员算成本。
 
     不校验工序条数 —— 有的整机确实只有两三道；但必须**跑过**，空的工艺没什么可确认。
     """
@@ -1087,9 +1087,9 @@ def send_to_finance(project_id: str, user: Optional[dict] = None, *,
                     target_type: str = "", target_role_code: str = "",
                     target_user_id: str = "", token: str = "",
                     waiver: Optional[dict] = None, draft: bool = False) -> IntegrationPlan:
-    """组装与整合的出口：确认工艺并发送至财务做成本测算。
+    """组装与整合的出口：确认工艺并发送至报价人员做成本测算。
 
-    成本不再由工艺经理算 —— 他交的是工艺、参数与用量，成本的数字归后一步的财务。
+    成本不再由工艺经理算 —— 他交的是工艺、参数与用量，成本的数字归后一步的报价人员。
     所以这里**不要求成本已完成**，出口按依赖分级判定：
 
       · L1 生成依赖（没有参数推荐 / 没有组装工艺）**不可豁免** —— 后面根本算不出成本；
@@ -1102,6 +1102,12 @@ def send_to_finance(project_id: str, user: Optional[dict] = None, *,
     调用方（HTTP 路由或 Agent 工具）各自把它翻译成用户能看懂的形式。
     """
     # cost_review 反向依赖本模块，函数内延迟导入，避免形成导入环。
+    packaging=((store.load_requirement(project_id) or {}).get('data') or {}).get('industry')=='packaging'
+    if packaging and not draft:
+        from . import packaging_demo_flow
+        packaging_demo_flow.prepare_route(project_id,user or {})
+        return _send_packaging_finance_draft(project_id,user,product_name=product_name,note=note,
+            target_type=target_type,target_role_code=target_role_code,target_user_id=target_user_id,token=token,draft=False)
     if draft:
         return _send_packaging_finance_draft(project_id, user, product_name=product_name,
             note=note, target_type=target_type, target_role_code=target_role_code,
@@ -1111,7 +1117,7 @@ def send_to_finance(project_id: str, user: Optional[dict] = None, *,
     username, display = _flow_actor(user)
     plan = load_plan(project_id)
     if plan.params is None:
-        raise IntegrationFlowError("请先完成参数推荐：财务要按整机 BOM 与参数核算成本")
+        raise IntegrationFlowError("请先完成参数推荐：报价人员要按整机 BOM 与参数核算成本")
     if plan.process is None:
         raise IntegrationFlowError("请先完成组装工艺：组装成本要按工序与工时算")
 
@@ -1158,7 +1164,7 @@ def send_to_finance(project_id: str, user: Optional[dict] = None, *,
                        "part_refs": len(plan.params.part_refs)}},
         target_type, target_role_code, target_user_id)
 
-    # 交给财务就意味着工艺侧定稿；顺手把 2.2 标成已确认，省得再点一次。
+    # 交给报价人员就意味着工艺侧定稿；顺手把 2.2 标成已确认，省得再点一次。
     if not plan.confirmed:
         plan.confirmed = True
         plan.confirmed_by = username
@@ -1169,14 +1175,14 @@ def send_to_finance(project_id: str, user: Optional[dict] = None, *,
     plan.finance_handoff = FinanceHandoff(
         task_id=str(result.get("task_id") or "") or None,
         task_no=str(result.get("task_no") or ""),
-        target_role_name=str(result.get("target_role_name") or "财务经理"),
+        target_role_name=str(result.get("target_role_name") or "报价人员"),
         target_type=str(result.get("target_type") or "role"),
         target_name=str(result.get("target_name") or ""),
         sent_at=now_cst_str(),
         sent_by=display,
     )
     save_plan(project_id, plan, username)
-    # 财务那一步的入口状态：谁交来的、什么时候
+    # 报价人员那一步的入口状态：谁交来的、什么时候
     review = cost_review.load_review(project_id)
     review.received_from = plan.finance_handoff.sent_by
     review.received_at = plan.finance_handoff.sent_at
@@ -1189,7 +1195,7 @@ def send_to_finance(project_id: str, user: Optional[dict] = None, *,
 
 def _send_packaging_finance_draft(project_id: str, user: Optional[dict], *, product_name: str,
                                  note: str, target_type: str, target_role_code: str,
-                                 target_user_id: str, token: str) -> IntegrationPlan:
+                                 target_user_id: str, token: str, draft: bool = True) -> IntegrationPlan:
     """内部草稿核算交接：不替人确认参数/工艺，不签 waiver，不解锁正式发布。"""
     from . import packaging_parts, packaging_route
     requirement = store.load_requirement(project_id) or {}
@@ -1203,9 +1209,9 @@ def _send_packaging_finance_draft(project_id: str, user: Optional[dict], *, prod
         raise IntegrationFlowError("请先生成当前版本的包装零件清单与包装路线，不能发送空白或过期草稿")
     source_hash = str(parts.get("business_parts_hash") or "")
     if plan.finance_handoff and plan.finance_handoff.task_id:
-        if plan.finance_handoff.draft and plan.finance_handoff.source_business_parts_hash == source_hash:
+        if plan.finance_handoff.source_business_parts_hash == source_hash:
             return plan
-        raise IntegrationFlowError("已有财务交接任务，请先处理原任务，不重复派发")
+        raise IntegrationFlowError("已有报价人员交接任务，请先处理原任务，不重复派发")
     username, display = _flow_actor(user)
     title = product_name.strip() or str(data.get("packaging_product_name") or data.get("title")
                                       or requirement.get("title") or project_id)
@@ -1213,24 +1219,32 @@ def _send_packaging_finance_draft(project_id: str, user: Optional[dict], *, prod
                     "geometry_binding_status": (row.get("geometry_binding") or {}).get("status"),
                     "size_confirmed": (row.get("geometry_binding") or {}).get("size_confirmed", False)}
                    for row in parts["business_parts"] if isinstance(row, dict)]
-    context = {"tech_cost": {"project_id": project_id, "product_name": title, "draft": True,
+    context = {"tech_cost": {"project_id": project_id, "product_name": title, "draft": draft,
                "quote_quantity": data.get("quote_quantity"), "quantity": data.get("quote_quantity"),
                "business_parts_id": parts.get("business_parts_id"), "business_parts_hash": source_hash,
                "business_parts": brief_parts, "route": route,
                "requirement": data,
-               "notice": "带缺口内部核算草稿；未代签工艺或参数确认，不可正式发布报价"}}
+               "notice": "带缺口内部核算草稿；未代签工艺或参数确认，不可正式发布报价" if draft else '零件工艺已汇总，请报价人员核算成本'}}
     result = cpq_bridge.send_to_finance(token, project_id, title,
         str(data.get("customer_name") or ""), title,
-        "内部草稿核算（不可正式发布）：" + (note or "请核对尺寸、材料、工艺与成本缺口"),
+        ("内部草稿核算（不可正式发布）：" if draft else '') + (note or "请核对尺寸、材料、工艺与成本缺口"),
         context, target_type, target_role_code, target_user_id)
     if not result.get("task_id"):
-        raise IntegrationFlowError("财务任务未创建成功，未保存交接状态")
+        raise IntegrationFlowError("报价人员任务未创建成功，未保存交接状态")
     plan.finance_handoff = FinanceHandoff(task_id=str(result["task_id"]),
-        task_no=str(result.get("task_no") or ""), target_role_name=str(result.get("target_role_name") or "财务经理"),
+        task_no=str(result.get("task_no") or ""), target_role_name=str(result.get("target_role_name") or "报价人员"),
         target_type=str(result.get("target_type") or target_type or "role"),
         target_name=str(result.get("target_name") or ""), sent_at=now_cst_str(), sent_by=display,
-        draft=True, source_business_parts_hash=source_hash)
+        draft=draft, source_business_parts_hash=source_hash)
+    if not draft:
+        # 用户实际确认的是零件工艺交接，不伪造已取消的参数/组装审批。
+        plan.confirmed=True;plan.confirmed_by=username;plan.confirmed_at=now_cst_str()
     save_plan(project_id, plan, username)
-    store.audit(project_id, "packaging_finance_draft_handoff", {
+    if not draft:
+        from . import cost_review
+        review=cost_review.load_review(project_id)
+        review.received_from=display;review.received_at=plan.finance_handoff.sent_at
+        cost_review.save_review(project_id,review,username)
+    store.audit(project_id, "packaging_finance_draft_handoff" if draft else 'packaging_parts_to_pricing', {
         "task_id": plan.finance_handoff.task_id, "business_parts_hash": source_hash, "by": username})
     return plan

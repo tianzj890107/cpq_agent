@@ -420,6 +420,8 @@ def price(package: dict, *, gross_margin_rate=None, markup_rate=None,
         "scenario_code": _text(source.get("scenario_code")) or "default",
         "box_type_code": box_code,
         "product_name": _text(requirement.get("packaging_product_name")),
+        "product_specification": ' × '.join(str(requirement.get(k,'')) for k in ('inner_length','inner_width','inner_height'))+' mm'
+            if all(requirement.get(k) not in (None,'') for k in ('inner_length','inner_width','inner_height')) else _text(requirement.get('specification') or requirement.get('规格')),
         "customer": _text(requirement.get("customer_name")),
         "bom_items": copy.deepcopy(list((pkg.get("bom") or {}).get("items") or [])),
         "business_parts": copy.deepcopy((pkg.get('bom') or {}).get('business_parts')),
@@ -583,6 +585,13 @@ def quote_fingerprint(quote: dict) -> str:
 # 报价单（八节）
 # --------------------------------------------------------------------------- #
 def document(quote: dict, *, publish: bool = False) -> dict:
+    if publish and ((quote or {}).get('gaps') or (quote or {}).get('draft') or (quote or {}).get('demo_only')):
+        raise PricingError('成本仍有缺口，只能生成草稿',409,'cost_gaps_unresolved')
+    from cpq_commercial_quote import document as commercial_document
+    return commercial_document(quote)
+
+
+def internal_document(quote: dict, *, publish: bool = False) -> dict:
     """报价单：``{"title", "markdown", "sections"}``；数字与 ``quote`` 逐个一致。
 
     不许带时间戳 / 随机数 —— 历史打开要能逐字恢复（Spec §2.5）。

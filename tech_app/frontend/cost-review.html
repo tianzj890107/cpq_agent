@@ -27,7 +27,7 @@
          + ":" + event.lineno + "）" : "");
   });
   </script>
-  <script src="cpq-sso.js?v=sso6"></script>
+  <script src="cpq-sso.js?v=20261016-slim1"></script>
   <script src="tech-embed.js?v=twb5"></script>
 </head>
 <body>
@@ -107,13 +107,13 @@
         </div>
 
         <div class="oc-work">
-          <section class="oc-agent-pane" aria-label="财务说明与去向">
+          <section class="oc-agent-pane" aria-label="报价人员说明与去向">
             <div class="oc-thread" id="crThread">
               <div class="oc-tinner" id="crTinner">
                 <div class="oc-amsg">
                   <div class="oc-abody">
                     <div class="oc-intent-card">
-                      <h4>财务补充说明</h4>
+                      <h4>报价人员补充说明</h4>
                       <textarea id="crNote" class="ai-requirement" rows="4"
                         placeholder="写下这次测算要特别考虑的口径，例如「电芯按 12 月长协价 11.8 元/只」「本批不摊模具费」…"></textarea>
                       <div class="oc-intent-meta">这段说明会作为零件与整机重新测算时的输入。<br/>
@@ -125,7 +125,7 @@
                 </div>
                 <div class="oc-empty" id="crEmpty">
                   <div style="font-size:30px;">¥</div>
-                  <div style="font-size:14px;">成本测算（财务经理）</div>
+                  <div style="font-size:14px;">成本测算（报价人员）</div>
                   <div style="font-size:12.5px;">工艺经理已经把工艺、参数与用量交过来了。<br/>
                     这一步逐个零件加整机算出成本、汇总，再决定它的去向。</div>
                 </div>
@@ -144,9 +144,9 @@
                 <div class="ai-op-cost" id="crOpCost">完成测算后显示成品成本</div>
               </div>
               <div class="ai-ops">
-                <!-- 工艺经理侧唯一主按钮：把整机参数、工艺路线与用量交给财务做成本测算。
-                     财务经理侧相反 —— 它隐藏，露出下面那四颗财务动作。 -->
-                <button id="crSendToFinance" class="ai-op-btn primary" type="button" hidden>⇪ 发送给财务</button>
+                <!-- 工艺经理侧唯一主按钮：把整机参数、工艺路线与用量交给报价人员做成本测算。
+                     报价人员侧相反 —— 它隐藏，露出下面那四颗报价人员动作。 -->
+                <button id="crSendToFinance" class="ai-op-btn primary" type="button" hidden>⇪ 发送给报价人员</button>
                 <button id="crConfirm" class="ai-op-btn primary" type="button" disabled>✓ 确认成本</button>
                 <button id="crWriteDb" class="ai-op-btn" type="button" disabled>⛁ 写入数据库</button>
                 <button id="crToQuote" class="ai-op-btn" type="button" disabled>➜ 回传销售经理继续报价</button>
@@ -191,8 +191,8 @@
   <script src="/cpq_auth.js"></script>
   <script src="/cpq_msg.js"></script>
   <script src="llm-settings-panel.js?v=llm-set3"></script>
-  <script src="quote-params-table.js?v=qp1"></script>
-  <script src="tech-board-runtime.js?v=20260924-progress1"></script><script src="tech-session-timeline.js?v=20261015-handoff1"></script><script src="cost-review-loader.js?v=20261016-read1"></script><script src="cost-review.js?v=20261016-money2"></script>
+  <script src="quote-params-table.js?v=20261016-slim1"></script>
+  <script src="tech-board-runtime.js?v=20260924-progress1"></script><script src="tech-session-timeline.js?v=20261015-handoff1"></script><script src="cost-review-loader.js?v=20261016-read1"></script><script src="cost-review.js?v=20261016-slim1"></script>
   <script src="home-link.js?v=home6"></script>
 </body>
 </html>

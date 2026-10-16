@@ -36,9 +36,9 @@ WF_SCHEMA = os.getenv("CPQ_WF_SCHEMA", "cpq_wf")
 ROLES = {
     "sales_mgr": "销售经理",
     "process_mgr": "工艺经理",
-    # 成本测算归财务：工艺经理出工艺与用量，财务经理据此核算成本并对数字负责。
+    # 成本测算归报价人员：工艺经理出工艺与用量，报价人员据此核算成本并对数字负责。
     # 技术工艺 2.3 是他的步骤（见 tech_app/backend/services/cpq_sso.py 的角色映射）。
-    "finance_mgr": "财务经理",
+    "finance_mgr": "报价人员",
     # 工艺技术总监：技术工艺 3.2 报告审核 / 3.3 报告发布。没有它，CPQ 模式下只能把
     # 工艺经理升成全权（auth.enable_cpq_single_manager），3.1→3.2→3.3 的职责分离
     # 就不成立。角色只是本字典的一个取值（role_code 是 varchar(32)、无 CHECK 约束），

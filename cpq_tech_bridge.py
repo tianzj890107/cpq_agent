@@ -581,7 +581,7 @@ def _side_task(user: dict, session_id: str, title: str, customer: str, project_n
     try:
         cpq_wf.sync_card(session_id, user, title=title, customer=customer,
                          project_name=project_name)
-        # 派发方式由调用方（2.2 的「发送至财务」弹窗）决定：role / user / public。
+        # 派发方式由调用方（2.2 的「发送至报价人员」弹窗）决定：role / user / public。
         # 没给就按老行为走：给了人就是指派，否则留空让 cpq_wf 落到该任务的默认角色。
         target_type = (target_type or "").strip() or (
             "user" if str(target_user_id or "").strip() else "")
@@ -755,15 +755,15 @@ def send_to_finance(user: dict, session_id: str, title: str, customer: str = "",
                     project_name: str = "", note: str = "", payload: dict = None,
                     target_type: str = "", target_role_code: str = "",
                     target_user_id: str = "") -> dict:
-    """技术工艺 2.2 → 财务：工艺与参数已定稿，请到 2.3 做成本测算。
+    """技术工艺 2.2 → 报价人员：工艺与参数已定稿，请到 2.3 做成本测算。
 
-    派发方式与报价助手的转交一致，三种都能选：发给某个角色（默认财务经理）、
+    派发方式与报价助手的转交一致，三种都能选：发给某个角色（默认报价人员）、
     指派给某个人、发布到公共任务池。默认角色只是**没选时**的落点，不是限制 ——
     公司里做这件事的可能不止一个人，让人在弹窗里挑。
     """
     if user.get("role_code") != "process_mgr":
         raise BridgeError(
-            f"只有工艺经理能把工艺发给财务测算；当前是「{user.get('role_name')}」")
+            f"只有工艺经理能把工艺发给报价人员测算；当前是「{user.get('role_name')}」")
     return _side_task(user, session_id, title, customer, project_name,
                       cpq_wf.TASK_KIND_TECH_COST,
                       note or "工艺与整机参数已确认，请做成本测算", payload or {},
@@ -793,21 +793,21 @@ def _repair_missing_packaging_snapshot(conn, existing, result):
 
 def _finance_completion_card(conn, task_id, user, project_id):
     if str(user.get('role_code') or '') not in ({'finance_mgr'} | set(cpq_wf.ADMIN_ROLES)):
-        raise BridgeError('只有财务经理或管理员可以完成财务任务并回传报价')
+        raise BridgeError('只有报价人员或管理员可以完成报价人员任务并回传报价')
     tid=_int_or_none(task_id)
     if tid is None:
-        raise BridgeError('财务完成任务编号无效')
+        raise BridgeError('报价人员完成任务编号无效')
     row=cpq_auth._exec(conn,'SELECT task_kind, payload, card_id, status, claimed_by_user_id FROM cpq_wf_task WHERE task_id = %s',(tid,)).fetchone()
     if not row or str(row[0] or '') != 'tech_cost':
-        raise BridgeError('财务回传只能完成真实的成本测算任务')
+        raise BridgeError('报价人员回传只能完成真实的成本测算任务')
     payload=cpq_wf._payload_of(row[1])
     if str((payload.get('tech_cost') or {}).get('project_id') or '') != str(project_id):
-        raise BridgeError('财务完成任务不属于本技术项目')
+        raise BridgeError('报价人员完成任务不属于本技术项目')
     if str(row[3] or '') not in ('claimed','completed') or row[4] is None:
-        raise BridgeError('请先领取本项目的有效财务任务，不能完成未领取或已撤销任务')
+        raise BridgeError('请先领取本项目的有效报价人员任务，不能完成未领取或已撤销任务')
     if str(row[3])=='completed' and _int_or_none(row[4]) != _int_or_none(user.get('user_id')) \
             and str(user.get('role_code') or '') not in cpq_wf.ADMIN_ROLES:
-        raise BridgeError('已完成财务任务的领取人不是当前用户')
+        raise BridgeError('已完成报价人员任务的领取人不是当前用户')
     return int(row[2])
 
 
@@ -856,11 +856,11 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
     handoff_kind = str(handoff_kind or "").strip() or "cost_to_quote"
     if handoff_kind not in HANDOFF_KINDS:
         raise BridgeError(f"回传类型无效：{handoff_kind}")
-    # 成本测算改由财务经理做（2.3），所以回传报价这一步现在是他的动作；
+    # 成本测算改由报价人员做（2.3），所以回传报价这一步现在是他的动作；
     # 工艺经理仍然放行 —— 老流程（没有 2.3 的项目）还得走得通。
     if user.get("role_code") not in ("finance_mgr", "process_mgr"):
         raise BridgeError(
-            f"只有财务经理或工艺经理能确认并发送至报价；当前是「{user.get('role_name')}」")
+            f"只有报价人员或工艺经理能确认并发送至报价；当前是「{user.get('role_name')}」")
     session_id = (session_id or "").strip()
     if not session_id:
         raise BridgeError("缺少会话 ID")
@@ -886,7 +886,7 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
         completion_card_id=None
         if completion_task_id:
             if handoff_kind != 'cost_to_quote':
-                raise BridgeError('财务完成任务身份只允许用于成本回传报价')
+                raise BridgeError('报价人员完成任务身份只允许用于成本回传报价')
             completion_card_id=_finance_completion_card(conn,completion_task_id,user,tech_project_id)
         # ① 落点由业务实例号唯一裁决（批次 6）：候选 → decide → linked / 抛错 / 新建。
         #    task / session 两条老线索仍作候选来源（老卡片没有实例号时照样认回原卡），
@@ -999,8 +999,8 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
         snapshot.update(fresh)
         current_step = int(card.get("current_step") or 1)
         if handoff_kind in _HANDOFF_ADVANCE_KINDS and current_step <= TECH_CONFIRM_STEP:
-            # 代技术侧完成报价第 2 步「工艺确认」。成本拆给财务之后，点这一下的可能是
-            # 财务经理，而第 2 步在报价里归工艺经理 —— 开头已经按「财务经理 / 工艺经理」
+            # 代技术侧完成报价第 2 步「工艺确认」。成本拆给报价人员之后，点这一下的可能是
+            # 报价人员，而第 2 步在报价里归工艺经理 —— 开头已经按「报价人员 / 工艺经理」
             # 鉴过权，这里把代办角色显式写出来，由 cpq_wf 校验它确实属于这一步。
             outcome = cpq_wf.complete_step(
                 quote_session_id, TECH_CONFIRM_STEP, user,
@@ -1182,7 +1182,7 @@ def _guard_packaging_result(result: dict) -> Optional[dict]:
             return dict(waiver)
         named = "、".join(codes) or "未标明缺口"
         raise BridgeError(f"成本仍有缺口（{named}），不能落成正式报价；"
-                          "请先补齐，或由财务/工艺写明原因走放行留痕后再回传。")
+                          "请先补齐，或由报价人员/工艺写明原因走放行留痕后再回传。")
     return None
 
 
@@ -1446,7 +1446,7 @@ def return_to_process(user: dict, session_id: str, title: str, customer: str = "
     """
     if user.get("role_code") != "finance_mgr":
         raise BridgeError(
-            f"只有财务经理能提交成本结果给工艺经理；当前是「{user.get('role_name')}」")
+            f"只有报价人员能提交成本结果给工艺经理；当前是「{user.get('role_name')}」")
     package = dict(payload or {})
     if source_task_id:
         package.setdefault("source_task_id", str(source_task_id))

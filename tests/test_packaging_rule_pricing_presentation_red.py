@@ -74,13 +74,14 @@ class Presentation(unittest.TestCase):
             restored=ws.read_snapshot('Q',5)
             self.assertEqual(q,restored['packaging_quote'])
             doc=quote.document(q)
-            self.assertEqual(28,len(doc['sections'][2]['rows']))
-            self.assertEqual(1,len(doc['sections'][3]['rows']))
+            self.assertEqual(4,len(doc['sections']))
+            self.assertEqual('table',doc['sections'][1]['kind'])
+            self.assertNotIn('部件与材料',doc['markdown'])
             data=server._build_quote_docx({'session_id':'Q','industry':'packaging','steps':[]})
             self.assertIsNotNone(data,'Word导出依赖必须可用')
             with zipfile.ZipFile(io.BytesIO(data)) as archive:xml=archive.read('word/document.xml').decode()
-            self.assertIn('BP28',xml);self.assertIn('50770.00',xml)
-            self.assertIn('开料',xml);self.assertIn('模切',xml)
+            self.assertNotIn('BP28',xml);self.assertIn('50770.00',xml)
+            self.assertNotIn('开料',xml);self.assertNotIn('模切',xml)
             self.assertNotIn('本报价为缺口草稿',xml)
             updated=ws.save_pricing('Q',5,{'quote_quantity':2000,'tax_rate':0,'discount':{'rate':.2}},
                 {'user_id':1,'role_code':'sales_mgr'},expected_cost_fingerprint=ws.cost_fingerprint(pkg))['quote']
@@ -136,7 +137,7 @@ class Presentation(unittest.TestCase):
         priced['route_steps']=[{'part_code':'BP01','step_no':10,'step_name':'裱合'},
             {'part_code':'BP01','step_no':20,'step_name':'模切'},
             {'part_code':'BP02','step_no':30,'step_name':'开料'}]
-        doc=quote.document(priced)
+        doc=quote.internal_document(priced)
         self.assertEqual(2,len(doc['sections'][2]['rows']))
         self.assertIn('BP01',doc['sections'][3]['rows'][0]['项目'])
         self.assertIn('裱合',doc['sections'][3]['rows'][0]['值'])

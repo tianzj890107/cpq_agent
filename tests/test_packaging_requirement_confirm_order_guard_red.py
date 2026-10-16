@@ -135,16 +135,16 @@ class BConfirmGuard(unittest.TestCase):
         with mock.patch.object(RS, "store", fake), \
              mock.patch.object(RS, "drawing_parse_prerequisite", blocked_prerequisite):
             out=RS.confirm_requirement("p-order", {"username": "PE1"})
-        self.assertEqual('pending_review',out['status'])
-        self.assertEqual(fake.saved_statuses(), ['pending_review'])
+        self.assertEqual('approved',out['status'])
+        self.assertEqual(fake.saved_statuses(), ['approved'])
 
     def test_b2_confirm_unchanged_when_drawing_is_parsed(self):
         fake = FakeStore(PENDING)
         with mock.patch.object(RS, "store", fake), \
              mock.patch.object(RS, "drawing_parse_prerequisite", parsed_prerequisite):
             out = RS.confirm_requirement("p-order", {"username": "PE1"})
-        self.assertEqual(out["status"], "pending_review", "解析完成时行为逐字不变（Spec §2.2）")
-        self.assertEqual(fake.saved_statuses(), ["pending_review"])
+        self.assertEqual(out["status"], "approved", "包装确认及审核一次完成，不依赖图纸解析")
+        self.assertEqual(fake.saved_statuses(), ["approved"])
 
 
 class CSharedGuard(unittest.TestCase):

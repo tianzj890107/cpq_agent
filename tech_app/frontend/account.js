@@ -1,5 +1,5 @@
 (() => {
-  const roles = {viewer:'只读用户',engineer:'工艺工程师',sales_manager:'销售经理',process_manager:'工艺技术经理',reviewer:'校核人员（历史角色）',process_director:'工艺技术总监',sales_director:'销售总监',finance_manager:'财务负责人',general_manager:'总经理/董事长',admin:'系统管理员'};
+  const roles = {viewer:'只读用户',engineer:'工艺工程师',sales_manager:'销售经理',process_manager:'工艺技术经理',reviewer:'校核人员（历史角色）',process_director:'工艺技术总监',sales_director:'销售总监',finance_manager:'报价人员',general_manager:'总经理/董事长',admin:'系统管理员'};
   let me = null;
   // 登录态只经唯一写入口 TechAuth（批次 8）；兼容键的抄写职责不再散落在本页。
   const token = () => { const auth = window.TechAuth; return (auth && typeof auth.token === 'function' ? auth.token() : localStorage.getItem('cpq_auth_token')) || ''; };

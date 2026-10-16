@@ -424,7 +424,7 @@ def _sync_confirmation(current, incoming) -> bool:
 
 
 def _sync_pricing_approval(current: Optional[PricingPlan], incoming: PricingPlan) -> bool:
-    """定价内容变化后，旧的销售提交/财务审批结论自动失效。"""
+    """定价内容变化后，旧的销售提交/报价人员审批结论自动失效。"""
     def business_payload(value: PricingPlan) -> dict:
         data = value.model_dump()
         for key in ("approval", "updated_at", "timing", "base_price", "factor_multiplier", "suggested_price"):
@@ -564,7 +564,7 @@ async def project_write_guard(request: Request):
     if request.method in {"GET", "HEAD", "OPTIONS"}:
         mode = "read"
     elif project_access.is_contribute_route(request.method, request.url.path):
-        # 白名单里的专属业务动作（财务确认成本 / 总监审核发布 / 报告回传…）：ACL 不得
+        # 白名单里的专属业务动作（报价人员确认成本 / 总监审核发布 / 报告回传…）：ACL 不得
         # 提前否决，否则接口自己的 _require 永远没有执行机会（Spec §18.4 / §18.5）。
         mode = "contribute"
     else:
@@ -578,7 +578,7 @@ async def project_write_guard(request: Request):
         if exc.code == project_access.COST_NOT_COMPUTED_CODE:
             # 「项目存在、但还没算过包装成本」是自己的分支（Spec
             # `packaging-cost-write-role-single-source.md` §2.2）：403 + 可判 code，不再复用
-            # 404「项目不存在」—— 财务据此知道「该找谁先算一次」，而不是以为项目被删了。
+            # 404「项目不存在」—— 报价人员据此知道「该找谁先算一次」，而不是以为项目被删了。
             raise HTTPException(403, {"code": "cost_not_computed_yet",
                                       "message": exc.message}) from exc
         raise HTTPException(403, exc.message or "无权访问该项目") from exc
@@ -589,11 +589,11 @@ def _require(user: dict, allowed: set, msg: str) -> None:
         return
     if CPQ_SSO_ENABLED:
         # 各处的原始文案说的是 tech_app 自己那套角色（工程师/工艺技术总监…），
-        # 而 CPQ 侧只有销售经理/工艺经理/财务经理 —— 原样抛出去，用户会照着一个
+        # 而 CPQ 侧只有销售经理/工艺经理/报价人员 —— 原样抛出去，用户会照着一个
         # 不存在的角色去找权限。这里统一改写成 CPQ 的口径，一处改覆盖全部接口。
         #
-        # 说清**这一步**要谁，别一律写"仅限工艺经理"：2.3 成本测算归财务经理，
-        # 拿工艺经理去要求财务，等于把人往错的方向支（这条文案曾经就是这么误导的）。
+        # 说清**这一步**要谁，别一律写"仅限工艺经理"：2.3 成本测算归报价人员，
+        # 拿工艺经理去要求报价人员，等于把人往错的方向支（这条文案曾经就是这么误导的）。
         wanted = "、".join(
             cpq_sso.cpq_role_label(code)
             for code in sorted(allowed) if code != "admin") or "有相应权限的角色"
@@ -870,14 +870,14 @@ def whoami(user: dict = Depends(current_user)):
             # 3.3 发布归「工艺技术总监」，再声称"只能工艺经理使用"会把人挡在门外。
             "required_role_name": "工艺经理" if CPQ_MANAGER_FULL_TECH else "工艺技术总监",
             # can_write 是**工艺侧**的写权限（2.1/2.2 解析、生成、确认）。
-            # can_cost 是 2.3 成本测算 —— 那是财务经理的步骤，他在工艺侧只读，
+            # can_cost 是 2.3 成本测算 —— 那是报价人员的步骤，他在工艺侧只读，
             # 但绝不能因此被前端一刀切拦成"什么都不能做"（cpq-sso.js 的写拦截
-            # 原来只看 can_write，财务经理点测算连请求都发不出去）。
+            # 原来只看 can_write，报价人员点测算连请求都发不出去）。
             "can_write": (user or {}).get("role") in auth.WRITE_ROLES,
             "can_cost": (user or {}).get("role") in auth.COST_ROLES,
             # can_review = 3.2 报告审核（REVIEW_ROLES）、can_publish = 3.3 报告发布
             # （DIRECTOR_ROLES）。前端据此放行对应按钮，否则工艺技术总监点「审核通过」
-            # 「发布」会被前端伪 403 挡下（和当初财务经理点「测算」是同一个坑）；
+            # 「发布」会被前端伪 403 挡下（和当初报价人员点「测算」是同一个坑）；
             # 最终判定仍在后端 _require。
             "can_review": (user or {}).get("role") in auth.REVIEW_ROLES,
             "can_publish": (user or {}).get("role") in auth.DIRECTOR_ROLES,
@@ -2564,7 +2564,7 @@ def _save_project_chat_turn(project_id: str, user_message: str, answer: str, use
     """只追加本次问答，保留同一项目在每个页面之间连续的会话。"""
     messages = store.load_project_chat(project_id).get("messages", [])
     timestamp = now_cst_str()
-    # 每一轮都带上项目的业务实例号：报价—技术—财务—报告共用同一份身份，回溯会话时
+    # 每一轮都带上项目的业务实例号：报价—技术—报价人员—报告共用同一份身份，回溯会话时
     # 能认出这轮问答属于哪张业务实例。项目还没有实例号时给空串，绝不现编。
     business_case_id = str((store.load_business_case(project_id) or {}).get("business_case_id") or "")
     messages.extend([
@@ -2786,7 +2786,7 @@ def agent_event(project_id: str, body: AgentEventBody, user: dict = Depends(curr
     幂等且就地更新 —— 前端进度轮询只提交新出现的进度行，不会每次追加整段。
 
     权限也按这个定位来：不是"谁能改工艺参数"，而是"谁在这个项目里能动手"
-    （见 auth.SESSION_WRITE_ROLES）。2.3 的操作者是财务经理，他写自己那几条过程
+    （见 auth.SESSION_WRITE_ROLES）。2.3 的操作者是报价人员，他写自己那几条过程
     文字曾经被这里的 WRITE_ROLES 拦下 —— 业务动作成功、时间线却丢了，前端还会先
     弹一次伪 403。Agent 对话（/agent/send、/agent/new）不在放宽之列。
     """
@@ -3130,9 +3130,9 @@ async def generate_cost(
 ):
     """对某零件做专业成本分析(异步任务)。quantity 为核算批量;可附加说明/文件。
 
-    2.1 的界面上已经没有这一步 —— 零件成本归财务经理在 2.3 算（cost_review）。
+    2.1 的界面上已经没有这一步 —— 零件成本归报价人员在 2.3 算（cost_review）。
     """
-    _require(user, auth.COST_ROLES, "成本测算在 2.3，由财务经理负责")
+    _require(user, auth.COST_ROLES, "成本测算在 2.3，由报价人员负责")
     ir_dict = store.load_ir(project_id)
     if not ir_dict:
         raise HTTPException(404, "请先解析(parse)得到 IR")
@@ -3190,10 +3190,10 @@ def update_cost(project_id: str, part_id: str, analysis: CostAnalysis,
                 user: dict = Depends(current_user)):
     """保存人工编辑后的成本分析。
 
-    改成本的数字是财务的事（2.3）。生成走 COST_ROLES 而手改留在 WRITE_ROLES，
+    改成本的数字是报价人员的事（2.3）。生成走 COST_ROLES 而手改留在 WRITE_ROLES，
     等于绕开拆分：工艺工程师照样能把成本改成任意值。
     """
-    _require(user, auth.COST_ROLES, "成本测算在 2.3，由财务经理负责")
+    _require(user, auth.COST_ROLES, "成本测算在 2.3，由报价人员负责")
     if not store.load_meta(project_id):
         raise HTTPException(404, "项目不存在")
     analysis.part_id = part_id
@@ -3358,7 +3358,7 @@ async def generate_integration_params(
         # 由前端提示重新生成 —— 留着会让人以为整机成本已经跟着新参数更新过了。
         plan.confirmed = False
         # 「确认参数已齐」也是针对当时那一版参数按下的：整份重推之后必须重新确认，
-        # 否则新参数带着旧确认发到财务，缺项没人看得见。
+        # 否则新参数带着旧确认发到报价人员，缺项没人看得见。
         plan.params_final = False
         plan.params_final_by = None
         plan.params_final_at = None
@@ -3410,7 +3410,7 @@ def confirm_integration_params(project_id: str, user: dict = Depends(current_use
 
 @app.post("/api/projects/{project_id}/integration/process/confirm")
 def confirm_integration_process(project_id: str, user: dict = Depends(current_user)):
-    """确认「组装工艺」。这是 2.2 的闸门：确认之后才允许把任务推给财务经理算成本。
+    """确认「组装工艺」。这是 2.2 的闸门：确认之后才允许把任务推给报价人员算成本。
 
     不校验工序条数 —— 有的整机确实只有两三道；但必须**跑过**，空的工艺没什么可确认。
     """
@@ -3492,7 +3492,7 @@ def finalize_integration_params(project_id: str, body: IntegrationFinalizeBody,
         plan.params_final_at = None
         if body.waiver:
             # 「仍要继续」：人签了字，缺口原样留档 —— 参数推荐这一步的签字记在
-            # stage='params'，发送财务时同一批缺口凭它复用，不再要第二次签字。
+            # stage='params'，发送报价人员时同一批缺口凭它复用，不再要第二次签字。
             missing = integration.missing_required(plan, integration.project_family(project_id))
             integration.record_waiver(
                 plan, "params",
@@ -3618,10 +3618,10 @@ async def generate_integration_cost(
 ):
     """整机成本测算：以 2.1 各零件已测算的单件成本为底，叠加组装工时与整机费率(异步)。
 
-    成本已拆到 2.3（财务经理），2.2 的界面上不再有这一步；接口留着是因为 2.3 的
+    成本已拆到 2.3（报价人员），2.2 的界面上不再有这一步；接口留着是因为 2.3 的
     cost_review.run_assembly 复用同一套上下文。权限跟着成本走。
     """
-    _require(user, auth.COST_ROLES, "成本测算在 2.3，由财务经理负责")
+    _require(user, auth.COST_ROLES, "成本测算在 2.3，由报价人员负责")
     ir = _integration_ir(project_id)
     existing = integration.load_plan(project_id)
     # 只要求「组装工艺跑过」，不要求它排出了工序：按企业成本口径，人工/制费/加工
@@ -3667,8 +3667,8 @@ async def generate_integration_cost(
 @app.put("/api/projects/{project_id}/integration/cost")
 def update_integration_cost(project_id: str, analysis: CostAnalysis,
                             user: dict = Depends(current_user)):
-    """保存人工编辑后的整机成本测算。权限同零件成本：归财务（2.3）。"""
-    _require(user, auth.COST_ROLES, "成本测算在 2.3，由财务经理负责")
+    """保存人工编辑后的整机成本测算。权限同零件成本：归报价人员（2.3）。"""
+    _require(user, auth.COST_ROLES, "成本测算在 2.3，由报价人员负责")
     if not store.load_meta(project_id):
         raise HTTPException(404, "项目不存在")
     analysis.part_id = integration.ASSEMBLY_PART_ID
@@ -3717,11 +3717,11 @@ class IntegrationPublishBody(BaseModel):
     spec: str = ""
     note: str = ""
     # 派发方式：和报价助手的「转交任务」一样三选一 —— 发给某个角色 / 指派给某个人 /
-    # 发布到公共任务池。留空时由报价那边按任务类型落到默认角色（成本测算=财务经理）。
+    # 发布到公共任务池。留空时由报价那边按任务类型落到默认角色（成本测算=报价人员）。
     target_type: str = ""
     target_role_code: str = ""
     target_user_id: str = ""
-    # 可选：发送财务时携带的「仍要继续」签字（L2 缺口豁免）。真正记进 plan.waivers 的
+    # 可选：发送报价人员时携带的「仍要继续」签字（L2 缺口豁免）。真正记进 plan.waivers 的
     # 缺口以服务端算出的为准，这里只是本人"可以带缺口继续"的意愿与原因。
     waiver: Optional[dict] = None
     draft: bool = False
@@ -3780,12 +3780,13 @@ def integration_write_material(project_id: str, body: IntegrationPublishBody,
 @app.post("/api/projects/{project_id}/integration/send-to-finance")
 def integration_send_to_finance(project_id: str, body: IntegrationPublishBody,
                                 request: Request, user: dict = Depends(current_user)):
-    """2.2 的出口：确认工艺并发送至财务做成本测算。
+    """2.2 的出口：确认工艺并发送至报价人员做成本测算。
 
-    成本不再由工艺经理算 —— 他交的是工艺、参数与用量，成本的数字归财务
+    成本不再由工艺经理算 —— 他交的是工艺、参数与用量，成本的数字归报价人员
     （技术工艺 2.3）。所以这一步**不要求成本已完成**，只要求工艺与参数到位。
     """
-    _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
+    packaging=((store.load_requirement(project_id) or {}).get('data') or {}).get('industry')=='packaging'
+    _require(user, auth.WRITE_ROLES if packaging else auth.MANAGER_ROLES, "需要负责项目的工艺人员权限")
     # 实现唯一：与 Agent 的 SendIntegrationToFinance 走同一份 services.integration，
     # 两个确认闸门与对外调用都在那里，路由只做权限与错误翻译。
     plan = _bridge_call(
@@ -3819,9 +3820,9 @@ def integration_send_to_quote(project_id: str, body: IntegrationPublishBody,
 
 
 # --------------------------------------------------------------------------- #
-# 2.3 成本测算 —— 财务经理的步骤
+# 2.3 成本测算 —— 报价人员的步骤
 #
-# 分工：工艺经理在 2.1/2.2 出工艺与用量，2.2 结束时把项目交给财务；财务在这一步
+# 分工：工艺经理在 2.1/2.2 出工艺与用量，2.2 结束时把项目交给报价人员；报价人员在这一步
 # 逐个零件 + 整机算成本、汇总，然后选三个去向之一：写入数据库 / 回传销售经理继续报价 /
 # 提交工艺经理确认。**本步不联网**：只依据企业成本库与工程经验，见 services/cost_review.py。
 # --------------------------------------------------------------------------- #
@@ -3893,8 +3894,8 @@ def get_cost_review_detail(project_id: str, part_id: str, estimate_id: str = '',
 @app.put("/api/projects/{project_id}/cost-review")
 def update_cost_review(project_id: str, body: CostReviewBody,
                        user: dict = Depends(current_user)):
-    """保存财务的补充说明（会作为下一次测算的输入）。"""
-    _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
+    """保存报价人员的补充说明（会作为下一次测算的输入）。"""
+    _require(user, auth.COST_ROLES, "成本测算由报价人员负责，需要报价人员权限")
     return _cost_flow(cost_flow.save_note, project_id, user,
                       note=body.note, quantity=body.quantity)
 
@@ -3903,7 +3904,7 @@ def update_cost_review(project_id: str, body: CostReviewBody,
 async def run_cost_review_part(project_id: str, part_id: str, quantity: int = 1,
                          user: dict = Depends(current_user)):
     """算一个零件的成本（异步任务）。不联网。"""
-    _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
+    _require(user, auth.COST_ROLES, "成本测算由报价人员负责，需要报价人员权限")
     requirement = store.load_requirement(project_id) or {}
     if (requirement.get("data") or {}).get("industry") == "packaging":
         return await packaging_business_part_cost(
@@ -3927,12 +3928,12 @@ async def run_cost_review_part(project_id: str, part_id: str, quantity: int = 1,
 @app.post("/api/projects/{project_id}/cost-review/assembly")
 def run_cost_review_assembly(project_id: str, user: dict = Depends(current_user)):
     """算整机（组装）成本（异步任务）。不联网。"""
-    _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
+    _require(user, auth.COST_ROLES, "成本测算由报价人员负责，需要报价人员权限")
     requirement = store.load_requirement(project_id) or {}
     if (requirement.get("data") or {}).get("industry") == "packaging":
         _workflow_project(project_id)
         def packaging_job():
-            tasks.report_progress("按包装 BOM、工艺路线和已保存排模证据测算整单成本")
+            tasks.report_progress("按零件已有工艺和尺寸加余量测算整单成本")
             from .services import packaging_demo_flow
             if packaging_demo_flow.enabled(project_id):
                 packaging_demo_flow.run(project_id,actor=user,progress=tasks.report_progress)
@@ -3974,13 +3975,13 @@ def run_cost_review_assembly(project_id: str, user: dict = Depends(current_user)
 @app.post("/api/projects/{project_id}/cost-review/confirm")
 def confirm_cost_review(project_id: str, body: Optional[CostConfirmBody] = None,
                         user: dict = Depends(current_user)):
-    """财务确认本步成本。
+    """报价人员确认本步成本。
 
     缺口分两级：「一个零件都没有」是 L1 硬拦（签字也不放行）；未算零件 / 整机未算 /
     算出来是 0 元是 L2 缺口 —— 前端弹一次「仍要继续」，点继续才带着签字进 body.waiver，
     同一批缺口不再拦第二次。不带请求体的老调用（Agent 工具）行为不变：有缺口就如实拒绝。
     """
-    _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
+    _require(user, auth.COST_ROLES, "成本测算由报价人员负责，需要报价人员权限")
     return _cost_flow(cost_flow.confirm_review, project_id, user,
                       waiver=(body.waiver if body else None))
 
@@ -3989,7 +3990,7 @@ def confirm_cost_review(project_id: str, body: Optional[CostConfirmBody] = None,
 def write_cost_review_material(project_id: str, body: CostActionBody,
                                request: Request, user: dict = Depends(current_user)):
     """去向①：写入数据库（新建成品编码 + 物料成本配置）。"""
-    _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
+    _require(user, auth.COST_ROLES, "成本测算由报价人员负责，需要报价人员权限")
     return _cost_flow(cost_flow.write_material, project_id, user,
                       product_name=body.product_name, spec=body.spec,
                       token=_sso_token(request))
@@ -4000,9 +4001,9 @@ def send_cost_review_to_quote(project_id: str, body: CostActionBody,
                               request: Request, user: dict = Depends(current_user)):
     """去向②：回传销售经理继续报价（复用 2.2 那条推送，成本与参数一并带回）。
 
-    完成后按 body.source_task_id 关闭来源的 claimed 财务待办（在 cost_flow 里做）。
+    完成后按 body.source_task_id 关闭来源的 claimed 报价人员待办（在 cost_flow 里做）。
     """
-    _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
+    _require(user, auth.COST_ROLES, "成本测算由报价人员负责，需要报价人员权限")
     return _cost_flow(cost_flow.send_to_quote, project_id, user,
                       product_name=body.product_name, spec=body.spec, note=body.note,
                       token=_sso_token(request), source_task_id=body.source_task_id)
@@ -4016,7 +4017,7 @@ def cost_review_return_to_process(project_id: str, body: CostActionBody,
     成本必须先确认，未确认的数不作为正式结果往下走。正常提交确认与返工是两条路：
     确实要返工时，由第 5 阶段明确退回第 3 阶段，不走这个按钮。
     """
-    _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
+    _require(user, auth.COST_ROLES, "成本测算由报价人员负责，需要报价人员权限")
     return _cost_flow(cost_flow.return_to_process, project_id, user,
                       product_name=body.product_name, note=body.note,
                       target_user_id=body.target_user_id, token=_sso_token(request),
@@ -5243,7 +5244,7 @@ def export_costest_csv(project_id: str):
 
 
 # --------------------------------------------------------------------------- #
-# 定价方案制定(报价流程第 2 步:成本加成 + 维度调整 + 销售测算→财务审核)
+# 定价方案制定(报价流程第 2 步:成本加成 + 维度调整 + 销售测算→报价人员审核)
 # --------------------------------------------------------------------------- #
 class FinanceReview(BaseModel):
     decision: str = "approve"   # approve | reject
@@ -5348,7 +5349,7 @@ def update_pricing(project_id: str, doc: PricingPlan, user: dict = Depends(curre
 
 @app.post("/api/projects/{project_id}/pricing/submit")
 def submit_pricing(project_id: str, user: dict = Depends(current_user)):
-    """销售测算后提交财务审核。"""
+    """销售测算后提交报价人员审核。"""
     _require(user, auth.WRITE_ROLES, "需要销售/工程师及以上权限")
     if not store.load_meta(project_id):
         raise HTTPException(404, "项目不存在")
@@ -5368,8 +5369,8 @@ def submit_pricing(project_id: str, user: dict = Depends(current_user)):
 
 @app.post("/api/projects/{project_id}/pricing/review")
 def review_pricing(project_id: str, body: FinanceReview, user: dict = Depends(current_user)):
-    """财务负责人审核确认(通过/驳回)。"""
-    _require(user, auth.FINANCE_ROLES, "需要财务负责人或管理员权限")
+    """报价人员审核确认(通过/驳回)。"""
+    _require(user, auth.FINANCE_ROLES, "需要报价人员或管理员权限")
     if not store.load_meta(project_id):
         raise HTTPException(404, "项目不存在")
     if body.decision not in ("approve", "reject"):
@@ -6814,7 +6815,8 @@ def confirm_requirement(
     project_id: str, body: WorkflowAction = Body(default=WorkflowAction()),
     user: dict = Depends(current_user),
 ):
-    _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
+    packaging=((store.load_requirement(project_id) or {}).get('data') or {}).get('industry')=='packaging'
+    _require(user, auth.WRITE_ROLES if packaging else auth.MANAGER_ROLES, "需要负责项目的工艺人员权限")
     _workflow_project(project_id)
     return {"requirement": _requirement_flow(
         requirement_service.confirm_requirement, project_id, user, body.comment, body.waiver)}
@@ -6826,7 +6828,8 @@ def return_requirement_to_draft(
     user: dict = Depends(current_user),
 ):
     """确认人退回需求草稿，供创建人补充后再次提交。"""
-    _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
+    packaging=((store.load_requirement(project_id) or {}).get('data') or {}).get('industry')=='packaging'
+    _require(user, auth.WRITE_ROLES if packaging else auth.MANAGER_ROLES, "需要负责项目的工艺人员权限")
     _workflow_project(project_id)
     return {"requirement": _requirement_flow(
         requirement_service.return_requirement_to_draft, project_id, user, body.comment)}
@@ -8245,10 +8248,10 @@ def build_requirement_packaging_cost(
     user: dict = Depends(current_user),
 ):
     """逐部件 × 逐成本类别算成本并落库；重算整体替换，不许翻倍（Spec §3.2）。"""
-    # 财务经理也在写角色里（Spec `packaging-cost-write-role-single-source.md` §2.1 方案 A：
-    # 财务与工艺侧都能算，工艺代算留痕在成本记录里）—— 文案同步，别让财务照着找不到自己的角色。
+    # 报价人员也在写角色里（Spec `packaging-cost-write-role-single-source.md` §2.1 方案 A：
+    # 报价人员与工艺侧都能算，工艺代算留痕在成本记录里）—— 文案同步，别让报价人员照着找不到自己的角色。
     _require(user, packaging_cost.COST_WRITE_ROLES,
-             "需要工艺经理、工艺技术总监、财务经理或管理员权限")
+             "需要工艺经理、工艺技术总监、报价人员或管理员权限")
     _workflow_project(project_id)
     from .services import packaging_demo_flow
     if packaging_demo_flow.enabled(project_id) and not body.scenario:
@@ -8460,11 +8463,11 @@ def send_requirement_packaging_quote(
 ):
     """包装成本 → 报价：落一条只追加的交接记录，并把整包回传报价卡片。
 
-    写权限是财务 / 工艺侧（``packaging_handoff.HANDOFF_WRITE_ROLES``，不另抄一份）；
+    写权限是报价人员 / 工艺侧（``packaging_handoff.HANDOFF_WRITE_ROLES``，不另抄一份）；
     非包装 / 无成本 / 缺口未清都由服务层拒绝，且拒绝时不落任何记录、不建任务。
     """
     _require(user, packaging_handoff.HANDOFF_WRITE_ROLES,
-             "需要财务经理、工艺经理、工艺技术总监或管理员权限")
+             "需要报价人员、工艺经理、工艺技术总监或管理员权限")
     _workflow_project(project_id)
     who = _packaging_quote_identity(project_id)
     result = _packaging_handoff_flow(
@@ -8540,7 +8543,7 @@ def relay_packaging_handoff_audit_pending(pid: str, user: dict = Depends(current
     补完还剩几条，接口当次就说清楚。
     """
     _require(user, packaging_handoff.HANDOFF_WRITE_ROLES,
-             "需要财务经理、工艺经理、工艺技术总监或管理员权限")
+             "需要报价人员、工艺经理、工艺技术总监或管理员权限")
     _workflow_project(pid)
     result = packaging_handoff.relay_pending_audits(
         pid, by=str((user or {}).get("username") or ""))
@@ -9657,7 +9660,7 @@ async def packaging_business_part_cost(
     `packaging-single-cost-ledger.md`）—— 单件是整单明细的视图，不另立一份单件金额。
     不是包装需求单的历史 / POC 数据退回「按清单尺寸」的单件材料成本，那条路只作兼容。
     """
-    _require(user, packaging_cost.COST_WRITE_ROLES, "需要财务经理、工艺经理、工艺技术总监或管理员权限")
+    _require(user, packaging_cost.COST_WRITE_ROLES, "需要报价人员、工艺经理、工艺技术总监或管理员权限")
     _workflow_project(pid)
     loaded = _packaging_business_part_row(pid, code)
     # 包装单件是整单公式账的视图；批量取需求单数量，不将每套用量误作报价数量。

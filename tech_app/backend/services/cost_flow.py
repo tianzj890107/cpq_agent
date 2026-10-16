@@ -58,7 +58,7 @@ HANDOFF_KIND_COST_CONFIRM = "cost_to_process"
 # 任务 ACL：任务创建与项目参与权是**同一次动作**（Spec
 # `e2e-packaging-downstream-handoff-report.md` §3.2）
 #
-# 在这之前：财务任务由报价侧的角色池承接，领取人是到报价侧才知道的，技术项目这一侧
+# 在这之前：报价人员任务由报价侧的角色池承接，领取人是到报价侧才知道的，技术项目这一侧
 # 从来没记过「这条待办归谁」—— 于是 FI 领取了正确的任务、打开成本工作台却是
 # 「项目不存在」。这里把「领取」落成一条项目参与者记录（`cost_task_assignee`），
 # 由 `project_access.claimed_task_project_access()` 读回；两边共用同一份记录，
@@ -109,7 +109,7 @@ def claimed_task_by(project_id: str, username: str) -> bool:
 def grant_task_project_access(project_id: str, *, username: str = "", task_id: str = "",
                               role: str = "", source: str = COST_TASK_SOURCE,
                               author: str = "") -> dict:
-    """创建/领取财务任务时**同时**授予项目参与权（幂等，Spec §3.2）。
+    """创建/领取报价人员任务时**同时**授予项目参与权（幂等，Spec §3.2）。
 
     「同一事务」在这里是同一处调用：参与者记录与任务记录一起落，任何一半失败都不会
     留下「任务在、项目看不到」的半截状态。纯本地写，不联网、不发任务。
@@ -175,7 +175,7 @@ def assert_distinct_project_and_quote_session(project_id: str, quote_session_id:
     """技术项目号与报价会话号必须是**两个字段**（Spec §3.1）。
 
     任务上的 `session_id/project_id` 只能是技术项目 ID；报价会话号只放关联字段。
-    把两者塞进同一个值时立刻拒绝 —— 否则财务领取后打开的是报价卡片，成本工作台报
+    把两者塞进同一个值时立刻拒绝 —— 否则报价人员领取后打开的是报价卡片，成本工作台报
     「项目不存在」（这正是线上那条 `TP-95255258` 的现象）。
     """
     project = str(project_id or "").strip()
@@ -337,7 +337,7 @@ def _record_action(project_id: str, review, kind: str, label: str, detail: str,
 
 
 def save_note(project_id: str, user: dict, *, note: str = "", quantity: int = 1) -> dict:
-    """保存财务的补充说明与核算批量（会作为下一次测算的输入）。"""
+    """保存报价人员的补充说明与核算批量（会作为下一次测算的输入）。"""
     ir, plan, review = cost_review_ctx(project_id)
     review.note = note
     cost_review.save_review(project_id, review, user.get("username", "system"))
@@ -355,7 +355,7 @@ def save_note(project_id: str, user: dict, *, note: str = "", quantity: int = 1)
 
 def confirm_review(project_id: str, user: Optional[dict] = None,
                    waiver: Optional[dict] = None) -> dict:
-    """财务确认本步成本。
+    """报价人员确认本步成本。
 
     缺口分两级（见 docs/specs/tech-cost-confirm-gaps-and-waiver.md）：
 
@@ -671,7 +671,7 @@ def integration_quote_result(project_id: str, plan, title: str,
     """随「发送至报价」一起回传的整机结论（按 DA 字段拉平的参数 + 四项成本）。
 
     报价那边的第 2 步快照与第 3 步定价表都从这份结论取数，所以除了参数与整机成本，
-    这里还要带上零件成本、组装成本、工艺路线摘要与财务确认信息 —— 销售打开卡片就
+    这里还要带上零件成本、组装成本、工艺路线摘要与报价人员确认信息 —— 销售打开卡片就
     是带着完整技术结果的第 3 步，不需要重新问一遍技术工艺。
     数字一律来自既有 cost_model / cost_review，本函数只做投影，不复制成本算法。
     """
@@ -739,7 +739,7 @@ def process_handoff_package(project_id: str, plan, review, snapshot: dict,
     """成本结果 → 工艺经理确认的完整交接包。
 
     工艺经理领取后进的是第 5 阶段「工艺评估报告」，所以这里必须把参数、工艺路线、
-    逐件成本、组装成本与财务确认一并交过去；只给一句 note 等于让他回头再问一遍。
+    逐件成本、组装成本与报价人员确认一并交过去；只给一句 note 等于让他回头再问一遍。
     字段全部来自既有 plan / review / summarize，不在这一步重算任何成本。
     """
     requirement = requirement or {}
@@ -781,7 +781,7 @@ def process_handoff_package(project_id: str, plan, review, snapshot: dict,
 
 def close_source_task(project_id: str, user: Optional[dict], token: str,
                       source_task_id: str, *, comment: str = "") -> dict:
-    """完成正式去向后，把来源的那条 claimed 财务待办关掉（幂等）。
+    """完成正式去向后，把来源的那条 claimed 报价人员待办关掉（幂等）。
 
     不直接写库：任务表在报价工作流那一侧，这里走既有桥接通道，由 cpq_wf 统一做
     领取人 / 归属 / 状态校验。任务不存在或没带 task_id 时返回 skipped，不影响去向前进。
@@ -857,7 +857,7 @@ def integration_send_to_quote_body(project_id: str, *, product_name: str = "",
                                    completion_task_id: str = "") -> dict:
     """「发送至报价」的正文。**不含权限判断** —— 由调用方各自把门。
 
-    两个入口：2.2 归工艺经理（MANAGER_ROLES），2.3 归财务经理（COST_ROLES）。
+    两个入口：2.2 归工艺经理（MANAGER_ROLES），2.3 归报价人员（COST_ROLES）。
     权限和正文必须分开，复用正文的人才不会连带继承另一步的权限。
     """
     user = user or {}
@@ -871,7 +871,7 @@ def integration_send_to_quote_body(project_id: str, *, product_name: str = "",
     # 但「带缺口继续」是**本人签过字**的：同一批缺口（字段编码集合，以及顺带放行的
     # 还没点确认的环节）已被那条签字覆盖时，这里只是最后的完整性检查，不再第二次拦
     # 同一个人 —— 缺口照旧随返回体带出去（status.required_missing / params_complete
-    # 为 false / status.waiver），财务与销售都看得见哪几格还空着。签字之后新冒出来的
+    # 为 false / status.waiver），报价人员与销售都看得见哪几格还空着。签字之后新冒出来的
     # 缺口（编码集合变大）覆盖不成立，仍然逐个点名拒绝。
     ensure_packaging_params(project_id, plan)
     missing = (product_params.missing_required(plan.params, packaging_handoff_family(project_id))
@@ -880,7 +880,7 @@ def integration_send_to_quote_body(project_id: str, *, product_name: str = "",
         missing_codes = sorted({str(field.get("code") or "") for field in missing
                                 if str(field.get("code") or "")})
         # 不传 stage：签字可能落在「参数推荐」（stage=params），也可能落在「确认工艺并
-        # 发送财务」（stage=finance_handoff）—— 限定其中一种会把另一种漏掉。
+        # 发送报价人员」（stage=finance_handoff）—— 限定其中一种会把另一种漏掉。
         covered = integration.waiver_covers(plan, missing_codes,
                                             integration.pending_confirmations(plan))
         if covered is None:
@@ -931,7 +931,7 @@ def integration_send_to_quote_body(project_id: str, *, product_name: str = "",
     quote_result = integration_quote_result(project_id, plan, title, requirement)
     if completion_task_id:
         quote_result['completion_task_id']=str(completion_task_id)
-    # 技术项目号与报价会话号必须是两个字段（Spec §3.1）：混成一个值就会让财务领取后
+    # 技术项目号与报价会话号必须是两个字段（Spec §3.1）：混成一个值就会让报价人员领取后
     # 打开报价卡片、成本工作台报「项目不存在」。
     assert_distinct_project_and_quote_session(
         project_id, quote_result.get("quote_session_id"), kind=HANDOFF_KIND_COST)
@@ -1045,7 +1045,7 @@ def send_to_quote(project_id: str, user: Optional[dict] = None, *,
                   token: str = "", source_task_id: str = "") -> dict:
     """去向②：回传销售经理继续报价（复用 2.2 那条推送，成本与参数一并带回）。
 
-    来源的 claimed 财务待办由服务端在**同一次回传命令的同一个事务里**关掉（详见
+    来源的 claimed 报价人员待办由服务端在**同一次回传命令的同一个事务里**关掉（详见
     cpq_tech_bridge.send_to_quote）：技术侧不再另发一次可以独立失败的关闭请求，
     否则断路 / 超时就会留下"销售已收到任务、技术待办还挂着"的半完成状态。
     这里只在拿到明确成功结果（含 handoff_id）之后才写项目留痕。
@@ -1096,7 +1096,7 @@ def return_to_process(project_id: str, user: Optional[dict] = None, *,
                       source_task_id: str = "") -> dict:
     """去向①：提交工艺经理确认。
 
-    这与旧的"退回返工"不是一回事：财务认可本步成本，把完整结果交给工艺经理，由他在
+    这与旧的"退回返工"不是一回事：报价人员认可本步成本，把完整结果交给工艺经理，由他在
     第 5 阶段做最终工艺确认、汇总、审核和发布。确实需要返工时，由第 5 阶段明确退回
     第 3 阶段，不能把正常提交确认与返工混在一个模糊按钮里。
 

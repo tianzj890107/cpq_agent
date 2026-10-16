@@ -593,7 +593,6 @@ def prepare(project_id: str, *, actor: str = "", enable_demo: bool = False) -> D
             "overhead_seconds": DEMO_OVERHEAD_SECONDS, "overhead_rate": DEMO_OVERHEAD_RATE,
         }
         written += 1
-    doc=prepare_demo_layouts(doc)
     saved = packaging_parts.save_business_parts(project_id, doc)
     if enable_demo:
         requirement = copy.deepcopy(store.load_requirement(project_id) or {})

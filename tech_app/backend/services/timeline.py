@@ -167,7 +167,7 @@ def build_timeline(project_id: str) -> Dict[str, Any]:
             fh_task = _text(getattr(finance_handoff, "task_id", ""))
             add(_text(getattr(finance_handoff, "sent_at", "")) or created_at,
                 _text(getattr(finance_handoff, "sent_by", "")) or owner, "process_manager",
-                "cost_returned", "成本测算交财务复核", "cost", task=fh_task,
+                "cost_returned", "成本测算交报价人员复核", "cost", task=fh_task,
                 to="awaiting_confirmation",
                 target=_task_target(pid, fh_task) if fh_task else _stage_target(pid, "cost", view="total"))
     try:

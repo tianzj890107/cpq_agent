@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-# 业务给定的口径常量。改这里等于改全公司的成本口径，务必与财务确认后再动。
+# 业务给定的口径常量。改这里等于改全公司的成本口径，务必与报价人员确认后再动。
 TAX_DIVISOR = 1.13            # 含税 → 不含税
 MATERIAL_SHARE = 0.791        # 材料在不含税成本中的占比
 LABOR_RATIO = 0.3556          # 非材料部分里人工的占比

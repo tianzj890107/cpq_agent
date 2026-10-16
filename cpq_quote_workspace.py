@@ -136,6 +136,8 @@ def save_pricing(session,step,inputs,user,*,expected_cost_fingerprint,rule_resul
             try:result=price(package,pricing_mode=pricing_mode,publish=False,actor=user,**inputs)
             except PricingError as exc:raise cpq_wf.WfError(str(exc)) from exc
             quote=result.get('quote') or result
+            if basic is not None:quote['commercial_basic']=copy.deepcopy(basic)
+            elif stored.get('commercial_basic'):quote['commercial_basic']=copy.deepcopy(stored['commercial_basic'])
             quote['source_cost_fingerprint']=cost_fingerprint(package)
             snapshot={'packaging_package':package,'packaging_quote':quote,
                 'packaging_cost_fingerprint':cost_fingerprint(package)}

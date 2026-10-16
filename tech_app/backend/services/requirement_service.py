@@ -777,6 +777,9 @@ def requirement_precheck(project_id: str, doc: RequirementDoc) -> dict:
         ("六、分类与标签（Section F）", ["category_a", "product_type", "complexity"], "分类清晰"),
         ("七、备注与附件（Section G）", [], "原始图纸已上传"),
     ]
+    if industry=='packaging':
+        checks=[('需求名称',['title'],'已提供产品需求'),*product_checks,
+                ('交期',['first_sample_due'],'已提供交期')]
     items = []
     dynamic_values = {
         str(field.get("key") or ""): field.get("value")
@@ -898,6 +901,9 @@ def confirm_requirement(project_id: str, user: Optional[dict] = None,
     if not saved:
         raise RequirementSaveError("需求单不存在", 404, code=REQUIREMENT_SAVE_REJECTED)
     doc = RequirementDoc(**saved)
+    merged=(doc.data or {}).get('industry')=='packaging'
+    if merged and doc.status=='approved':return doc.model_dump()
+    if merged and doc.status=='pending_review':doc.status='pending_confirmation'
     if doc.status != "pending_confirmation":
         raise RequirementSaveError("当前需求不在待确认状态", 409, code=REQUIREMENT_SAVE_REJECTED)
     # 客户需求先确认；图纸解析属于2.1，不作为确认前置。
@@ -917,6 +923,12 @@ def confirm_requirement(project_id: str, user: Optional[dict] = None,
     doc.confirmed_at = now_cst_str()
     doc.confirmation_note = comment
     doc.history.append(workflow_event("confirmed", user, comment))
+    if merged:
+        doc.status='approved'
+        doc.reviewed_by=user.get('username','system')
+        doc.reviewed_at=doc.confirmed_at
+        doc.review_note=comment
+        doc.history.append(workflow_event('review_approve',user,comment))
     doc.updated_at = now_cst_str()
     out = doc.model_dump()
     store.save_requirement(project_id, out, author=user.get("username", "system"))

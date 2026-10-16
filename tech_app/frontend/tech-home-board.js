@@ -41,7 +41,7 @@
     var stage = card && card.stage;
     if (!stage || !String(stage.code || '').trim()) return STAGE_EMPTY;
     var title = String(stage.title || '').trim();
-    return String(stage.code).trim() + (title ? ' ' + title : '');
+    return String(stage.display_code || stage.code).trim() + (title ? ' ' + title : '');
   }
 
   function waitingText(card) {
