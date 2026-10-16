@@ -63,7 +63,7 @@ const $cr = id => document.getElementById(id);
 const crUrl = (suffix = '') => `/api/projects/${encodeURIComponent(crPid)}/cost-review${suffix}`;
 const crAttr = value => esc(value).replace(/"/g, '&quot;');
 const crMoney = value => value == null ? '—'
-  : Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+  : Number(value).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const crSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /* --------------------------------------------------------------- 对话区 */
@@ -599,10 +599,17 @@ function crCostDetailHtml(row) {
     formula_code:'公式编号',formula_version:'公式版本',value:'取值',note:'说明',reason:'原因',quantity:'数量',unit:'单位',
     amount:'金额',loss_rate:'损耗率',part_code:'零件编号',part_codes:'关联零件',scope:'费用范围',
     cut_size_source:'开料尺寸来源',cut_allowance_mm:'开料长/宽余量（毫米）',price_unit:'材料价格单位',price_unit_status:'价格单位依据',
-    loss_rate_source:'损耗率来源',mock:'模拟参考数据',standard_seconds:'标准工时（秒）',section_id:'组成编号',
+    loss_rate_source:'损耗率来源',loss_material_part_codes:'损耗依据材料编号',
+    material_resolution_source:'材料解析来源',original_material_text:'原始材料文字',material_text:'材料文字',
+    mock:'模拟参考数据',standard_seconds:'标准工时（秒）',section_id:'组成编号',
     parameter_source:'工艺参数来源',standard_loss_rate:'标准损耗率',kb_cost_factor:'知识库成本系数',
     sheet_area:'纸张面积',rate:'费率',allocation:'费用分摊',part_area:'零件面积',total_area:'总展开面积'};
   const functions = {MIN:'取最小值',MAX:'MAX',IF:'条件选择',IFERROR:'异常回退',ROUND:'四舍五入'};
+  const amountParameters=new Set(['ton_price','unit_price','min_charge','minimum_charge','rate_per_hour',
+    'equipment_rate','labor_rate','film_price','film_kg_price','foil_price','glue_unit_price','auxiliary_fee',
+    'stamping_auxiliary_fee','mounting_rate','die_cut_unit_fee','groove_unit_fee','material_price',
+    'bag_unit_price','ink_unit_price','overhead_rate','tooling_cost','min_freight','pallet_freight','amount']);
+  const monetaryValue=(key,value)=>amountParameters.has(key)&&value!==null&&value!==''&&Number.isFinite(Number(value));
   const words = {kb:'知识库',mock:'模拟参考',poc_mock:'模拟参考',POC:'原型验证',demo:'演示参考',
     global:'全局',project:'整件',part:'零件',material:'材料',processing:'实际加工',cad_dimension:'图纸标注',
     cad_geometry:'图纸几何',inferred:'推导',confirmed:'已确认',reviewed:'已审核',default:'默认',
@@ -614,7 +621,10 @@ function crCostDetailHtml(row) {
     legacy_allowance_0_5mm:'旧版长余量0毫米、宽余量5毫米',demo_process_parameters:'模拟工序参数',part_route_parameters:'零件工艺参数',
     material_price:'材料单价',gsm_source:'克重来源',kg:'千克',mm:'毫米',CNY:'人民币',
     'detail_sheet/1':'成本测算明细口径','whole_box_estimate/1':'整盒共享估算工时',
-    assembly_budget_estimate:'整盒工时预算分配'};
+    assembly_budget_estimate:'整盒工时预算分配',parent_material_consensus:'本零件材料损耗一致继承',
+    material_loss_unresolved:'本零件材料损耗不一致或有缺失',material_link_missing:'未找到关联材料',
+    invalid_process_factor:'工序专用损耗因子无效',inferred_from_part_name:'按零件名称推定',
+    requirement:'需求单'};
   const knownText = (value, extra={}) => String(value ?? '').replace(/\b[A-Za-z_][A-Za-z0-9_]*\b/g,
     word => extra[word] || labels[word] || words[word] || word);
   const valueText = (value, dictionary=labels, unnamed=new Map()) => {
@@ -622,13 +632,13 @@ function crCostDetailHtml(row) {
     if (value === true) return '是';
     if (value === false) return '否';
     if (Array.isArray(value)) return value.map(v=>valueText(v,dictionary,unnamed)).join('；');
-    if (value && typeof value === 'object') return Object.entries(value).map(([key,v])=>`${name(key)}：${valueText(v,dictionary,unnamed)}`).join('；');
+    if (value && typeof value === 'object') return Object.entries(value).map(([key,v])=>`${name(key)}：${monetaryValue(key,v)?crMoney(v):valueText(v,dictionary,unnamed)}`).join('；');
     return knownText(value ?? '未取得',dictionary);
   };
   const totalsAvailable = Boolean(row.has_cost || row.calculation_details?.some(item=>item.unit_amount!=null));
   let html = `<div class="inline-hint">按当前已保存公式账查看，打开详情不重算。批量 ${esc(crData?.packaging_cost?.quote_quantity ?? '未取得')} 只；每套用量 ${esc(row.quantity ?? '未取得')} 件。</div>`;
   if (!row.has_cost) html += `<div class="inline-warn">${row.cost_stale ? '当前为历史成本，依据已变化，需重算后使用。' : '当前成本尚未完整测算，以下仅展示已保存依据。'}</div>`;
-  html += `<div class="inline-totals"><span>材料 ${precise(totalsAvailable ? row.breakdown?.material : null)}</span><span>实际加工费 ${precise(totalsAvailable ? row.breakdown?.processing : null)}</span><span>单件 ${precise(totalsAvailable ? row.unit_cost : null)}</span><span>每套小计 ${precise(totalsAvailable ? row.subtotal : null)} 元</span></div>`
+  html += `<div class="inline-totals"><span>材料 ${crMoney(totalsAvailable ? row.breakdown?.material : null)}</span><span>实际加工费 ${crMoney(totalsAvailable ? row.breakdown?.processing : null)}</span><span>单件 ${crMoney(totalsAvailable ? row.unit_cost : null)}</span><span>每套小计 ${crMoney(totalsAvailable ? row.subtotal : null)} 元</span></div>`
     + '<div class="inline-hint">面板显示两位小数；单件合计使用未舍入金额相加后再舍入，不能用已显示的两项两位小数反推合计。制造人工计入对应零件加工；组装人工与出货包材归整单其他费用，不重复计费。</div>';
   const details = row.calculation_details || [];
   if (!details.length) return html + '<div class="inline-empty">没有已保存的逐项计算依据；请完成测算后查看，系统不会编造公式。</div>';
@@ -643,16 +653,16 @@ function crCostDetailHtml(row) {
       const formula = String(item.expression || '历史明细未保存公式表达式')
         .replace(/\*/g,' × ').replace(/\//g,' ÷ ')
         .replace(/\b[A-Za-z_][A-Za-z0-9_]*\b/g,word=>functions[word.toUpperCase()] || name(word));
-      html += `<details class="cr-calculation-item" open><summary>${index+1}. ${esc(knownText(item.category_label || item.cost_category || (category==='material'?'材料':'实际加工')))} · ${esc(item.part_name || '明细')} · ${precise(item.unit_amount)} 元/件</summary>`
+      html += `<details class="cr-calculation-item" open><summary>${index+1}. ${esc(knownText(item.category_label || item.cost_category || (category==='material'?'材料':'实际加工')))} · ${esc(item.part_name || '明细')} · ${crMoney(item.unit_amount)} 元/件</summary>`
         + `<div class="inline-row"><b>公式</b><code>${esc(formula)}</code></div>`
         + `<div class="inline-hint">公式编号：${esc(item.formula_code || '未保存')} · 版本：${esc(item.formula_version || '未保存')}</div>`;
       const inputs = Object.entries(item.inputs || {});
       if (inputs.length) html += '<table class="inline-cost-table"><thead><tr><th>参数</th><th>取值</th></tr></thead><tbody>'
-        + inputs.map(([key,value])=>`<tr><td>${esc(name(key))}</td><td>${esc(valueText(value,dictionary,unnamed))}</td></tr>`).join('')+'</tbody></table>';
+        + inputs.map(([key,value])=>`<tr><td>${esc(name(key))}</td><td>${esc(monetaryValue(key,value)?crMoney(value):valueText(value,dictionary,unnamed))}</td></tr>`).join('')+'</tbody></table>';
       else html += `<div class="inline-hint">${esc(item.inputs_error || '历史明细未保存输入参数')}</div>`;
       if (item.inputs?.allocation_rule === 'shared_sheet_process_area/1') html +=
         `<div class="inline-hint">共版加工只计一次：整张加工费 × 用纸张数 ÷ 订单数量 × 本件分摊比例，再按每套用量换算单件；不重复收整张最低收费。</div>`;
-      html += `<div class="inline-row">原公式金额 ${precise(item.amount)} 元 → 按账内损耗口径 ${precise(item.amount_with_loss)} 元 ÷ 每套用量 ${precise(item.quantity_divisor ?? row.quantity)} = ${precise(item.unit_amount)} 元/件。</div>`
+      html += `<div class="inline-row">原公式金额 ${crMoney(item.amount)} 元 → 按账内损耗口径 ${crMoney(item.amount_with_loss)} 元 ÷ 每套用量 ${precise(item.quantity_divisor ?? row.quantity)} = ${crMoney(item.unit_amount)} 元/件。</div>`
         + `<div class="inline-hint">损耗率：${precise(item.loss_rate)}；只有原账规则适用的类别计损耗。${item.min_charge_applied?'最低收费已应用，批量摊销参数见上表。':''}</div>`
         + `<div class="inline-hint">费率编号：${esc(item.rate_code || '未保存')} · 来源：${esc(knownText(item.source_ref || item.source || '未保存',dictionary))} ${esc(knownText(item.note || '',dictionary))}</div>`;
       if (item.assumptions?.length) html += `<div class="inline-hint">假设/推荐依据：${esc(valueText(item.assumptions,dictionary,unnamed))}</div>`;

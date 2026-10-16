@@ -22,7 +22,7 @@
     : (typeof aiData !== 'undefined' && Boolean(aiData?.status?.has_material_code)));
 
   /*
-   * 报价成品参数表。这张表的**行是字典定的**（亿纬锂能 DA 梳理 · 产品技术参数），
+   * 报价成品参数表。这张表的**行是字典定的**（裕同包装 DA 梳理 · 产品技术参数），
    * 不是模型输出多少就显示多少 —— 报价那头按字段取数，少一项就是报价单上一个空格，
    * 只列"模型给了什么"的话，缺了哪几项永远看不出来。
    */
@@ -35,7 +35,7 @@
     const stat = checklist.summary;
     const shortfall = stat.required_total - stat.required_filled;
     let html = `<section class="inline-card"><div class="inline-card-title">报价成品参数 · ${esc(checklist.family_name)}</div>`
-      + `<div class="inline-hint">来自亿纬锂能 DA 梳理（报价助手 · 产品技术参数）。`
+      + `<div class="inline-hint">来自裕同包装 DA 梳理（报价助手 · 产品技术参数）。`
       + `报价测算单上的成品行按这些字段取数。</div>`
       + `<div class="inline-totals"><span><strong>${stat.filled}</strong>/${stat.total} 已给出</span>`
       + `<span><strong>${stat.required_filled}</strong>/${stat.required_total} 报价必填</span></div>`;

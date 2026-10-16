@@ -2,6 +2,7 @@
 import hashlib
 import json
 import math
+from cpq_money import money, total
 
 
 def number(value):
@@ -33,13 +34,15 @@ def cost_fields(result):
         if all(v is not None for v in values):others=sum(values)
     provisional=bool(result.get('provisional') or ledger.get('has_gaps') or ledger.get('stale') or gap_count or unit is None or quantity is None or
         result.get('cost_status') in ('provisional','draft'))
+    raw_unit=unit
+    if unit is not None:unit=money(unit)
     return {'industry':package.get('industry') or result.get('industry') or '',
         'tech_project_id':result.get('tech_project_id') or result.get('project_id') or source.get('project_id') or '',
         'quote_session_id':result.get('quote_session_id') or source.get('source_session_id') or result.get('source_session_id') or '',
         'business_case_id':result.get('business_case_id') or source.get('business_case_id') or '',
         'source_task_id':result.get('source_task_id') or source.get('source_task_id') or '',
-        'unit_cost':unit,'quantity':quantity,'order_total_cost':unit*quantity if unit is not None and quantity is not None else None,
-        'material_cost':material,'processing_cost':processing,'other_cost':others,
+        'unit_cost':unit,'raw_unit_cost':raw_unit,'quantity':quantity,'order_total_cost':total(unit,quantity) if unit is not None and quantity is not None else None,
+        'material_cost':money(material) if material is not None else None,'processing_cost':money(processing) if processing is not None else None,'other_cost':money(others) if others is not None else None,
         'currency':ledger.get('currency') or requirement.get('currency') or result.get('currency') or '',
         'cost_tax_included':ledger.get('cost_tax_included',ledger.get('tax_included')),
         'cost_profile':ledger.get('cost_profile') or package.get('cost_profile') or result.get('cost_profile') or '',

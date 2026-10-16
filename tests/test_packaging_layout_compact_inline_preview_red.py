@@ -39,11 +39,11 @@ if(aiLayoutCadSvg({cad_scene:{entities:[]}})!=='')throw Error('fake empty previe
         svg='function aiLayoutCadSvg'+JS.split('function aiLayoutCadSvg',1)[1].split('async function aiToggleLayoutPreview',1)[0]
         toggle='async function aiToggleLayoutPreview'+JS.split('async function aiToggleLayoutPreview',1)[1].split('function aiBindBody',1)[0]
         script=r'''
-let reads=0;const aiPid='P',aiBusinessParts={business_parts_hash:'V1'};
+let reads=0;const aiPid='P',aiBusinessParts={business_parts_hash:'V1',layout_rows:[{entity_id:'L1',preview_bbox:[0,0,10,5]}]};
 const esc=v=>String(v);const api=async path=>{reads++;if(!path.endsWith('/requirement/packaging-geometry'))throw Error('wrong API');return {cad_scene:{entities:[{kind:'line',role:'cut',bbox:[0,0,10,5],points:[[0,0],[10,5]]}]}}};
 const host={hidden:true,innerHTML:'',querySelector:()=>host.innerHTML.includes('<svg')?{}:null};
-const button={textContent:'',setAttribute:()=>{},closest:()=>({querySelector:()=>host})};
-'''+svg+toggle+r'''
+const button={dataset:{aiLayoutPreview:'L1'},textContent:'',setAttribute:()=>{},closest:()=>({querySelector:()=>host})};
+'''+ 'function aiLayoutPreviewRegion'+JS.split('function aiLayoutPreviewRegion',1)[1].split('function aiLayoutCadSvg',1)[0]+svg+toggle+r'''
 (async()=>{await aiToggleLayoutPreview(button);if(host.hidden||!host.innerHTML.includes('<svg'))throw Error('did not expand');await aiToggleLayoutPreview(button);if(!host.hidden)throw Error('did not collapse');await aiToggleLayoutPreview(button);if(reads!==1)throw Error('re-read on toggle');})().catch(e=>{console.error(e);process.exitCode=1});
 '''
         p=subprocess.run(['node','-e',script],capture_output=True,text=True)

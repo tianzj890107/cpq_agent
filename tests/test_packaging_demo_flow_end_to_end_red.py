@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import json
 import pathlib
 import tempfile
 import sys
@@ -171,7 +172,13 @@ class DemoFlow(unittest.TestCase):
         packaging_route.confirm_route(PID, REQ_NO, actor={'username':'tester'})
         cost=packaging_cost.build_cost(PID,REQ_NO,actor={'username':'tester'})
         self.assertGreater(cost['material_total'],0)
-        self.assertGreater(cost['labor_total'],0)
+        # 现行费用口径：单件制造人工属于加工，不是整盒组装人工。
+        self.assertGreater(cost['process_total'],0)
+        manufacturing = [item for item in cost['items'] if item['cost_category']=='labor'
+                         and json.loads(item.get('inputs_json') or '{}').get('scope') != 'project']
+        self.assertTrue(manufacturing)
+        self.assertGreater(sum(item['amount_with_loss'] for item in manufacturing),0)
+        self.assertEqual(0,cost['labor_total'], '本夹具未生成跨零件组装，不应收组装人工')
 
 
 if __name__ == "__main__":

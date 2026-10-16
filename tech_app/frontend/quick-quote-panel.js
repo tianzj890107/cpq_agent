@@ -1374,7 +1374,7 @@
 
   function fmtAmount(value) {
     if (value === null || value === undefined || isNaN(Number(value))) return "未标";
-    return Number(value).toFixed(4);
+    return new Intl.NumberFormat('en-US',{useGrouping:false,minimumFractionDigits:2,maximumFractionDigits:2}).format(Number(value));
   }
 
   function fmtPercent(value) {

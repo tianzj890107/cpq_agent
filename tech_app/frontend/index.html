@@ -12,6 +12,8 @@
   <link rel="stylesheet" href="inline-analysis.css?v=20260917-headgap1" />
   <link rel="stylesheet" href="parse-loading.css?v=parse-loading2" />
   <link rel="stylesheet" href="drawing-flow.css?v=20261010-forms" />
+  <link rel="stylesheet" href="drawing-upload.css?v=20261016-1" />
+  <script src="drawing-upload.js?v=20261016-1"></script>
   <link rel="stylesheet" href="agent-chat.css?v=20261015-fold1" />
   <link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css" />
   <link rel="stylesheet" href="tech-rail.css?v=rail2" />
@@ -180,6 +182,7 @@
           </section>
 
           <div class="center-panel">
+            <section id="drawingUploadPanel" class="drawing-upload-panel" aria-label="当前项目图纸上传" hidden></section>
             <!-- 2.1 固定两栏：左栏零件清单独立滚动，右栏 3D / 零件信息 / 参数 / 工艺 / 成本。
                  #secParts / #tree 全页唯一，不再放进抽屉，也不再被搬进覆盖式结果宿主。 -->
             <div class="drawing-board-split">
@@ -306,6 +309,6 @@
   </div>
   <span id="health" hidden></span><span id="statusCard" hidden></span><span id="workflowHint" hidden></span>
   <link rel="stylesheet" href="workflow-navigation.css?v=workflow-nav4" />
-<script src="workflow-navigation.js?v=workflow-nav6"></script><script src="packaging-process-presentation.js?v=20261013-reference1"></script><script src="inline-analysis.js?v=20261013-reference1"></script><script src="tech-board-runtime.js?v=20260924-progress1"></script><script src="tech-session-timeline.js?v=20261015-handoff1"></script><script type="module" src="app.js?v=20261015-handoff1"></script><script src="/cpq_auth.js"></script><script src="/cpq_msg.js"></script><script src="llm-settings-panel.js?v=llm-set3"></script><script src="agent-chat.js?v=20261015-handoff1"></script><script src="home-link.js?v=home6"></script>
+<script src="workflow-navigation.js?v=workflow-nav6"></script><script src="packaging-process-presentation.js?v=20261013-reference1"></script><script src="inline-analysis.js?v=20261016-rules2"></script><script src="tech-board-runtime.js?v=20260924-progress1"></script><script src="tech-session-timeline.js?v=20261015-handoff1"></script><script type="module" src="app.js?v=20261016-demo1"></script><script src="/cpq_auth.js"></script><script src="/cpq_msg.js"></script><script src="llm-settings-panel.js?v=llm-set3"></script><script src="agent-chat.js?v=20261015-handoff1"></script><script src="home-link.js?v=home6"></script>
 </body>
 </html>

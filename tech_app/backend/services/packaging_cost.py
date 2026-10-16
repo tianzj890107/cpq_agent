@@ -28,6 +28,7 @@ Spec：docs/specs/packaging-cost-engine.md（§2.3–§2.12 是硬合同）
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any, Optional
@@ -46,6 +47,7 @@ COST_PROFILE = "packaging_v1"
 GENERIC_PROFILE = "generic_v1"
 CURRENT_PROFILE = packaging_detail_cost.PROFILE
 EXPENSE_POLICY = 'material_processing_assembly_other_no_tooling_freight/2'
+LOSS_RESOLUTION_POLICY = 'parent_section_material_consensus_process_scope/1'
 PACKAGING_INDUSTRY = "packaging"
 
 #: 0903 常量（工作簿可见 Sheet）：包材公式里的固定系数。
@@ -1315,6 +1317,56 @@ def loss_rate_detail(material_text: Any, *, rows=None,
     return None, None
 
 
+def _material_loss_identity(row: dict) -> tuple:
+    """BOM 显式归属优先，兼容旧的父件::组成编码；不做模糊前缀匹配。"""
+    code = _text(row.get('part_code') or row.get('item_key'))
+    evidence = _loads(row.get('size_source_json'), {})
+    if not isinstance(evidence, dict):
+        evidence = {}
+    parent, _, section = code.partition('::')
+    return (_text(evidence.get('parent_part_code')) or parent,
+            _text(evidence.get('section_id')) or section)
+
+
+def process_loss_rate_detail(step: dict, material_lines: list, *, factor_rows: list,
+                             requested_rate=None, at=None) -> tuple:
+    """工序仅继承本件材料的共同损耗，或使用精确作用域的专用因子，不叠加。"""
+    if requested_rate is not None:
+        return requested_rate, {'loss_rate_source': 'requirement.loss_rate'}
+    formula = _text(step.get('formula_code'))
+    moment = at or da_db.now()
+    factors = [r for r in factor_rows
+               if formula and _text(r.get('factor_type')) == 'scrap'
+               and _text(r.get('applicable_scope')) == 'process_formula:' + formula
+               and kb_repo._industry_visible(r, PACKAGING_INDUSTRY)
+               and kb_repo._le(r.get('effective_from'), moment)
+               and (r.get('effective_to') is None or kb_repo._gt(r['effective_to'], moment))]
+    factors.sort(key=lambda r: (_text(r.get('effective_from')), _text(r.get('factor_code'))), reverse=True)
+    if factors:
+        rate = _num(factors[0].get('value'))
+        # 无效的最新登记不能回退到另一条旧因子，亦不能静默当成 0。
+        if rate is None or not math.isfinite(rate) or rate < 0:
+            return None, {'loss_rate_source': 'invalid_process_factor'}
+        return rate, {'loss_rate_source': 'kb_cost_factor:' + _text(factors[0].get('factor_code'))}
+    code, section = _text(step.get('part_code')), _text(step.get('section_id'))
+    parent, _, embedded_section = code.partition('::')
+    section = section or embedded_section
+    matched = [r for r in material_lines if r.get('cost_category') == 'material'
+               and r.get('loss_parent_part_code', r.get('part_code')) == parent
+               and (not section or r.get('loss_section_id') == section)] if code else []
+    if matched:
+        values = [_num(r.get('loss_rate')) for r in matched]
+        evidence = {'loss_material_part_codes': sorted({_text(r.get('part_code')) for r in matched})}
+        if values[0] is not None and all(rate == values[0] for rate in values):
+            return values[0], dict(evidence, loss_rate_source='parent_material_consensus')
+        return None, dict(evidence, loss_rate_source='material_loss_unresolved')
+    # 指定了零件/组成却找不到材料，不许借工序名称里的“纸”掩盖关联丢失。
+    if code:
+        return None, {'loss_rate_source': 'material_link_missing'}
+    rate, source = loss_rate_detail(step.get('step_name'), rows=factor_rows)
+    return rate, {'loss_rate_source': source} if source else {}
+
+
 def default_loss_rate(material_text: Any, *, rows=None,
                       material=None) -> Optional[float]:
     """按材料/类别取 `factor_type='scrap'` 的损耗率；取不到返回 None（不许默认 0）。"""
@@ -1382,6 +1434,9 @@ def with_current_expense_policy(result):
     if result.get('built') and (result.get('source_versions') or {}).get('assembly_time_policy') != packaging_assembly.TIME_POLICY:
         result['stale'] = True
         result['stale_reasons'] = list(dict.fromkeys(list(result.get('stale_reasons') or []) + ['assembly_time_policy_changed']))
+    if result.get('built') and (result.get('source_versions') or {}).get('loss_resolution_policy') != LOSS_RESOLUTION_POLICY:
+        result['stale'] = True
+        result['stale_reasons'] = list(dict.fromkeys(list(result.get('stale_reasons') or []) + ['loss_resolution_policy_changed']))
     return result
 
 
@@ -1879,6 +1934,8 @@ def _line_to_item(seq: int, line: dict, *, source_ref: str, source: str = "formu
                  content_code=line.get("content_code"), tooling_code=line.get("tooling_code"),
                  rate_code=line.get("rate_code"), quantity_basis=line.get("quantity_basis"),
                  amount=line.get("amount"), loss_rate=line.get("loss_rate"),
+                 amount_with_loss=apply_loss(line.get('amount'), line.get('loss_rate'),
+                                            category=line.get('cost_category')),
                  min_charge_applied=bool(line.get("min_charge_applied")),
                  expression=expression or line.get("expression") or "",
                  inputs_json=json.dumps(inputs, ensure_ascii=False, default=str),
@@ -1966,7 +2023,7 @@ GAP_RESOLUTIONS = {
                              "resolution_action": "补材料克重/厚度换算（灰板必须给 GSM）",
                              "entry": "kb_material", "severity": "blocking"},
     "loss_rate_missing": {"missing_variable": ["loss_rate"],
-                          "resolution_action": "补该材料的损耗率（或确认按 0 计并签字）",
+                          "resolution_action": "核对零件材料归属与损耗；确有缺失再补材料或工序专用损耗率",
                           "entry": "kb_cost_factor", "severity": "advisory"},
     "rate_missing": {"missing_variable": ["labor_rate", "equipment_rate"],
                      "resolution_action": "知识库补这条工费率",
@@ -2060,6 +2117,9 @@ def _item_for_gap(cost: dict, gap: dict) -> dict:
     for item in (cost.get("items") or []):
         if not isinstance(item, dict):
             continue
+        if any(_text(gap.get(key)) and _text(item.get(key)) != _text(gap[key])
+               for key in ('part_code', 'source_ref', 'cost_category')):
+            continue
         if _text(item.get("part_code")) == where or _text(item.get("part_name")) == where:
             return item
     return {}
@@ -2076,6 +2136,8 @@ def gap_evidence(cost: Any, gap: Any) -> dict:
     return {
         "code": _text(row.get("code")),
         "where": where,
+        "part_code": _text(row.get('part_code') or item.get('part_code')),
+        "source_ref": _text(row.get('source_ref') or item.get('source_ref')),
         "detail": _text(row.get("detail")),
         "missing_variable": gap_variables(row),
         "material": _text(item.get("part_name") or item.get("material") or where),
@@ -2329,16 +2391,23 @@ def compute_project(project_id: str, requirement_no: str = "", *,
 
     def loss_rate_with_source(material_text: str, material=None) -> tuple:
         if req_loss is not None:
-            return req_loss, None
+            return req_loss, 'requirement.loss_rate'
         return loss_rate_detail(material_text, rows=factor_rows, material=material)
 
-    def loss_rate_for(material_text: str, part_code=None) -> Optional[float]:
-        if req_loss is None and part_code:
-            matched=[r for r in lines if r.get('cost_category')=='material' and r.get('part_code')==part_code]
-            if matched and matched[0].get('loss_rate') is not None and all(
-                    r.get('loss_rate')==matched[0]['loss_rate'] for r in matched):
-                return matched[0]['loss_rate']
-        return loss_rate_with_source(material_text)[0]
+    loss_moment = da_db.now()
+
+    def operation_loss(step, line):
+        rate, evidence = process_loss_rate_detail(
+            dict(step, formula_code=line.get('formula_code')), lines,
+            factor_rows=factor_rows, requested_rate=req_loss, at=loss_moment)
+        line['inputs'] = dict(line.get('inputs') or {}, **evidence)
+        if rate is None and line.get('amount') is not None:
+            gaps.append({'code': 'loss_rate_missing', 'where': _text(step.get('step_name')),
+                         'part_code': step.get('part_code'), 'section_id': step.get('section_id'),
+                         'source_ref': line.get('source_ref'), 'cost_category': line.get('cost_category'),
+                         'detail': '工序「%s」取不到一致且可追溯的损耗率，未追加损耗（保留基础金额）'
+                                   % _text(step.get('step_name'))})
+        return rate
 
     def evaluate_line(category, variables=None, **kwargs):
         return compute_line(category, variables, cost_profile=CURRENT_PROFILE, **kwargs)
@@ -2359,6 +2428,16 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         part_code = _text(row.get("part_code") or row.get("item_key"))
         part_name = _text(row.get("item_name"))
         material_text = _text(row.get("material") or row.get("item_name"))
+        material_resolution = {}
+        if demo_enabled and material_text == '未识别材料（估算）' and not row.get('material_code'):
+            from .packaging_demo_inputs import infer_material_text
+            inferred = infer_material_text(part_name)
+            if inferred:
+                material_resolution = {'original_material_text': material_text,
+                    'material_resolution_source': 'inferred_from_part_name', 'material_text': inferred}
+                material_text = inferred
+                row = dict(row, material=inferred)
+                assumptions.append('材料按件名推定：%s → %s；保留已保存演示参数，不代表图纸明确标注' % (part_name, inferred))
         # 这一行的用量（Spec `packaging-cost-part-usage-not-applied.md` §2.1）：部件行「8 个/套」
         # 不许按 1 件算 —— 用量真的乘进材料金额；取不到就按 1 计并披露（§2.2）。
         usage_qty, usage_missing = _part_usage_qty(row)
@@ -2392,6 +2471,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                      "machine_length": machine_length,
                      "machine_width": machine_width if machine_width is not None
                      else ((width) if width is not None else None)}
+        variables.update(material_resolution)
         result = None
         demo_input = demo_rows.get(part_code) if demo_enabled else None
         if demo_input and demo_input.get('mock'):
@@ -2447,10 +2527,12 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         rate, rate_source = loss_rate_with_source(material_text, material)
         if rate is None and amount is not None:
             gaps.append({"code": "loss_rate_missing", "where": part_code,
+                         "part_code": part_code, "cost_category": "material",
                          "detail": "材料「%s」取不到损耗率，损耗按 0 计（金额保留）" % material_text})
         line["loss_rate"] = rate
+        line['loss_parent_part_code'], line['loss_section_id'] = _material_loss_identity(row)
         if rate_source:
-            # §2.4 留痕：只有材料行带 loss_rate_source，工序 / 人工行不带。
+            # 材料与工序分别记录各自的损耗来源，不能混为统一默认值。
             variables["loss_rate_source"] = rate_source
             line["inputs"] = variables
         lines.append(line)
@@ -2568,10 +2650,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         if line['amount'] is not None:
             line['amount'] *= usage
         line.update(_trace_fields(entry, result=result, snapshot=rule_version))
-        rate = loss_rate_for(name, step.get('part_code'))
-        if rate is None and line["amount"] is not None:
-            gaps.append({"code": "loss_rate_missing", "where": name,
-                         "detail": "工序「%s」取不到损耗率，损耗按 0 计（金额保留）" % name})
+        rate = operation_loss(step, line)
         line["loss_rate"] = rate
         lines.append(line)
 
@@ -2659,10 +2738,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         elif line['amount'] is not None:
             line['amount'] *= usage
         line.update(_trace_fields(entry_labor, result=result, snapshot=rule_version))
-        rate = None if assembly_step else loss_rate_for(name, step.get('part_code'))
-        if not assembly_step and rate is None and amount is not None:
-            gaps.append({"code": "loss_rate_missing", "where": name,
-                         "detail": "工序「%s」取不到损耗率，损耗按 0 计（金额保留）" % name})
+        rate = None if assembly_step else operation_loss(step, line)
         line["loss_rate"] = rate
         lines.append(line)
 
@@ -2775,6 +2851,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         # 路线版本 / BOM 指纹 / BOM 行数一起落库。字段名说的是"照着哪一版算的"，
         # 就必须在读接口那一刻**不再重取**（读侧的比对见 `load_cost()`）。
         "source_versions": {
+            "loss_resolution_policy": LOSS_RESOLUTION_POLICY,
             "calculation_profile": CURRENT_PROFILE,
             "assembly_time_policy": packaging_assembly.TIME_POLICY,
             "detail_source_sha256": packaging_detail_cost.MANIFEST['source_sha256'],

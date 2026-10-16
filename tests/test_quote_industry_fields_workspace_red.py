@@ -20,8 +20,8 @@ class Workspace(unittest.TestCase):
         by={f['section_id']:f for f in package}
         self.assertIn('inner_length',[c['key'] for c in by['s2_techparams']['techparams_columns']])
         self.assertIn('材料费用',[c['key'] for c in by['s3_products']['columns']])
-        self.assertIn('毛利率（%）',[c['key'] for c in by['s3_markup']['columns']])
-        self.assertIn('金额（元/只）',[c['key'] for c in by['s4_markup']['columns']])
+        self.assertIn('加价项名称',[c['key'] for c in by['s3_markup']['columns']]);self.assertNotIn('毛利率（%）',[c['key'] for c in by['s3_markup']['columns']])
+        self.assertIn('加价值',[c['key'] for c in by['s4_markup']['columns']])
 
     def test_bridge_adds_standard_techparams_and_cost_fields(self):
         from cpq_tech_bridge import packaging_snapshot
@@ -34,7 +34,7 @@ class Workspace(unittest.TestCase):
     def test_actual_js_projects_into_existing_fields_without_calculating(self):
         js=ROOT/'tech_app/frontend/packaging-quote-workspace.js'
         self.assertTrue(js.exists())
-        node("global.window=global;"+js.read_text()+"\nconst p="+json.dumps(PKG)+";let q={industry:'packaging',pricing_mode:'gross_margin',gross_margin_rate:.25,cost_total:10,quote_quantity:1000,untaxed_unit_price:13.3333333333,net_unit_price:13.3333333333,subtotal_unit:13.3333333333,untaxed_total:13333.33,taxed_total:15066.66,tax_rate:.13,margin_price:13.3333333333,addon_total:0,discount_rate:0,source_result_version:'v1'};const s=PackagingQuoteWorkspace.project(p,q);if(s.s2_techparams[0].inner_length!==220.5)throw Error('actual dimensions missing');if(s.s3_markup[0]['毛利率（%）']!==25)throw Error('margin units');if(s.s5_detail[0]['总金额']!==13333.33)throw Error('total precision');if(s.s2_products[0]['其他费用']!==1)throw Error('cost fields');if(PackagingQuoteWorkspace.quoteMatches(p,q)!==true)throw Error('valid version');p.cost.total_cost=11;if(PackagingQuoteWorkspace.quoteMatches(p,q))throw Error('old cost accepted');")
+        node("global.window=global;"+js.read_text()+"\nconst p="+json.dumps(PKG)+";let q={industry:'packaging',pricing_mode:'gross_margin',gross_margin_rate:.25,cost_total:10,quote_quantity:1000,untaxed_unit_price:13.3333333333,net_unit_price:13.3333333333,subtotal_unit:13.3333333333,untaxed_total:13333.33,taxed_total:15066.66,tax_rate:.13,margin_price:13.3333333333,addon_total:0,discount_rate:0,source_result_version:'v1'};const s=PackagingQuoteWorkspace.project(p,q);if(s.s2_techparams[0].inner_length!==220.5)throw Error('actual dimensions missing');if(s.s3_markup.length)throw Error('legacy margin override');if(s.s5_detail[0]['总金额']!=='13333.33')throw Error('total precision');if(s.s2_products[0]['其他费用']!=='1.00')throw Error('cost fields');if(PackagingQuoteWorkspace.quoteMatches(p,q)!==true)throw Error('valid version');p.cost.total_cost=11;if(PackagingQuoteWorkspace.quoteMatches(p,q))throw Error('old cost accepted');")
 
     def test_page_has_no_extra_panel_and_restore_never_prices(self):
         source=(ROOT/'确认需求解析结果.html').read_text()
@@ -65,7 +65,7 @@ class Workspace(unittest.TestCase):
         saved={2:{'packaging_package':PKG}}
         with patch('cpq_auth._connect',return_value=conn),patch('cpq_wf._fetch_card',return_value=card),patch('cpq_wf.step_snapshot',side_effect=lambda sid,step,**kw:saved.get(step,{})),patch('cpq_wf.merge_step_snapshot') as merge,patch('cpq_wf.complete_step') as complete:
             result=module.save_pricing('Q1',3,{'gross_margin_rate':.25}, {'user_id':1,'role_code':'sales_mgr'},expected_cost_fingerprint=module.cost_fingerprint(PKG))
-            self.assertAlmostEqual(10/.75,result['quote']['margin_price'])
+            self.assertEqual(13.33,result['quote']['margin_price'])
             self.assertTrue(merge.called);complete.assert_not_called()
             self.assertEqual(PKG,merge.call_args.args[2]['packaging_package'])
 
@@ -138,9 +138,9 @@ class Workspace(unittest.TestCase):
         quote['source_cost_fingerprint']=cpq_quote_workspace.cost_fingerprint(PKG)
         snapshot={'packaging_package':PKG,'packaging_quote':quote,'packaging_cost_fingerprint':quote['source_cost_fingerprint']}
         context="const sections=new Map(),$=id=>document.getElementById(id),FORMS="+json.dumps(forms)+";let shownStep=3,currentSessionId='Q',busy=false,LAST_PACKAGING_PACKAGE=null,LAST_PACKAGING_QUOTE=null,PACKAGING_COMMERCIAL_QUOTE=null,PACKAGING_COST_FINGERPRINT='',PACKAGING_RESTORED_RATE=null,PACKAGING_PRICING_DIRTY=false,PACKAGING_PRICING_REQUEST=0;const GUESS_RE=/推荐/;const currentIndustry=()=> 'packaging',isBomSection=()=>false,escapeHtml=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;'),addUserBubble=()=>{},addAiBubble=()=>{},s5BindLiveCalc=()=>{},addErrorBubble=x=>{throw Error(x)},setBusy=x=>{busy=x};let calls=0;const snap="+json.dumps(snapshot)+";const wfApi=async(path,options)=>{calls++;if(path!=='/wf/card/pricing-save'||options.body.inputs.gross_margin_rate!==.3||options.body.inputs.addons.freight!==0)throw Error('wrong pricing inputs');return {ok:true,data:snap}};"
-        names=('statusChipHtml','syncSectionNumbers','sectionShell','markGuess','techParamsColumnsOf','packagingPricingControlsHtml','packagingMarginRate','renderTableSection','makeTableRow','updateRowCount','extractSectionRows','restorePackagingPricing','packagingQuoteDetailValues','applyPackagingQuoteRows','renderPackagingQuotePanel','repricePackagingWorkspace')
+        names=('statusChipHtml','syncSectionNumbers','sectionShell','markGuess','techParamsColumnsOf','renderTableSection','makeTableRow','updateRowCount','extractSectionRows','restorePackagingPricing','packagingQuoteDetailValues','applyPackagingQuoteRows','renderPackagingQuotePanel','repricePackagingWorkspace')
         script=(ROOT/'tech_app/frontend/packaging-quote-workspace.js').read_text()+context+'\n'.join(function(n) for n in names)
-        script+="\n(async()=>{await renderPackagingQuotePanel(snap);await renderPackagingQuotePanel(snap);if(calls!==0)throw Error('restore called pricing');if(document.getElementById('packagingQuotePanel'))throw Error('extra card');if(!sections.get('s2_techparams').el.textContent.includes('220.5'))throw Error('dimensions not rendered');const margin=document.getElementById('packagingMarginInput');if(!margin)throw Error('margin not editable');margin.value='30';margin.dispatchEvent(new Event('input',{bubbles:true}));const freight=sections.get('s4_markup').el.querySelector('input[data-key=\"金额（元/只）\"]');freight.value='0';freight.dispatchEvent(new Event('input',{bubbles:true}));sections.get('s3_markup').el.querySelector('[data-packaging-reprice]').click();await new Promise(r=>setTimeout(r,120));if(calls!==1||busy||PACKAGING_PRICING_DIRTY)throw Error('save/reprice lifecycle');document.getElementById('probe').textContent='PASS';})().catch(e=>{document.getElementById('probe').textContent='FAIL:'+e.stack});"
+        script+="\n(async()=>{await renderPackagingQuotePanel(snap);await renderPackagingQuotePanel(snap);if(calls!==0)throw Error('restore called pricing');if(document.getElementById('packagingQuotePanel'))throw Error('extra card');if(!sections.get('s2_techparams').el.textContent.includes('220.5'))throw Error('dimensions not rendered');if(document.getElementById('packagingMarginInput'))throw Error('manual margin still visible');if(sections.get('s3_markup').el.querySelector('[data-packaging-reprice]'))throw Error('extra save button');if(sections.get('s4_markup').el.querySelector('input'))throw Error('manual addon still editable');if(calls!==0)throw Error('restore recalculated');document.getElementById('probe').textContent='PASS';})().catch(e=>{document.getElementById('probe').textContent='FAIL:'+e.stack});"
         with tempfile.TemporaryDirectory() as directory:
             page=pathlib.Path(directory)/'workspace.html'
             page.write_text('<!doctype html><meta charset="utf-8"><div id="resultsContent"></div><pre id="probe">WAIT</pre><script>'+script+'</script>')

@@ -70,10 +70,15 @@ def ensure_inputs(project_id, actor):
     if not enabled(project_id): return False
     def identity(doc):
         import json
-        values=[{'code':row.get('business_part_code'),'binding':row.get('geometry_binding'),
-                 'confirmed_size':row.get('confirmed_size'),'material':(row.get('reference') or {}).get('material_text')}
+        values=[{'code':row.get('business_part_code'),'name':row.get('name'),'binding':row.get('geometry_binding'),
+                 'confirmed_size':row.get('confirmed_size'),'reference':row.get('reference'),
+                 'usage_qty':row.get('usage_qty'),'semantic_material':row.get('semantic_material'),
+                 'sections':[{k:s.get(k) for k in ('section_id','name','material_text','quantity','confirmed_size','automatic_size','entity_ids')}
+                             for s in row.get('sections') or []]}
                 for row in doc.get('business_parts') or []]
-        return hashlib.sha256(json.dumps(values,sort_keys=True,default=str).encode()).hexdigest()
+        layout=[{k:r.get(k) for k in ('entity_id','text','raw_text','scheme_id','sheet_mm','machine_mm','part_codes','part_counts')}
+                for r in doc.get('layout_rows') or []]
+        return hashlib.sha256(json.dumps({'parts':values,'layout':layout,'scheme':doc.get('selected_scheme_id')},sort_keys=True,default=str).encode()).hexdigest()
     doc=packaging_parts.load_business_parts(project_id)
     data=(store.load_requirement(project_id) or {}).get('data') or {}
     required=('quote_quantity','packaging_product_name','packaging_category','box_type',
@@ -128,7 +133,21 @@ def sync_integration(project_id, actor, route=None):
         'human_confirmed':False,'parameters_complete':complete,'route_adopted':bool(route)})
     return plan
 
+def prepare_names(project_id, actor):
+    """异步业务任务内部调用，禁止塞进同步读/提交前置校验。"""
+    if not enabled(project_id):return False
+    from . import packaging_name_assist, tasks
+    tasks.report_progress('按已有材料、尺寸与方案核对排模名称；未命中时请求语义建议')
+    doc=packaging_name_assist.prepare(project_id,actor.get('username',''))
+    state=doc.get('name_assist') or {}
+    label={'not_needed':'无需语义补充','completed':'候选核对完成','unavailable':'模型不可用，保留规则结果'}.get(state.get('status'),'已读取规则结果')
+    tasks.report_progress('名称关联：'+label+'；只采用现有候选，未生成尺寸或费率')
+    ensure_inputs(project_id,actor)
+    return True
+
+
 def prepare_route(project_id,actor, *, regenerate_assembly=False, note='', attachments=None):
+    prepare_names(project_id,actor)
     ensure_inputs(project_id,actor)
     from . import packaging_process_instances
     from . import tasks

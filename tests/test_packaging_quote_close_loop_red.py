@@ -863,9 +863,10 @@ class EPrice(PriceCase):
         self.assertEqual(quote["pricing_mode"], "gross_margin")
         self.assertAlmostEqual(quote["gross_margin_rate"], MARGIN, places=9)
         self.assertIsNone(quote.get("markup_rate"), "两个概念不许混用（Spec §1.2）")
-        self.assertAlmostEqual(quote["cost_total"], COST_WORKRATE, places=9)
-        self.assertAlmostEqual(quote["untaxed_unit_price"], PRICE_WORKRATE, places=9)
-        self.assertAlmostEqual(quote["untaxed_total"], PRICE_WORKRATE * 1000, places=6)
+        # 2026-10-16：公式原值测试仍在e1-e3；业务报价改为成本/单价到分后乘数量。
+        self.assertEqual(quote["cost_total"], 77.69)
+        self.assertEqual(quote["untaxed_unit_price"], 103.59)
+        self.assertEqual(quote["untaxed_total"], 103590)
         self.assertEqual(quote["quote_quantity"], 1000)
         self.assertEqual(quote["industry"], "packaging")
         self.assertEqual(quote["pricing_profile"], "packaging_margin_v1")
@@ -877,14 +878,14 @@ class EPrice(PriceCase):
         self.assertEqual(quote["pricing_mode"], "markup")
         self.assertAlmostEqual(quote["markup_rate"], MARGIN, places=9)
         self.assertIsNone(quote.get("gross_margin_rate"))
-        self.assertAlmostEqual(quote["untaxed_unit_price"], PRICE_MARKUP_STANDARD, places=9)
+        self.assertEqual(quote["untaxed_unit_price"], 75.06)
 
     def test_e7_addons_are_a_closed_set(self):
         quote = self.price(gross_margin_rate=MARGIN,
                            addons={"tech_premium": 1.5, "market_adjustment": 0.3,
                                    "other_addon": 0.2})
         self.assertAlmostEqual(quote["addon_total"], 2.0, places=9)
-        self.assertAlmostEqual(quote["subtotal_unit"], PRICE_WORKRATE + 2.0, places=9)
+        self.assertEqual(quote["subtotal_unit"], 105.59)
         labels = {line["code"]: line["label"] for line in quote["addons"]}
         self.assertEqual(labels, {"tech_premium": "技术溢价", "market_adjustment": "市场调节",
                                   "other_addon": "其他加价"})
@@ -896,10 +897,9 @@ class EPrice(PriceCase):
     def test_e8_discount_applies_after_margin_and_addons(self):
         quote = self.price(gross_margin_rate=MARGIN, addons={"tech_premium": 2.0},
                            discount={"rate": 0.05})
-        subtotal = PRICE_WORKRATE + 2.0
-        self.assertAlmostEqual(quote["subtotal_unit"], subtotal, places=9)
-        self.assertAlmostEqual(quote["discount_amount"], subtotal * 0.05, places=9)
-        self.assertAlmostEqual(quote["net_unit_price"], subtotal * 0.95, places=9)
+        self.assertEqual(quote["subtotal_unit"], 105.59)
+        self.assertEqual(quote["discount_amount"], 5.28)
+        self.assertEqual(quote["net_unit_price"], 100.31)
         with self.assertRaises(self.module.PricingError) as ctx:
             self.price(gross_margin_rate=MARGIN, discount={"rate": 1.5})
         self.assertEqual(ctx.exception.code, "invalid_rate")
@@ -908,18 +908,17 @@ class EPrice(PriceCase):
         quote = self.price(package=package_fixture(cost=cost_fixture(total_cost=COST_STANDARD)),
                            gross_margin_rate=MARGIN)
         self.assertAlmostEqual(quote["tax_rate"], TAX_RATE, places=9)
-        self.assertAlmostEqual(quote["tax_amount"], GOLDEN_TAX, places=6)
-        self.assertAlmostEqual(quote["taxed_unit_price"], GOLDEN_TAXED, places=6)
-        self.assertAlmostEqual(quote["taxed_total"], GOLDEN_TAXED * 1000, places=3)
+        self.assertEqual(quote["tax_amount"], 10.41)
+        self.assertEqual(quote["taxed_unit_price"], 90.48)
+        self.assertEqual(quote["taxed_total"], 90480)
 
     def test_e10_golden_chain(self):
         quote = self.price(package=package_fixture(cost=cost_fixture(total_cost=COST_STANDARD)),
                            gross_margin_rate=MARGIN, addons={"tech_premium": 2.0},
                            discount={"rate": 0.05}, tax_rate=TAX_RATE)
-        self.assertAlmostEqual(quote["untaxed_unit_price"], PRICE_STANDARD, places=6)
-        self.assertAlmostEqual(quote["net_unit_price"] * 1.13, GOLDEN_CHAIN, places=6,
-                               msg="顺序必须是 毛利 → 加价 → 折扣 → 税金（Spec §2.4）")
-        self.assertAlmostEqual(quote["taxed_unit_price"], GOLDEN_CHAIN, places=6)
+        self.assertEqual(quote["untaxed_unit_price"], 80.07)
+        self.assertEqual(quote["net_unit_price"], 77.97)
+        self.assertEqual(quote["taxed_unit_price"], 88.11)
 
     def test_e11_tax_rate_guards(self):
         for rate in (1.5, -0.1):
@@ -999,9 +998,9 @@ class FDocument(PriceCase):
     def test_f2_markdown_carries_the_numbers(self):
         quote = self.price(gross_margin_rate=MARGIN)
         markdown = self.module.document(quote)["markdown"]
-        self.assertIn("103.58", markdown, "报价单必须写出未税单价（Spec §2.5）")
-        self.assertIn("117.05", markdown, "报价单必须写出含税单价")
-        self.assertIn("117045.70", markdown, "报价单必须写出含税总额")
+        self.assertIn("103.59", markdown, "报价单必须写出未税单价（Spec §2.5）")
+        self.assertIn("117.06", markdown, "报价单必须写出按分计算的含税单价")
+        self.assertIn("117060.00", markdown, "报价单必须写出含税总额")
 
     def test_f3_document_numbers_match_quote(self):
         quote = self.price(gross_margin_rate=MARGIN, addons={"tech_premium": 1.0},
@@ -1044,9 +1043,9 @@ class FDocument(PriceCase):
             self.assertIn(key, sections, "工作台分区缺 %s（Spec §4.2 sections）" % key)
         markup = json.dumps(sections["s3_markup"], ensure_ascii=False)
         self.assertIn("0.25", markup, "定价分区必须显示毛利率：%s" % markup)
-        self.assertIn("103.58", markup, "定价分区必须显示未税单价：%s" % markup)
+        self.assertIn("103.59", markup, "定价分区必须显示未税单价：%s" % markup)
         detail = json.dumps(sections["s5_detail"], ensure_ascii=False)
-        self.assertIn("117.05", detail, "报价明细必须显示含税单价：%s" % detail)
+        self.assertIn("117.06", detail, "报价明细必须显示含税单价：%s" % detail)
 
     def test_f7_document_is_deterministic(self):
         quote = self.price(gross_margin_rate=MARGIN)
@@ -1111,8 +1110,8 @@ class GQuoteVersion(QuoteStoreCase):
         self.assertEqual(row["quote_session_id"], self.session)
         self.assertEqual(row["business_case_id"], "bc_pkg0001")
         self.assertEqual(int(row["created_by_user_id"]), int(SALES["user_id"]))
-        self.assertAlmostEqual(float(row["untaxed_unit_price"]), PRICE_WORKRATE, places=6)
-        self.assertAlmostEqual(float(row["cost_total"]), COST_WORKRATE, places=6)
+        self.assertAlmostEqual(float(row["untaxed_unit_price"]), 103.59, places=6)
+        self.assertAlmostEqual(float(row["cost_total"]), 77.69, places=6)
         self.assertEqual(int(saved["version_no"]), 1)
         self.assertFalse(saved.get("already_saved", False))
 
@@ -1129,9 +1128,9 @@ class GQuoteVersion(QuoteStoreCase):
         self.assertEqual([int(r["version_no"]) for r in rows], [1, 2])
         self.assertEqual(int(saved["version_no"]), 2)
         self.assertEqual(int(rows[1]["previous_version_no"]), 1)
-        self.assertAlmostEqual(float(rows[1]["previous_cost_total"]), COST_WORKRATE, places=6,
+        self.assertAlmostEqual(float(rows[1]["previous_cost_total"]), 77.69, places=6,
                                msg="新版必须记下原报价成本（0903 报价表 (2) 的「原报价成本」）")
-        self.assertAlmostEqual(float(rows[1]["cost_total"]), COST_STANDARD, places=6)
+        self.assertAlmostEqual(float(rows[1]["cost_total"]), 60.05, places=6)
 
     def test_g4_old_version_is_never_overwritten(self):
         self.save(self.quote())
@@ -1149,7 +1148,7 @@ class GQuoteVersion(QuoteStoreCase):
         self.assertEqual([int(v["version_no"]) for v in versions], [2, 1])
         latest = self.quote_module().latest(self.conn, business_case_id="bc_pkg0001")
         self.assertEqual(int(latest["version_no"]), 2)
-        self.assertAlmostEqual(float(latest["cost_total"]), COST_STANDARD, places=6)
+        self.assertAlmostEqual(float(latest["cost_total"]), 60.05, places=6)
         by_session = self.quote_module().versions(self.conn, quote_session_id=self.session)
         self.assertEqual(len(by_session), 2, "按会话号也必须查得到全部版本")
 
@@ -1379,7 +1378,7 @@ class IServerEntry(unittest.TestCase):
         finally:
             self.server.bridge = backup
         self.assertTrue(result.get("ok"), "无模型模式下包装定价必须成功：%r" % (result,))
-        self.assertAlmostEqual(float(result["quote"]["untaxed_unit_price"]), PRICE_WORKRATE,
+        self.assertAlmostEqual(float(result["quote"]["untaxed_unit_price"]), 103.59,
                                places=6)
         for key in ("s3_markup", "s4_markup", "s5_basic", "s5_detail"):
             self.assertIn(key, result.get("sections") or {},
@@ -1437,10 +1436,9 @@ class JEndToEnd(HandoffCase):
         package = self.package()
         module = self.quote_mod()
         quote = module.price(package, gross_margin_rate=MARGIN)
-        self.assertAlmostEqual(quote["cost_total"], package["cost"]["total_cost"], places=9,
+        self.assertAlmostEqual(quote["source_total_cost"], package["cost"]["total_cost"], places=9,
                                msg="定价必须用第 7 批的成本总额，不许另算")
-        self.assertAlmostEqual(quote["untaxed_unit_price"],
-                               package["cost"]["total_cost"] / (1 - MARGIN), places=9)
+        self.assertEqual(quote["untaxed_unit_price"], 103.59)
         self.assertEqual(quote["quote_quantity"], package["requirement"]["quote_quantity"])
 
     def test_j2_three_industry_cost_model_unchanged(self):

@@ -252,11 +252,39 @@ def _quantity_of(package: dict, quote_quantity: Any) -> float:
     return quantity
 
 
+def demo_mode(package: dict) -> bool:
+    pkg = package if isinstance(package, dict) else {}
+    requirement = pkg.get('requirement') or {}
+    return (pkg.get('industry') == INDUSTRY and requirement.get('poc_demo') is True
+            and requirement.get('poc_auto_no_manual') is True)
+
+
+def demo_completion_eligible(package: dict) -> bool:
+    """只认交接包的演示约定；有实际计价明细且不过期，允许演示完成，不等于正式发布。"""
+    import math
+    pkg = package if isinstance(package, dict) else {}
+    requirement = pkg.get('requirement') or {}
+    cost = pkg.get('cost') or {}
+    if (not demo_mode(pkg) or cost.get('stale')
+            or cost.get('built') is not True):
+        return False
+    def positive(value):
+        value = _num(value)
+        return value is not None and math.isfinite(value) and value > 0
+    if not all(positive(v) for v in (cost.get('total_cost'), cost.get('material_total'),
+                                    requirement.get('quote_quantity'))):
+        return False
+    items = cost.get('items') or []
+    return bool(items) and all(isinstance(row, dict) and _num(row.get('amount')) is not None
+                              and math.isfinite(_num(row['amount'])) and _num(row['amount']) >= 0
+                              for row in items)
+
+
 def price(package: dict, *, gross_margin_rate=None, markup_rate=None,
           pricing_mode: str = DEFAULT_PRICING_MODE, addons: Any = None,
           discount: Any = None, tax_rate: Any = DEFAULT_TAX_RATE,
           quote_quantity: Any = None, actor: Any = None,
-          previous: Any = None, publish: bool = False) -> dict:
+          previous: Any = None, publish: bool = False, rule_pricing=None) -> dict:
     """交接包 → 报价（纯函数：不改入参、不读写库、不调模型、不联网）。
 
     计算顺序（每一步都进 ``lines``，含公式 / 输入 / 结果 / 来源 / 版本）：
@@ -289,6 +317,8 @@ def price(package: dict, *, gross_margin_rate=None, markup_rate=None,
             gaps.append({"code": "material_cost_evidence_missing",
                          "detail": "材料成本为零或成本仍属暂定，不能作为正式报价依据"})
     has_gaps_flag = bool(cost.get("has_gaps")) or bool(gaps)
+    if publish and demo_mode(pkg):
+        raise PricingError('演示报价单不得用于正式交易', 409, 'demo_not_publishable')
     if has_gaps_flag and publish:
         raise PricingError("成本仍有缺口，只能出成本与草稿，不得生成正式报价单",
                            409, "cost_gaps_unresolved")
@@ -319,13 +349,23 @@ def price(package: dict, *, gross_margin_rate=None, markup_rate=None,
         # Explicit quote freight replaces the estimated delivery cost, never adds to it twice.
         if 'freight' not in pricing_addons and freight_cost:
             pricing_addons['freight'] = freight_cost
-    margin_price = untaxed_unit_price(total_cost, rate, pricing_mode=mode)
+    from cpq_money import money, total
+    total_cost = money(total_cost)
+    margin_price = money(untaxed_unit_price(total_cost, rate, pricing_mode=mode))
+    if rule_pricing is not None:
+        profit=_num(rule_pricing.get('profit_amount'))
+        if profit is None or profit < 0:
+            raise PricingError('系统规则利润金额无效',400,'invalid_rule_profit')
+        margin_price=money(total_cost+profit)
 
     tax = _num(tax_rate)
     if tax is None or tax < 0 or tax > 1:
         raise PricingError("税率必须在 0–1 之间", 400, "invalid_tax_rate")
     quantity = _quantity_of(pkg, quote_quantity)
     addon_items, addon_total = _addons_of(pricing_addons)
+    for item in addon_items:
+        item['raw_amount']=item['amount'];item['amount']=money(item['amount'])
+    addon_total=money(sum(item['amount'] for item in addon_items))
     discount_item, discount_rate = _discount_of(discount)
     numbers = _numbers(margin_price, addon_total, discount_rate, tax)
 
@@ -336,6 +376,7 @@ def price(package: dict, *, gross_margin_rate=None, markup_rate=None,
     quote = {
         "industry": INDUSTRY,
         "industry_label": INDUSTRY_LABEL,
+        "money_policy": "unit_cent_before_quantity/1",
         "engine_version": ENGINE_VERSION,
         "cost_profile": _text(cost.get("cost_profile")) or COST_PROFILE,
         "pricing_profile": PRICING_PROFILE,
@@ -361,8 +402,8 @@ def price(package: dict, *, gross_margin_rate=None, markup_rate=None,
         "tax_amount": numbers["tax_amount"],
         "taxed_unit_price": numbers["taxed_unit_price"],
         "untaxed_unit_price": margin_price,
-        "untaxed_total": numbers["net_unit_price"] * quantity,
-        "taxed_total": numbers["taxed_unit_price"] * quantity,
+        "untaxed_total": total(numbers["net_unit_price"], quantity),
+        "taxed_total": total(numbers["taxed_unit_price"], quantity),
         "addons": copy.deepcopy(addon_items),
         "discount": dict(discount_item, amount=numbers["discount_amount"]),
         "lines": _lines(total_cost, margin_price, addon_total, discount_rate, tax),
@@ -381,6 +422,7 @@ def price(package: dict, *, gross_margin_rate=None, markup_rate=None,
         "product_name": _text(requirement.get("packaging_product_name")),
         "customer": _text(requirement.get("customer_name")),
         "bom_items": copy.deepcopy(list((pkg.get("bom") or {}).get("items") or [])),
+        "business_parts": copy.deepcopy((pkg.get('bom') or {}).get('business_parts')),
         "route_steps": copy.deepcopy(list((pkg.get("route") or {}).get("steps") or [])),
         "route_status": _text((pkg.get("route") or {}).get("status")),
         "cost_totals": {key: _num(cost.get(key)) or 0.0 for key in
@@ -393,8 +435,9 @@ def price(package: dict, *, gross_margin_rate=None, markup_rate=None,
         "gaps": gaps,
         # 草稿 / 正式的分界（Spec §3.1）：缺口逐条在案 → 草稿可出、正式单拦住。
         "draft": draft,
-        "publish_blocked": draft,
-        "publish_block_reason": "cost_gaps_unresolved" if draft else "",
+        "demo_only": demo_mode(pkg),
+        "publish_blocked": draft or demo_mode(pkg),
+        "publish_block_reason": "demo_only" if demo_mode(pkg) else "cost_gaps_unresolved" if draft else "",
         "gap_count": len(gaps),
         "priced_at": _stamp(),
         "inputs": {
@@ -413,16 +456,26 @@ def price(package: dict, *, gross_margin_rate=None, markup_rate=None,
         quote["priced_by"] = _text(actor.get("username"))
     if previous:
         quote["previous"] = copy.deepcopy(previous) if isinstance(previous, dict) else previous
+    if rule_pricing is not None:
+        quote['pricing_profile']='system_rule_formula/1'
+        quote['pricing_mode_label']='系统库规则公式'
+        quote['rule_pricing']=copy.deepcopy(rule_pricing)
+        quote['inputs']['rule_pricing']=copy.deepcopy(rule_pricing)
+        quote['lines'][1].update(formula='成本 + 系统规则利润加成',
+            inputs={'成本':total_cost,'利润加成':money(rule_pricing['profit_amount'])},result=margin_price,
+            source='md_clm_material_price_rule')
     return quote
 
 
 def _numbers(margin_price: float, addon_total: float, discount_rate: float,
              tax_rate: float) -> dict:
-    subtotal_unit = margin_price + addon_total
-    discount_amount = subtotal_unit * discount_rate
-    net_unit_price = subtotal_unit - discount_amount
-    tax_amount = net_unit_price * tax_rate
-    taxed_unit_price = net_unit_price + tax_amount
+    from cpq_money import money
+    margin_price, addon_total = money(margin_price), money(addon_total)
+    subtotal_unit = money(margin_price + addon_total)
+    discount_amount = money(subtotal_unit * discount_rate)
+    net_unit_price = money(subtotal_unit - discount_amount)
+    tax_amount = money(net_unit_price * tax_rate)
+    taxed_unit_price = money(net_unit_price + tax_amount)
     return {"addon_total": addon_total, "subtotal_unit": subtotal_unit,
             "discount_amount": discount_amount, "net_unit_price": net_unit_price,
             "tax_amount": tax_amount, "taxed_unit_price": taxed_unit_price}
@@ -475,7 +528,10 @@ def recompute(quote: dict) -> dict:
     if rate is None:
         rate = (inputs.get("gross_margin_rate") if mode == "gross_margin"
                 else inputs.get("markup_rate"))
-    margin_price = untaxed_unit_price(inputs.get("cost_total"), rate, pricing_mode=mode)
+    from cpq_money import money, total
+    margin_price = money(untaxed_unit_price(inputs.get("cost_total"), rate, pricing_mode=mode))
+    if inputs.get('rule_pricing') is not None:
+        margin_price=money(inputs['cost_total']+inputs['rule_pricing']['profit_amount'])
     addon_total = sum(_num(item.get("amount")) or 0.0 for item in (inputs.get("addons") or []))
     discount_rate = _num(inputs.get("discount_rate")) or 0.0
     tax_rate = _num(inputs.get("tax_rate")) or 0.0
@@ -491,8 +547,8 @@ def recompute(quote: dict) -> dict:
         "net_unit_price": numbers["net_unit_price"],
         "tax_amount": numbers["tax_amount"],
         "taxed_unit_price": numbers["taxed_unit_price"],
-        "untaxed_total": numbers["net_unit_price"] * quantity,
-        "taxed_total": numbers["taxed_unit_price"] * quantity,
+        "untaxed_total": total(numbers["net_unit_price"], quantity),
+        "taxed_total": total(numbers["taxed_unit_price"], quantity),
     }
 
 
@@ -501,6 +557,7 @@ def quote_fingerprint(quote: dict) -> str:
     q = quote or {}
     payload = {
         "engine_version": _text(q.get("engine_version")) or ENGINE_VERSION,
+        "money_policy":_text(q.get('money_policy')),
         "industry": _text(q.get("industry")) or INDUSTRY,
         "quote_session_id": _text(q.get("quote_session_id")),
         "business_case_id": _text(q.get("business_case_id")),
@@ -535,18 +592,15 @@ def document(quote: dict, *, publish: bool = False) -> dict:
     """
     q = quote or {}
     gaps = list(q.get("gaps") or [])
-    if publish and (gaps or q.get("draft")):
+    if publish and (gaps or q.get("draft") or q.get('demo_only')):
         raise PricingError("成本仍有缺口，只能出成本与草稿，不得生成正式报价单",
                            409, "cost_gaps_unresolved")
     sections = _doc_sections(q)
     lines = ["# " + _doc_title(q), ""]
-    if gaps or q.get("draft"):
-        count = q.get("gap_count")
-        if not isinstance(count, int) or isinstance(count, bool):
-            count = len(gaps)
-        lines.append("> 本报价为缺口草稿，不得对外发布（缺口 %d 项；清账后重新定价才能出正式报价单）。"
-                     % count)
-        lines.append("")
+    if q.get('demo_only'):
+        lines.extend(['> 演示报价单，不得用于正式交易。估算、缺口及数据来源保留如下。', ''])
+    elif q.get('draft'):
+        lines.extend(['报价状态：草稿', ''])
     # 展示单价 × 数量与总额不自洽时必须在报价单上披露（Spec `chain-consistency-batch1.md`
     # §2.3 硬约束 6）：客户按展示单价复算会得到第二个总额，不许静默。
     money = money_view(q)
@@ -592,6 +646,7 @@ def _money_rows(quote: dict) -> List[dict]:
 
 
 def _doc_sections(quote: dict) -> List[dict]:
+    from cpq_packaging_document import part_rows, process_rows
     q = quote or {}
     # 金额一律走唯一投影（Spec §2.3）：本节不再自己 `"%.2f"`。
     money = money_view(q)["fields"]
@@ -619,19 +674,10 @@ def _doc_sections(quote: dict) -> List[dict]:
             _row("工艺路线状态", _text(q.get("route_status")) or "—", source="工艺路线"),
         ]},
         {"id": DOC_SECTIONS[2][0], "title": DOC_SECTIONS[2][1], "rows": (
-            [_row(f"{_text(item.get('item_name')) or _text(item.get('part_name')) or _text(item.get('item_key'))}"
-                  f"（{_text(item.get('bom_category'))}）",
-                  "%s × %s" % (_text(item.get("material") or item.get("component")) or _text(item.get("item_key")),
-                               item.get("quantity")),
-                  source=_text(item.get("formula_version")) or "包装 BOM")
-             for item in parts] or
+            part_rows(parts,q.get('business_parts')) or
             [_row("部件与材料", "（本包未带 BOM 行）", source="包装 BOM")])},
         {"id": DOC_SECTIONS[3][0], "title": DOC_SECTIONS[3][1], "rows": (
-            [_row("%s. %s" % (item.get("step_no"), _text(item.get("step_name"))),
-                  "设备 %s · 标准工时 %s 秒" % (_text(item.get("equipment")) or "—",
-                                              item.get("standard_seconds")),
-                  source=_text(item.get("source")) or "工艺路线")
-             for item in steps] or
+            process_rows(steps,q.get('business_parts') or parts) or
             [_row("工艺路线", "（本包未带工序行）", source="工艺路线")])},
         {"id": DOC_SECTIONS[4][0], "title": DOC_SECTIONS[4][1], "rows": ([
             _row("材料", _money(cost.get("material_total")), source="同一包装公式账"),
@@ -685,6 +731,15 @@ def _doc_sections(quote: dict) -> List[dict]:
             _row("交接类型", _text(q.get("handoff_kind")) or "—", source="交接包"),
         ]},
     ]
+    if q.get('rule_pricing'):
+        rules=q['rule_pricing'];rows=[_row('定价方式','系统库规则公式',source='md_clm_material_price_rule')]
+        for stage,label in (('3','利润加成'),('4','其他加价')):
+            result=rules.get('stages',{}).get(stage) or {}
+            for item in result.get('markup') or []:
+                rows.append(_row(label+'：'+str(item.get('加价项名称') or '规则'),item.get('加价值'),source='md_clm_material_price_rule'))
+        rows.extend([_row('利润加成',_money(rules.get('profit_amount'))),_row('其他加价',money['addon_total']),
+            _row('未税单价',money['net_unit_price'])])
+        sections[5]['rows']=rows
     return sections
 
 

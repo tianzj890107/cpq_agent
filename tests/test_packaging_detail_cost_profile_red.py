@@ -24,7 +24,7 @@ class DetailRules(unittest.TestCase):
             labor_total=.3,packaging_total=1,other_total=0,tooling_total=0,freight_total=0,
             subtotal=8.3,total_cost=9.3)
         result=quote.price(package,gross_margin_rate=.1)
-        self.assertAlmostEqual(9.3/.9,result['margin_price'])
+        self.assertEqual(10.33,result['margin_price'])
         section=quote._doc_sections(result)[4]
         labels=[r['项目'] for r in section['rows']]
         self.assertIn('加工',labels);self.assertIn('其他费用',labels)

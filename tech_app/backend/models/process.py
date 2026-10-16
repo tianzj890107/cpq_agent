@@ -154,7 +154,7 @@ class ProcessStep(BaseModel):
             return value
         data = dict(value)
         _alias_value(data, "step_no", "seq", "sequence", "no", "step", "工序号")
-        _alias_value(data, "name", "process_name", "operation", "process", "工序名称")
+        _alias_value(data, "name", "step_name", "operation_name", "title", "process_name", "operation", "process", "工序名称")
         _alias_value(data, "type", "process_type", "operation_type", "工序类型")
         _alias_value(data, "description", "content", "process_content", "operation_content", "requirement", "工序内容")
         _alias_value(data, "equipment", "machine", "machine_tool", "设备", "机床")
@@ -250,7 +250,7 @@ class OutlineStep(BaseModel):
             return value
         data = dict(value)
         _alias_value(data, "step_no", "no", "seq", "工序号", "序号")
-        _alias_value(data, "name", "step_name", "工序名称", "工序")
+        _alias_value(data, "name", "step_name", "operation_name", "title", "工序名称", "工序")
         _alias_value(data, "type", "process_type", "工序类型", "类型")
         _alias_value(data, "equipment", "machine", "设备", "机床")
         _alias_value(data, "duration_min", "duration", "工时", "单件工时")

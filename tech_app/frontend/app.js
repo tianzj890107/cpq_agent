@@ -5814,21 +5814,21 @@ let drawingTimelineWriteQueue = Promise.resolve();
 const drawingTimelineEchoed = new Set();
 // 会话时间线的两个出口都写全路径（POST /agent/event 落库、GET /agent/events 回放），
 // 避免各处再拼一份路径、也方便和父壳的同一份契约对照。
-function drawingTimelineEventUrl() {
-  return `/api/projects/${encodeURIComponent(currentProject)}/agent/event`;
+function drawingTimelineEventUrl(projectId = currentProject) {
+  return `/api/projects/${encodeURIComponent(projectId)}/agent/event`;
 }
 function drawingTimelineEventsUrl() {
   return `/api/projects/${encodeURIComponent(currentProject)}/agent/events?stage=drawing&source=board`;
 }
 function persistDrawingTask(detail) {
   const taskId = String(detail.taskId || detail.task_id || "");
-  if (!currentProject || !taskId) return;
+  if (!(detail.projectId || currentProject) || !taskId) return;
   const log = Array.isArray(detail.log)
     ? detail.log.map(line => String(line).replace(/\s+$/, "")).filter(Boolean) : [];
   const fresh = log.slice(drawingTimelineCursor.get(taskId) || 0);
   drawingTimelineCursor.set(taskId, log.length);
   if (!fresh.length && !detail.status) return;
-  const url = drawingTimelineEventUrl();
+  const url = drawingTimelineEventUrl(detail.projectId || currentProject);
   const options = {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -6052,6 +6052,16 @@ async function openProject(pid) {
 
     // 原图区: 图片项目显示原图; 3D 导入项目无 2D 原图,显示占位
     const fname = (data.meta && data.meta.source_filename) || "";
+    if (window.DrawingUploadPanel) window.DrawingUploadPanel.update($('drawingUploadPanel'), {
+      projectId: pid, filename: fname, getProjectId: () => currentProject,
+      request: (url, options) => fetch(`${API}${url}`, options),
+      onSaved: project => openProject(project),
+      onProgress: detail => {
+        if (currentProject !== detail.projectId) { persistDrawingTask(detail); return; }
+        window.dispatchEvent(new CustomEvent('agent:task-progress', {detail}));
+        forwardTaskDetail(detail);
+      }
+    });
     const isImg = /\.(png|jpe?g|webp|gif|bmp)$/i.test(fname);
     const is3d = /\.(step|stp|iges|igs|stl)$/i.test(fname);
     currentIsImg = isImg;

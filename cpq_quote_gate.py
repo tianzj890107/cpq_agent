@@ -137,6 +137,8 @@ def quote_step_completion_gate(step_no, data, *, quote_fingerprint: str = "",
     package = data.get("packaging_package") if isinstance(data, dict) else None
     packaging_quote = data.get("packaging_quote") if isinstance(data, dict) else None
     if isinstance(package, dict) and package.get("industry") == "packaging" and 3 <= step <= 6:
+        from cpq_packaging_quote import demo_completion_eligible
+        demo = demo_completion_eligible(package)
         cost = package.get("cost") if isinstance(package.get("cost"), dict) else {}
         valid_quote = (isinstance(packaging_quote, dict)
                        and packaging_quote.get("industry") == "packaging"
@@ -145,9 +147,9 @@ def quote_step_completion_gate(step_no, data, *, quote_fingerprint: str = "",
         if not valid_quote:
             blockers.append(_gate_blocker(
                 "packaging_quote_missing", "包装定价结果尚未生成，不能完成本步。",
-                "在第3步定价规则填写明确毛利率并保存重算，核对来源与缺口后再确认。",
+                "在第3步读取系统库定价规则，核对来源与缺口后再确认。",
                 fixable_by_fill=False))
-        elif step == 6 and (packaging_quote.get("draft") or packaging_quote.get("publish_blocked")
+        elif step == 6 and not demo and (packaging_quote.get("draft") or packaging_quote.get("publish_blocked")
                             or packaging_quote.get("gap_count")
                             or cost.get("has_gaps") or package.get("gaps")):
             blockers.append(_gate_blocker(
@@ -155,7 +157,7 @@ def quote_step_completion_gate(step_no, data, *, quote_fingerprint: str = "",
                 "包装成本仍有缺口，当前仅是内部草稿，不能完成正式报价单。",
                 "回技术工艺补齐并确认成本证据，重新回传和定价。",
                 fixable_by_fill=False))
-        elif step == 6 and _packaging_cost_evidence_problem(package):
+        elif step == 6 and not demo and _packaging_cost_evidence_problem(package):
             blockers.append(_gate_blocker(
                 "packaging_cost_evidence_missing",
                 "包装材料成本为零或成本仍是暂定状态，不能生成正式报价单。",
@@ -166,10 +168,18 @@ def quote_step_completion_gate(step_no, data, *, quote_fingerprint: str = "",
             if packaging_quote['source_cost_fingerprint']!=cost_fingerprint(package):
                 blockers.append(_gate_blocker('packaging_quote_stale','成本版本已变化，原定价不可继续使用。',
                     '在原定价规则或加价规则保存并重算。',fixable_by_fill=False))
+        elif valid_quote and demo and step == 6:
+            blockers.append(_gate_blocker('packaging_quote_evidence_missing','演示报价缺少成本版本依据，请重新定价。',
+                '在第3步保存并重算。',fixable_by_fill=False))
+        if valid_quote and packaging_quote.get('pricing_profile')=='system_rule_formula/1' and step>=4:
+            if '4' not in (packaging_quote.get('rule_pricing') or {}).get('stages',{}):
+                blockers.append(_gate_blocker('system_addon_rules_missing','尚未计算系统库其他加价规则。',
+                    '在第4步计算加价规则。',fixable_by_fill=False))
         head = blockers[0] if blockers else {}
         return {"ok": not blockers, "step_no": step,
                 "code": head.get("code", ""),
-                "message": head.get("message", "第 %d 步可以完成。" % step),
+                "message": head.get("message", "演示报价单可以完成，不得用于正式交易。" if demo and step == 6 else "第 %d 步可以完成。" % step),
+                "demo_only": bool(demo),
                 "action": head.get("action", ""),
                 "business_case_id": str(business_case_id or ""), "blocking": blockers,
                 "fixable_by_fill": bool(blockers) and all(b.get("fixable_by_fill") for b in blockers)}

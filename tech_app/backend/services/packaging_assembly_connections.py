@@ -118,6 +118,11 @@ def enrich(plan,doc,records,known_relations):
     steps=[];covered=set();actions=set()
     for step in plan.steps:
         if not set(step.part_codes)<=allowed:raise ValueError('assembly_part_binding_invalid')
+        if re.fullmatch(r'(?:工艺|工序)\s*\d+',step.name or ''):
+            linked=[by_id[i] for i in step.assembly_connection_ids if i in by_id]
+            if not linked:
+                linked=[r for r in connections if set(r['part_codes'])==set(step.part_codes)]
+            if len(linked)==1:step.name=linked[0]['name'] or linked[0]['method']
         if step.type==ProcessType.inspection:steps.append(step);continue
         if generic(step.name):continue
         ids=step.assembly_connection_ids

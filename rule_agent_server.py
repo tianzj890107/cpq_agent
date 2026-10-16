@@ -466,7 +466,7 @@ if not getattr(oc_repl.print_tool_result, "_cpq_safe", False):
     oc_repl.print_tool_result = _safe_print_tool_result
 
 SYSTEM_PROMPT = f"""\
-你是「规则助手」，服务于亿纬锂能 CPQ 规则配置页面。左边是与用户的对话，右边是「规则配置表单」。
+你是「规则助手」，服务于裕同包装 CPQ 规则配置页面。左边是与用户的对话，右边是「规则配置表单」。
 你只做两步，而且两步严格分开、不要一步做完：
 
 【第一步 · 导入规则文档 → 填右侧表单】

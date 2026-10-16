@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import packaging_material_match as material_match
 
-ENGINE_VERSION = "packaging-demo-inputs/3"
+ENGINE_VERSION = "packaging-demo-inputs/4"
 
 #: 件名关键词 → 材料族（**仅用于图纸没写材料时推定**，且必须随结论披露）。通用规则，不含图号。
 NAME_FAMILY_HINTS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
@@ -146,7 +146,8 @@ def material_text_of(row: Any) -> Dict[str, Any]:
 
 def infer_material_text(name: Any) -> str:
     """件名 → 材料原文（图纸没写材料时的**推定**，通用关键词规则，不含图号/客户名）。"""
-    text = _text(name).upper()
+    from .packaging_part_route_match import normalize_part_name
+    text = normalize_part_name(name).upper()
     if not text:
         return ""
     for family, words in NAME_FAMILY_HINTS:
@@ -361,6 +362,8 @@ def prepare_demo_layouts(business):
     parts={row.get('business_part_code'):row for row in doc.get('business_parts') or []}
     for layout in doc.get('layout_rows') or []:
         if layout.get('kind')=='drawing_layout_candidate': continue
+        from .packaging_layout import refresh_text_sizes
+        layout.update(refresh_text_sizes(layout))
         codes=layout.get('part_codes') or []
         if not codes or any(code not in parts for code in codes): continue
         counts=dict(layout.get('part_counts') or {})
@@ -402,6 +405,16 @@ def demo_inputs_for(row: Any, sizes: Dict[str, Dict[str, Any]], *,
                 "material_text": text, "component_ids": size["component_ids"]}
     recommendation = material_match.recommend_materials(text, materials) if text else {
         "status": "no_candidate", "candidate": None, "candidates": [], "confidence": 0.0}
+    semantic = record.get('semantic_material') or {}
+    if semantic:
+        from .packaging_name_assist import material_context
+        candidate = next((m for m in materials if m.get('material_code') == semantic.get('material_code')), None)
+        explicit = (record.get('reference') or {}).get('material_text') or (record.get('authority') or {}).get('material_text')
+        if candidate and not explicit and semantic.get('context') == material_context(record, materials):
+            text = candidate['name']
+            material = {'material_text':text,'source':'ai_semantic'}
+            recommendation = {'status':'ai_semantic','candidate':candidate,'candidates':[candidate],
+                              'confidence':semantic.get('confidence'),'reason':semantic.get('reason')}
     candidate = recommendation.get("candidate") or {}
     price = _kb_price(_text(candidate.get("material_code"))) if candidate else {}
     demo_price = material_match.demo_unit_price(text or _text(record.get("name")))
@@ -425,6 +438,8 @@ def demo_inputs_for(row: Any, sizes: Dict[str, Dict[str, Any]], *,
                  % (size["size_source"] or "unknown"))
     if material.get("source") == "inferred_from_part_name":
         notes.append("图纸没有这一件的材料原文，按件名关键词推定为「%s」" % text)
+    if material.get('source') == 'ai_semantic':
+        notes.append('材料按库内候选语义推荐自动采用，不代表图纸明确标注：'+str(semantic.get('reason') or ''))
     if candidate:
         notes.append("材料按相似度推荐：%s → %s（相似度 %.2f，%s）"
                      % (text or record.get("name"), candidate.get("name"),
@@ -521,6 +536,8 @@ def prepare(project_id: str, *, actor: str = "", enable_demo: bool = False) -> D
                             "reason": (value or {}).get("reason") or "not_in_scope"})
             continue
         inputs = {
+            "material_code": (value.get('recommended_material') or {}).get('material_code')
+                if (value.get('recommendation') or {}).get('status') == 'ai_semantic' else '',
             "length_mm": value.get("length_mm"), "width_mm": value.get("width_mm"),
             "quantity":row.get('usage_qty') or (row.get('reference') or {}).get('quantity') or row.get('quantity') or 1,
             "material_text": value.get("material_text"),

@@ -7,9 +7,15 @@ from typing import Any
 
 
 _N_UP = re.compile(r"(?:各\s*)?排\s*([1-9]\d*)\s*模")
-_SHEET = re.compile(r"(\d+(?:\.\d+)?)\s*[*×xX]\s*(\d+(?:\.\d+)?)\s*mm", re.I)
+_SHEET = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*[*×xX]\s*(\d+(?:\.\d+)?)(?!\s*[*×xX]\s*\d)(?:\s*mm)?", re.I)
 _SCHEME = re.compile(r"(?:内托)?方案\s*([1-9]\d*)")
 _PAIRED_NAME = re.compile(r"^(.*?)(内|左|上|前)、(外|右|下|后)(.+)$")
+
+
+def sheet_matches(text):
+    # 三维成品尺寸不是二维纸张；不能从 200×100×80 中截出 100×80。
+    triples=[m.span() for m in re.finditer(r'\d+(?:\.\d+)?\s*[*×xX]\s*\d+(?:\.\d+)?\s*[*×xX]\s*\d+(?:\.\d+)?',text)]
+    return [m for m in _SHEET.finditer(text) if not any(m.start()<b and m.end()>a for a,b in triples)]
 
 
 def clean_cad_text(raw: Any) -> str:
@@ -20,7 +26,7 @@ def clean_cad_text(raw: Any) -> str:
 
 def layout_record(entity_id: str, raw: str) -> dict:
     text = clean_cad_text(raw)
-    n_up, sheet = _N_UP.search(text), _SHEET.search(text)
+    n_up, sheet = _N_UP.search(text), next(iter(sheet_matches(text)),None)
     return {"entity_id": entity_id, "raw_text": raw, "text": text,
             "n_up": int(n_up.group(1)) if n_up else None,
             "sheet_mm": [float(sheet.group(1)), float(sheet.group(2))] if sheet else None,
@@ -43,11 +49,15 @@ def extract_layout_rows(cad_ir: Any) -> list[dict]:
         n_up = _N_UP.search(clean)
         if not n_up:
             continue
-        sheet = _SHEET.search(clean)
-        before=clean[:sheet.start()] if sheet else ''
-        machine_mark=max((m.start() for m in re.finditer(r'上机|机台',before)),default=-1)
-        cut_mark=max((m.start() for m in re.finditer(r'开料|纸张|纸料',before)),default=-1)
-        machine=machine_mark>cut_mark
+        sheet = next(iter(sheet_matches(clean)),None)
+        cut_size=machine_size=None
+        for match in sheet_matches(clean):
+            prefix=clean[:match.start()]
+            machine_pos=max((m.start() for m in re.finditer(r'上机|机台',prefix)),default=-1)
+            cut_pos=max((m.start() for m in re.finditer(r'开料|纸张|纸料',prefix)),default=-1)
+            size=[float(match.group(1)),float(match.group(2))]
+            if machine_pos>cut_pos:machine_size=size
+            elif cut_size is None:cut_size=size
         rows.append({
             **layout_record(str(text.get("entity_id") or ""), raw),
             "entity_id": str(text.get("entity_id") or ""),
@@ -55,16 +65,53 @@ def extract_layout_rows(cad_ir: Any) -> list[dict]:
             "position": list(text.get("position") or []),
             "layer": str(text.get("layer") or ""),
             "n_up": int(n_up.group(1)),
-            "sheet_mm": [float(sheet.group(1)), float(sheet.group(2))] if sheet and not machine else None,
-            "machine_mm": [float(sheet.group(1)),float(sheet.group(2))] if sheet and machine else None,
+            "sheet_mm": cut_size,
+            "machine_mm": machine_size,
             "confirmed": False,
             "part_codes": [],  # compound text alone cannot prove each part's allocation
             "rule_id": "cad_layout_instruction_v1",
             "kind": "layout_instruction",
             "size_source": "cad_layout_text" if sheet else "missing",
-            "dimension_role": "machine_sheet" if machine else "cut_sheet",
+            "dimension_role": "cut_sheet" if cut_size else "machine_sheet" if machine_size else "unclassified",
         })
-    return sorted(rows, key=lambda row: (row["entity_id"], row["raw_text"]))
+    rows=bind_layout_regions(ir,rows)
+    return sorted(rows, key=lambda row: (-((row.get('position') or [])+[0,0])[1],((row.get('position') or [])+[0,0])[0],row['entity_id']))
+
+
+def bind_layout_regions(ir, rows):
+    """只有独占的矩形框才作局部证据；不以最近的任意线段冒充排模。"""
+    result=[dict(r) for r in rows]
+    frames=[]
+    for entity in ir.get('entities') or []:
+        box=entity.get('bbox') or []
+        points=(entity.get('attributes') or {}).get('points') or entity.get('points') or []
+        if entity.get('kind')!='polyline' or not entity.get('closed') or len(box)!=4 or len(points) not in (4,5):continue
+        corners={(round(p[0],3),round(p[1],3)) for p in points}
+        if corners!={(round(x,3),round(y,3)) for x in (box[0],box[2]) for y in (box[1],box[3])}:continue
+        frames.append(entity)
+    def distance(pos,box):
+        return max(box[0]-pos[0],0,pos[0]-box[2])**2+max(box[1]-pos[1],0,pos[1]-box[3])**2
+    claims={}
+    for row in result:
+        pos=row.get('position') or []
+        if len(pos)<2:continue
+        eligible=[]
+        for frame in frames:
+            b=frame['bbox'];span=max(b[2]-b[0],b[3]-b[1])
+            if span<=0 or distance(pos,b)>(span*.25)**2:continue
+            nearer=[r for r in rows if r is not row and r.get('entity_id')!=row.get('entity_id') and len(r.get('position') or [])>=2
+                    and distance(r['position'],b)<=distance(pos,b)]
+            if nearer:continue
+            eligible.append(frame)
+        eligible.sort(key=lambda f:((f['bbox'][2]-f['bbox'][0])*(f['bbox'][3]-f['bbox'][1]),distance(pos,f['bbox'])))
+        if eligible:
+            frame=eligible[0];row['preview_bbox']=list(frame['bbox']);row['preview_region_source']='cad_rectangular_frame'
+            row['preview_frame_entity_id']=frame.get('entity_id');claims.setdefault(frame.get('entity_id'),[]).append(row)
+    for group in claims.values():
+        if len(group)>1:
+            for row in group:
+                for key in ('preview_bbox','preview_region_source','preview_frame_entity_id'):row.pop(key,None)
+    return result
 
 
 def attach_cut_dimension_candidates(ir, rows):
@@ -74,12 +121,14 @@ def attach_cut_dimension_candidates(ir, rows):
     rects=dimension_rects(ir)
     dimension_text={d.get('entity_id'):clean_cad_text(d.get('raw_text') or d.get('normalized_text'))
                     for d in ir.get('dimensions') or []}
-    result=copy.deepcopy(rows)
+    result=bind_layout_regions(ir,rows)
     for row in result:
         pos=row.get('position') or []
         if len(pos)<2: continue
         found=[]
         for rect in sorted(rects,key=lambda r:math.hypot(r['center'][0]-pos[0],r['center'][1]-pos[1])):
+            region=row.get('preview_bbox')
+            if region and not (region[0]<=rect['center'][0]<=region[2] and region[1]<=rect['center'][1]<=region[3]):continue
             if len(rect.get('witness_points') or [])<3: continue
             if any(abs(c['length_mm']-rect['length_mm'])<.01 and abs(c['width_mm']-rect['width_mm'])<.01 for c in found): continue
             ids=rect['dimension_ref'].removeprefix('dim:').split('|')
@@ -313,6 +362,17 @@ def _layout_name_key(name):
     return {'内托面卡':'面卡','地外底贴':'地底贴面纸'}.get(value,value)
 
 
+def refresh_text_sizes(row):
+    """旧清单只重读本条已存文字；不重跑CAD、不覆盖人工/明确标注的开料。"""
+    if row.get('kind')=='drawing_layout_candidate':return {}
+    if row.get('sheet_mm') and row.get('size_source') not in ('missing','demo_horizontal_sheet_estimate'):
+        return {}
+    parsed=extract_layout_rows({'texts':[{'entity_id':row.get('entity_id'),
+        'raw_text':row.get('raw_text') or row.get('text'),'position':row.get('position') or []}]})
+    if not parsed or not parsed[0].get('sheet_mm'):return {}
+    return {key:parsed[0].get(key) for key in ('sheet_mm','machine_mm','size_source','dimension_role')}
+
+
 def auto_assign_layout_rows(rows, parts):
     """Full CAD names only. Association never supplies yield or approval."""
     result = copy.deepcopy(rows or [])
@@ -320,6 +380,13 @@ def auto_assign_layout_rows(rows, parts):
                     for part in parts or [] if part.get('business_part_code')],
                    key=lambda item: -len(item[0]))
     for row in result:
+        row.update(refresh_text_sizes(row))
+        if row.get('assignment_source') == 'ai_semantic':
+            from .packaging_name_assist import valid_layout_selection
+            if valid_layout_selection(row, parts):
+                continue
+            for key in ('part_codes','part_counts','assignment_source','assignment_evidence','semantic_context'):
+                row.pop(key, None)
         if row.get('assignment_source') == 'user_selection' or row.get('assignment_actor'):
             continue
         if row.get('part_codes') and row.get('assignment_source') not in ('cad_layout_full_name','cad_layout_declared_name'):

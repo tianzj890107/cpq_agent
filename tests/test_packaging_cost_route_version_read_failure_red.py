@@ -93,6 +93,7 @@ def _load_cost(row, *, versions=(), route_error=None, bom_error=None,
         sources=json.loads(row.get('source_versions_json') or '{}')
         sources.update(expense_policy=cost.EXPENSE_POLICY,calculation_profile=cost.CURRENT_PROFILE)
         sources['assembly_time_policy']='whole_box_estimate/1'
+        sources['loss_resolution_policy']=cost.LOSS_RESOLUTION_POLICY
         row['source_versions_json']=json.dumps(sources)
     def version_reader(*args, **kwargs):
         if route_error is not None:

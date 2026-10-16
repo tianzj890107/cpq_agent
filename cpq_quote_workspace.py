@@ -18,8 +18,7 @@ def catalog_entry(entry,industry):
         keys={c['key'] for c in result['columns']}
         result['columns'] += [{'key':k,'label':k,'readonly':True} for k in PRODUCT_FIELDS if k not in keys]
     elif sid in ('s3_markup','s4_markup'):
-        names=MARGIN_FIELDS if sid=='s3_markup' else ADDON_FIELDS
-        result.update(editable=True,columns=[{'key':k,'label':k,'readonly':k not in ('毛利率（%）','金额（元/只）')} for k in names])
+        result['editable']=False
     return result
 
 
@@ -57,7 +56,7 @@ def technical_fields(package):
     return row
 
 
-def save_pricing(session,step,inputs,user,*,expected_cost_fingerprint):
+def save_pricing(session,step,inputs,user,*,expected_cost_fingerprint,rule_result=None):
     """仅显式动作写草稿；从已存交接包重算，拒绝浏览器自报成本。"""
     from cpq_packaging_quote import price,PricingError
     try:step=int(step or 0)
@@ -90,12 +89,47 @@ def save_pricing(session,step,inputs,user,*,expected_cost_fingerprint):
             package=source.get('packaging_package') or {}
             if not package or not expected_cost_fingerprint or cost_fingerprint(package)!=expected_cost_fingerprint:
                 raise cpq_wf.WfError('成本版本已变化，请重新读取回传成本后重算')
-            try:result=price(package,pricing_mode='gross_margin',publish=False,**inputs)
+            previous=cpq_wf._snapshot_dict(cpq_wf.step_snapshot(session,current_step,conn=conn))
+            stored=previous.get('packaging_quote') or {}
+            rules=copy.deepcopy(stored.get('rule_pricing'))
+            if rules and rule_result is None and stored.get('source_cost_fingerprint')!=expected_cost_fingerprint:
+                raise cpq_wf.WfError('成本版本已变化，请重新读取系统定价规则')
+            if rule_result is not None:
+                if step not in (3,4) or not rule_result.get('source',{}).get('table')=='md_clm_material_price_rule':
+                    raise cpq_wf.WfError('系统规则来源无效')
+                if step==4 and (not rules or stored.get('source_cost_fingerprint')!=expected_cost_fingerprint):
+                    source3=cpq_wf._snapshot_dict(cpq_wf.step_snapshot(session,3,conn=conn))
+                    stored=source3.get('packaging_quote') or {}
+                    rules=copy.deepcopy(stored.get('rule_pricing'))
+                    if not rules or stored.get('source_cost_fingerprint')!=expected_cost_fingerprint:
+                        raise cpq_wf.WfError('请先按当前成本重新计算系统定价规则')
+                rules=rules or {'profit_amount':0,'addon_amount':0,'stages':{}}
+                values=list(rule_result.get('product_markup',{}).values())
+                from cpq_money import money
+                from cpq_cost_contract import number
+                if len(values)!=1 or number(values[0]) is None:
+                    raise cpq_wf.WfError('包装规则结果必须准确对应当前产品')
+                rules['profit_amount' if step==3 else 'addon_amount']=money(values[0])
+                if step==3:rules['addon_amount']=0;rules['stages'].pop('4',None)
+                rules['stages'][str(step)]=copy.deepcopy(rule_result)
+            if rules is not None:
+                # 规则金额只来自本服务取库计算或已存快照，客户端不得提交。
+                inputs.pop('gross_margin_rate',None);inputs.pop('addons',None)
+                inputs.update(markup_rate=0,addons={'other_addon':rules['addon_amount']},rule_pricing=rules)
+                if stored.get('source_cost_fingerprint')==expected_cost_fingerprint:
+                    for key in ('quote_quantity','tax_rate','discount'):
+                        if key in stored:inputs.setdefault(key,copy.deepcopy(stored[key]))
+                pricing_mode='markup'
+            else:pricing_mode='gross_margin'
+            try:result=price(package,pricing_mode=pricing_mode,publish=False,actor=user,**inputs)
             except PricingError as exc:raise cpq_wf.WfError(str(exc)) from exc
             quote=result.get('quote') or result
             quote['source_cost_fingerprint']=cost_fingerprint(package)
             snapshot={'packaging_package':package,'packaging_quote':quote,
                 'packaging_cost_fingerprint':cost_fingerprint(package)}
+            if rules:
+                for stage,value in rules['stages'].items():
+                    snapshot['s'+stage+'_markup']={'数据':copy.deepcopy(value.get('markup') or [])}
             if basic is not None:snapshot['s5_basic']={'数据':basic}
             # 回看第3步修改参数时，也保存到当前在办步骤，刷新不会被更晚的旧快照覆盖。
             cpq_wf.merge_step_snapshot(session,current_step,snapshot,conn=conn)

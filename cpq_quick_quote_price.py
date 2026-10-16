@@ -22,7 +22,6 @@ import copy
 import datetime as dt
 import hashlib
 import json
-from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
 
 import cpq_packaging_quote
@@ -61,8 +60,9 @@ DEFAULT_CURRENCY = qq_case.DEFAULT_CURRENCY
 
 
 def _money(value) -> float:
-    """报价金额的统一边界：保留六位业务精度，去掉二进制浮点尾差。"""
-    return float(Decimal(str(value)).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
+    """快速与精准报价一致：业务金额四舍五入到分。"""
+    from cpq_money import money
+    return money(value)
 
 #: 尺寸门槛看这三边（Spec §2.3 第 4 行）。
 SIZE_FIELDS = ("inner_length", "inner_width", "inner_height")
@@ -320,10 +320,13 @@ def price(baseline, workspace, *, today=None, config=None, rules=None) -> dict:
         base_unit_price = _num(baseline.get("base_price"))
     if base_unit_price is None:
         raise QuickQuoteError("基准案例没有基准单价，无法生成快速报价")
+    base_unit_price = _money(base_unit_price)
 
     delta_total = 0.0
     rule_versions: List[str] = []
     for row in rows:
+        if _num(row.get('delta')) is not None:
+            row['raw_delta']=row['delta'];row['delta']=_money(row['delta'])
         delta_total += float(_num(row.get("delta")) or 0.0)
         if row.get("priced") and row.get("rule_code"):
             rule_versions.append("%s:v%s" % (row["rule_code"], _number_text(row.get("rule_version"))))

@@ -158,6 +158,14 @@ def handoff_package(project_id: str, requirement_no: str = "", *,
 
     box = packaging_match.load_box_match(pid, req_no)
     bom = packaging_bom.load_bom(pid, req_no)
+    # 交接只带轻量业务父件身份，销售输出不能把组成/耗材扩成几百个零件。
+    from . import packaging_parts, packaging_layout
+    business_doc=packaging_parts.load_business_parts(pid) or {}
+    if business_doc.get('business_parts'):
+        active=packaging_layout.active_business_document(business_doc)
+        bom=dict(bom or {},business_parts=[{'business_part_code':r.get('business_part_code'),
+            'name':r.get('name'),'quantity':(r.get('reference') or {}).get('quantity')}
+            for r in active.get('business_parts') or []])
     route = packaging_route.load_route(pid, req_no)
     gaps = [copy.deepcopy(item) for item in (cost.get("gaps") or [])]
     formulas = _formulas_of(cost)

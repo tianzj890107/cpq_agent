@@ -3512,6 +3512,25 @@ def finalize_integration_params(project_id: str, body: IntegrationFinalizeBody,
     return _integration_payload(project_id, plan)
 
 
+@app.post("/api/projects/{project_id}/integration/name-associations")
+def prepare_packaging_name_associations(project_id: str, user: dict = Depends(current_user)):
+    """原3.1下一步按钮使用的后台任务，模型调用不阻塞HTTP提交回执。"""
+    _require(user, auth.WRITE_ROLES, '需要工程师及以上权限')
+    _workflow_project(project_id)
+    if ((store.load_requirement(project_id) or {}).get('data') or {}).get('industry') != 'packaging':
+        raise HTTPException(400, '名称关联仅用于包装项目')
+    def job():
+        from .services import packaging_demo_flow, packaging_workspace
+        packaging_demo_flow.prepare_names(project_id,user)
+        packaging_workspace.prepare_cut_inputs(project_id,user.get('username',''))
+        result = _integration_payload(project_id,integration.load_plan(project_id))
+        result['name_assist'] = (packaging_parts.load_business_parts(project_id) or {}).get('name_assist') or {}
+        if result['name_assist'].get('status') == 'unavailable':
+            result['task_status'] = 'partial'
+        return result
+    return {'task_id':tasks.submit(project_id,'packaging_name_associations',job,actor=user.get('username',''))}
+
+
 @app.post("/api/projects/{project_id}/integration/process")
 async def generate_integration_process(
     project_id: str, note: str = Form(""), attachments: List[UploadFile] = File(default=[]),

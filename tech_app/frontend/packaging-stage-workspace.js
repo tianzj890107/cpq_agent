@@ -33,7 +33,7 @@
     if(!(board.individual_cuts||[]).length)html+='<div class="inline-hint">当前零件均已关联排模。</div>';
     return html+'</section>';
   }
-  function stepHtml(step) {
+  function stepHtml(step,index) {
     const labels={machine_length:'加工长(mm)',machine_width:'加工宽(mm)',imposition_count:'排版模数',
       labor_seconds:'工时(秒)',labor_rate:'人工费率',hot_area_mm2:'烫金面积(mm²)',formula_code:'计费公式'};
     const parameters=step.cost_parameters||{};
@@ -41,7 +41,7 @@
       :window.PackagingProcessPresentation?.render(step.recommendation)||'<div class="inline-hint">推荐依据未提供，可查看原记录。</div>';
     const timeSources={poc_mock:'估算',unknown:'未提供来源',approved_standard:'库内工时',model_estimate:'AI估算'};
     const time=step.duration_min!=null?`${esc(step.duration_min)} 分 · ${esc(timeSources[step.time_source]||step.time_source||'来源未记录')}`:'未提供工时';
-    return `<div class="inline-step"><div class="inline-sno">${esc(step.step_no)}</div><div class="inline-sbody"><div class="inline-step-title">${esc(step.name||step.step_name)}</div>${evidence}<div class="inline-step-grid"><div>设备：${esc(step.equipment||'未提供')}</div><div>适用要求：${esc(step.description||step.quality||step.note||'未提供')}</div><div>工时：${time}</div><div>先后依赖：${esc((step.depends_on||[]).join('、')||'无前序')}</div></div><details class="inline-row"><summary>计费参数</summary>${Object.entries(parameters).filter(([k])=>!['mock','source'].includes(k)).map(([k,v])=>`<div>${esc(labels[k]||k)}：${esc(typeof v==='object'?JSON.stringify(v):v)}</div>`).join('')||'<div>未提供参数</div>'}${step.formula_code?`<div>计费公式：${esc(step.formula_code)}</div>`:''}</details></div></div>`;
+    return `<div class="inline-step"><div class="inline-sno">${esc(step.display_no ?? (index+1))}</div><div class="inline-sbody"><div class="inline-step-title">${esc(step.name||step.step_name)}</div>${evidence}<div class="inline-step-grid"><div>设备：${esc(step.equipment||'未提供')}</div><div>适用要求：${esc(step.description||step.quality||step.note||'未提供')}</div><div>工时：${time}</div><div>先后依赖：${esc((step.depends_on||[]).join('、')||'无前序')}</div></div><details class="inline-row"><summary>计费参数</summary><div>工序编码：${esc(step.step_no)}</div>${Object.entries(parameters).filter(([k])=>!['mock','source'].includes(k)).map(([k,v])=>`<div>${esc(labels[k]||k)}：${esc(typeof v==='object'?JSON.stringify(v):v)}</div>`).join('')||'<div>未提供参数</div>'}${step.formula_code?`<div>计费公式：${esc(step.formula_code)}</div>`:''}</details></div></div>`;
   }
   function processes(board) {
     let html=`<section class="inline-card"><div class="inline-card-title">3.2 组装工艺</div><div class="inline-hint">只列零件之间新增的工序，零件制造工艺在2.1查看。</div><div class="inline-totals"><span>新增工序 ${(board.assembly_steps||[]).length}</span><span>${board.status?.['3.2']?.completed?'已采用':'待采用'}</span></div>`;
@@ -53,7 +53,7 @@
     for(const [index,step] of (board.assembly_steps||[]).entries()){
       const codes=step.part_codes||[];
       const names=(board.parts||[]).filter(p=>codes.includes(p.code)).map(p=>p.name||p.code);
-      html+=`<section class="inline-card" data-pkg-assembly-step="${index}">${stepHtml(step)}<div class="inline-row">关联零件：${names.map(esc).join('、')}</div><details class="ai-layout-picker"><summary>调整关联零件 · 已选 ${codes.length} 项</summary><div class="ai-layout-options">${(board.parts||[]).map(p=>`<label class="ai-layout-option"><input type="checkbox" data-pkg-assembly-part="${esc(p.code)}"${codes.includes(p.code)?' checked':''}><span>${esc(p.name||p.code)}</span></label>`).join('')}</div></details><button type="button" class="inline-action save" data-pkg-save-assembly="${index}">保存工序关联</button></section>`;
+      html+=`<section class="inline-card" data-pkg-assembly-step="${index}">${stepHtml({...step,display_no:index+1},index)}<div class="inline-row">关联零件：${names.map(esc).join('、')}</div><details class="ai-layout-picker"><summary>调整关联零件 · 已选 ${codes.length} 项</summary><div class="ai-layout-options">${(board.parts||[]).map(p=>`<label class="ai-layout-option"><input type="checkbox" data-pkg-assembly-part="${esc(p.code)}"${codes.includes(p.code)?' checked':''}><span>${esc(p.name||p.code)}</span></label>`).join('')}</div></details><button type="button" class="inline-action save" data-pkg-save-assembly="${index}">保存工序关联</button></section>`;
     }
     if(!(board.assembly_steps||[]).length)html+='<section class="inline-card"><div class="inline-empty">'+esc(board.assembly_summary||'尚无新增组装工艺，请生成组装工艺。')+'</div></section>';
     return html;

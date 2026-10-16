@@ -352,7 +352,7 @@ class TestDPricing(Base):
         module = self.module()
         quote = module.price(BASELINE, self.workspace(USER_EDITS), today=TODAY, rules=RULES)
         self.assertFalse(quote["tax_included"])
-        self.assertAlmostEqual(9.88 * 1.13, float(quote["unit_price_taxed"]), places=6)
+        self.assertEqual(11.16, float(quote["unit_price_taxed"]))
         taxed = copy.deepcopy(BASELINE)
         taxed["tax_included"] = True
         taxed_quote = module.price(taxed, self.workspace(USER_EDITS), today=TODAY, rules=RULES)
@@ -394,9 +394,9 @@ class TestEDeviationAndRange(Base):
         module = self.module()
         quote = module.price(BASELINE, self.workspace(USER_EDITS), today=TODAY, rules=RULES)
         self.assertAlmostEqual(0.05, float(quote["deviation"]["est_pct"]), places=9)
-        self.assertAlmostEqual(9.88 * 0.05, float(quote["deviation"]["est_amount"]), places=6)
-        self.assertAlmostEqual(9.88 * 0.95, float(quote["price_range"]["low"]), places=6)
-        self.assertAlmostEqual(9.88 * 1.05, float(quote["price_range"]["high"]), places=6)
+        self.assertEqual(0.49, float(quote["deviation"]["est_amount"]))
+        self.assertEqual(9.39, float(quote["price_range"]["low"]))
+        self.assertEqual(10.37, float(quote["price_range"]["high"]))
 
     def test_e2_unpriced_diff_widens_deviation_and_warns(self):
         module = self.module()

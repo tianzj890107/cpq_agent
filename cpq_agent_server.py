@@ -1630,7 +1630,8 @@ def _num(v):
 
 
 def _fmt_num(x) -> str:
-    return str(int(x)) if float(x).is_integer() else str(round(float(x), 2))
+    from cpq_money import money
+    return '%.2f' % money(x)
 
 
 def _extract_json_obj(out: str):
@@ -1873,6 +1874,7 @@ def _handle_markup_fill(data: dict, emit=None) -> dict:
     _trace(f"③ 完成：命中 {len(markup)} 条规则，{len(prod_add)} 个产品的{col}；"
            f"总耗时 {time.perf_counter() - t0:.2f}s")
     return {"ok": True, "step": step, "column": col, "markup": markup,
+            "rules":rules,
             "product_markup": prod_add, "rule_count": len(rules),
             "matched_products": matched, "no_code_products": no_code,
             "product_count": len(products),
@@ -2297,7 +2299,8 @@ def packaging_step6_document(session_id: str):
     cost = package.get("cost") or {}
     blocked = bool(quote.get("draft") or quote.get("publish_blocked") or quote.get("gap_count")
                    or quote.get("gaps") or package.get("gaps") or cost.get("has_gaps"))
-    message = ("草稿已生成，尚不可正式导出；请补齐成本缺口并重新定价。" if blocked
+    message = ("演示报价单已生成；核对通过后可完成流程并下载，不得用于正式交易。" if quote.get('demo_only') else
+               "草稿已生成，尚不可正式导出；请补齐成本缺口并重新定价。" if blocked
                else "报价正文已按已保存定价结果生成；正式导出仍需通过业务门禁。")
     return {"ui": {"action": "render_document", "section_id": "s6_doc", "step": 6,
                    "title": document["title"], "markdown": document["markdown"]},
@@ -2327,6 +2330,24 @@ def _assert_formal_packaging_quote(payload: dict) -> None:
             or quote.get("draft") or quote.get("publish_blocked")
             or quote.get("gap_count")):
         raise ValueError("包装成本仍有缺口或报价仍为草稿，不能生成/导入正式报价单")
+    from cpq_quote_gate import quote_step_completion_gate
+    verdict=quote_step_completion_gate(6,{'packaging_package':package,'packaging_quote':quote})
+    if not verdict.get('ok'):
+        raise ValueError(verdict.get('message') or '报价与当前成本不一致，请重新计算规则')
+
+
+def _packaging_demo_export_quote(payload: dict):
+    """演示导出单独核对原会话，正式导入仍只调用严格门禁。"""
+    import cpq_wf
+    from cpq_packaging_quote import demo_completion_eligible
+    sid = str(payload.get('session_id') or payload.get('sid') or '').strip()
+    if not sid:return None
+    package = (cpq_wf.step_snapshot(sid, 2) or {}).get('packaging_package')
+    if not isinstance(package, dict) or not demo_completion_eligible(package):return None
+    saved = (cpq_wf.step_snapshot(sid, 5) or {}).get('packaging_quote')
+    gate = quote_step_completion_gate(6, {'packaging_package':package,'packaging_quote':saved})
+    if not gate['ok']:raise ValueError(gate['message'])
+    return dict(saved, demo_only=True)
 
 
 def _import_quote(payload: dict) -> dict:
@@ -2489,7 +2510,7 @@ def _import_quote(payload: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = """\
-你是「报价单智能体」，亿纬锂能 CPQ（配置报价）系统的报价助手，嵌在「确认需求解析结果」
+你是「报价单智能体」，裕同包装 CPQ（配置报价）系统的报价助手，嵌在「确认需求解析结果」
 工作台页面中：左侧是与用户（AR/客户经理）的聊天，右侧是你用 cpq_ui 工具驱动的工作台
 （步骤条 + 固定表单/表格分区）。你的任务是**严格按下面 6 步顺序**，引导用户一步一步完成报价。
 
@@ -2704,7 +2725,7 @@ SYSTEM_PROMPT = """\
 # 流程状态字段（READONLY_FIELDS）AI 只读：只让系统工作流改，模型写了也会被服务端丢弃。
 SYSTEM_PROMPT += (
     "\n\n# 包装行业业务状态优先\n"
-    "包装第3/4步骤使用包装专用确定性定价，不得套电池的温度、寿命、密封性或定价规则。"
+    "包装第3/4步骤复用系统库定价/报价规则公式；不得臆造电池温度、寿命、密封性等包装未提供的数据。"
     "包装报价数据必须来自已保存的包装成本交接包及系统定价结果，不能自行补毛利率、尺寸或费用。"
     "报价明细为空，或包装结果含 draft/publish_blocked/has_gaps/成本证据过期时，"
     "只能称为内部预览或缺口草稿，禁止声称‘全部完成’‘可导出’‘可正式发布’。"
@@ -2958,7 +2979,7 @@ def _stringify(content) -> str:
 def _build_profile() -> AgentProfile:
     prof = AgentProfile()
     prof.name = "cpq-quote"
-    prof.description = "CPQ 报价助手（亿纬锂能 POC 简化流程）"
+    prof.description = "CPQ 报价助手（裕同包装 POC 简化流程）"
     prof.system_prompt_mode = "override"
     prof.system_prompt_override = SYSTEM_PROMPT
     prof.memory_mode = "off"
@@ -3784,7 +3805,22 @@ def _extract_text(name: str, raw: bytes):
 def _build_quote_docx(data: dict):
     """data = {projectName, customer, steps:[{step,name,sections:[{title,kind,data|columns|markdown}]}]}
     返回 docx 的 bytes；缺 python-docx 返回 None。"""
-    _assert_formal_packaging_quote(data)
+    import cpq_wf
+    saved = _packaging_demo_export_quote(data)
+    demo_only = saved is not None
+    if not demo_only:
+        _assert_formal_packaging_quote(data)
+        sid=str(data.get('session_id') or data.get('sid') or '')
+        source=cpq_wf.step_snapshot(sid,2) or {}
+        if (source.get('packaging_package') or {}).get('industry')=='packaging':
+            saved=(cpq_wf.step_snapshot(sid,5) or {}).get('packaging_quote')
+    if saved is not None:
+        # 演示也只导出服务端落库值，不能把客户端传入的金额伪装成核验后的报价。
+        from cpq_packaging_quote import document as packaging_document
+        markdown = packaging_document(saved)['markdown']
+        label='演示报价单，不得用于正式交易' if demo_only else '报价单'
+        data = dict(data, steps=[{'step':6,'name':label, 'sections':[
+            {'title':label,'kind':'document','markdown':markdown}]}])
     try:
         import docx
     except ImportError:
@@ -3792,6 +3828,8 @@ def _build_quote_docx(data: dict):
     doc = docx.Document()
     proj = (data.get("projectName") or "报价单").strip()
     doc.add_heading("报价单 · " + proj, level=0)
+    if demo_only:
+        doc.add_paragraph('演示报价单，不得用于正式交易。')
     meta = []
     if data.get("customer"):
         meta.append("客户：" + str(data["customer"]))
@@ -5074,7 +5112,40 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def _handle_markup_stream(self):
-        self._handle_sse(_handle_markup_fill)
+        import cpq_wf
+        def execute(data,emit=None):
+            sid=str(data.get('sid') or '')
+            card=cpq_wf.get_card(sid) if sid else None
+            if not card or card.get('industry')!='packaging':
+                return _handle_markup_fill(data,emit)
+            from cpq_quote_workspace import read_snapshot,cost_fingerprint,product_cost_fields,technical_fields,save_pricing
+            user=self._acting_user()
+            step=data.get('step')
+            if not user or (user.get('role_code') not in cpq_wf.ADMIN_ROLES and
+                (not cpq_wf.can_do_step(user,step) or str(user.get('user_id')) not in
+                 {str(card.get('creator_user_id')),str(card.get('current_owner'))})):
+                return {'ok':False,'error':'只有本报价负责销售可以计算规则'}
+            if step not in (3,4) or int(card.get('current_step') or 0)<step or card.get('overall_status') in ('completed','awaiting_handoff'):
+                return {'ok':False,'error':'当前步骤不可计算规则'}
+            try:
+                snap=read_snapshot(sid,step) or {};pkg=snap.get('packaging_package') or {}
+                first=cpq_wf.step_snapshot(sid,1) or {}
+                code=(pkg.get('box_type') or {}).get('confirmed_box_type') or (pkg.get('requirement') or {}).get('box_type')
+                if not code:raise ValueError('回传产品编码缺失')
+                products=[{'成品编码':code,'成品描述':(pkg.get('requirement') or {}).get('packaging_product_name'),**product_cost_fields(pkg)}]
+                payload={'sid':sid,'step':step,'products':products,'techparams':[technical_fields(pkg)]}
+                for key,suffix in (('basic','basic'),('dest','dest'),('payment','payment'),('logistics','logistics')):
+                    section=first.get('s1_'+suffix) or {};payload[key]=section.get('数据',section.get('data'))
+                if isinstance(payload.get('basic'),dict) and payload['basic'].get('所属组织')=='亿纬锂能':
+                    payload['basic']=dict(payload['basic'],所属组织='裕同包装')
+                result=_handle_markup_fill(payload,emit)
+                if not result.get('ok'):return result
+                if result.get('matched_products')==0:
+                    raise ValueError('系统规则计算未对应到当前成品编码，请重试，未保存零利润结果')
+                saved=save_pricing(sid,step,{},user,expected_cost_fingerprint=cost_fingerprint(pkg),rule_result=result)
+                return dict(result,**{'data':saved['data']})
+            except Exception as exc:return {'ok':False,'error':str(exc)}
+        return self._handle_sse(execute)
 
     def _handle_send(self):
         data = self._read_body()

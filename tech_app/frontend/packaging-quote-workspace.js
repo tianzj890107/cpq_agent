@@ -20,11 +20,12 @@
     const gaps=cost.gaps||pkg.gaps||[];
     const other=cost.others ?? (['labor_total','packaging_total'].every(k=>present(cost[k]))
       ? Number(cost.labor_total)+Number(cost.packaging_total)+Number(cost.other_total||0):null);
+    const cash=v=>number(v)===null?null:Number(new Intl.NumberFormat('en-US',{useGrouping:false,minimumFractionDigits:2,maximumFractionDigits:2}).format(Number(v)));
     const row={'产品系列':'包装','产品型号':box.confirmed_box_type||req.box_type||'',
       '成品编码':box.confirmed_box_type||req.box_type||'','成品描述':req.packaging_product_name||req.title||'',
-      '数量':quantity,'币种':cost.currency||req.currency||'', '基础成本':cost.total_cost,
-      '材料费用':cost.material_total,'加工费用':cost.process_total,'其他费用':other,
-      '整单成本':number(cost.total_cost)!==null && number(quantity)!==null?Number(cost.total_cost)*Number(quantity):null,
+      '数量':quantity,'币种':cost.currency||req.currency||'', '基础成本':cash(cost.total_cost),
+      '材料费用':cash(cost.material_total),'加工费用':cash(cost.process_total),'其他费用':cash(other),
+      '整单成本':number(cost.total_cost)!==null && number(quantity)!==null?cash(cash(cost.total_cost)*Number(quantity)):null,
       '成本状态':cost.has_gaps||cost.stale||gaps.length||(pkg.gaps||[]).length||q?.draft?'暂估':'正式',
       '定价状态':q?'已定价':previousQuote?'待重算':'待定价',
       '成本结果版本':source.result_version||pkg.result_version||cost.estimate_id||''};
@@ -39,8 +40,11 @@
       '报价':q.subtotal_unit ?? q.untaxed_unit_price,'折扣':1-(q.discount_rate??0),
       '折后价格':q.net_unit_price??q.untaxed_unit_price,'总金额':q.untaxed_total,
       '税率':q.tax_rate,'税金':q.taxed_total-q.untaxed_total,'数量':q.quote_quantity});
+    const stages=commercial.rule_pricing?.stages;
+    for(const key of ['基础成本','材料费用','加工费用','其他费用','整单成本','价格','利润加成','其他加价','报价','折后价格','总金额','税金'])
+      if(number(row[key])!==null)row[key]=Number(row[key]).toFixed(2);
     return {s2_products:[row],s2_techparams:[{...params,box_type_code:box.confirmed_box_type||req.box_type||'',name:req.packaging_product_name||req.title||''}],
-      s3_markup:[margin],s4_markup:addons,s5_detail:q?[{...row}]:[]};
+      s3_markup:stages?.['3']?.markup||[],s4_markup:stages?.['4']?.markup||[],s5_detail:q?[{...row}]:[]};
   }
   function readInputs(marginRows,addonRows,detail,previous,pkg){
     const raw=(marginRows[0]||{})['毛利率（%）'];

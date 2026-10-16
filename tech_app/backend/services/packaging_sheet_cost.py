@@ -178,10 +178,12 @@ def apply_layout_process_costs(layouts, parts, lines, quantity, evaluate, formul
                     staged.append((entries,result,allocated))
                 for entries,result,allocated in staged:
                     for code,line in zip(codes,entries):
+                        loss_evidence = {key: value for key, value in line['inputs'].items()
+                                         if key in ('loss_rate_source', 'loss_material_part_codes')}
                         line['amount']=allocated['allocations'][code]
                         line['expression']=result['expression']
                         line['min_charge_applied']=result.get('min_charge_applied',False)
-                        line['inputs']=dict(result['inputs'],layout_id=group['entity_id'],
+                        line['inputs']=dict(result['inputs'],**loss_evidence,layout_id=group['entity_id'],
                             sheet_quantity=allocated['sheet_quantity'],part_counts=allocated['part_counts'],
                             sheet_total_per_quote_unit=allocated['total_per_quote_unit'],
                             allocation_weight=allocated['allocation_weights'][code],

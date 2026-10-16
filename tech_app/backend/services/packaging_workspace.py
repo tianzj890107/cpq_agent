@@ -1,5 +1,6 @@
 """Read-only packaging stage projection; no CAD/model/cost computation side effects."""
 import copy
+import re
 from . import packaging_layout, packaging_sheet_cost
 
 TITLES={'3.1':'排版排模','3.2':'组装工艺'}
@@ -178,6 +179,14 @@ def build(project_id, doc, data, plan, records):
         for step in process_steps:
             try:packaging_assembly.validate(ProcessPlan(steps=[step]),active)
             except ValueError:continue
+            step=dict(step,display_no=len(assembly_steps)+1)
+            if re.fullmatch(r'(?:工艺|工序)\s*\d+',step.get('name') or ''):
+                linked=[r for r in (process.assembly_connections or []) if r.get('id') in (step.get('assembly_connection_ids') or [])]
+                if linked:
+                    step['name']='；'.join(r.get('name') or r.get('method') or '连接名称待补' for r in linked)
+                elif step.get('description') and not re.fullmatch(r'(?:工艺|工序)\s*\d+',step['description']):
+                    step['name']=step['description']
+                else:step['name']='零件间连接（工序名称待补）'
             assembly_steps.append(step)
     route_scheme=getattr(plan,'packaging_route_scheme_id',None)
     selected_scheme=doc.get('selected_scheme_id')

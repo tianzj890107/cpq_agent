@@ -22,7 +22,7 @@
 
   const esc = value => String(value ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
   const attr = value => esc(value).replace(/"/g, "&quot;");
-  const money = value => value == null ? "—" : Number(value).toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+  const money = value => value == null ? "—" : Number(value).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const confClass = value => value >= 0.75 ? "" : value >= 0.5 ? "mid" : "lo";
 
@@ -509,7 +509,7 @@
     const recommendation = processRecommendation(step, context);
     if (editing) {
       const options = TYPES.map(type => `<option value="${type}" ${type === step.type ? "selected" : ""}>${TYPE_LABEL[type]}</option>`).join("");
-      return `<div class="inline-step ${confClass(confidence)}" id="inline-step-${attr(step.step_no)}" data-inline-step data-i="${index}"><div class="inline-sno">${esc(step.step_no)}</div><div class="inline-sbody"><div class="inline-edit-grid">` +
+      return `<div class="inline-step ${confClass(confidence)}" id="inline-step-${attr(step.step_no)}" data-inline-step data-i="${index}"><div class="inline-sno">${esc(step.display_no ?? (index+1))}</div><div class="inline-sbody"><div class="inline-edit-grid">` +
         `<label>工序号</label><input data-f="step_no" type="number" value="${attr(step.step_no)}"/>` +
         `<label>名称</label><input data-f="name" value="${attr(step.name || "")}"/>` +
         `<label>类型</label><select data-f="type">${options}</select>` +
@@ -524,8 +524,9 @@
         `</div></div></div>`;
     }
     const kv = (key, value) => value ? `<div><span class="inline-key">${key}:</span> ${esc(value)}</div>` : "";
-    return `<div class="inline-step ${recommendation ? '' : confClass(confidence)}" id="inline-step-${attr(step.step_no)}"><div class="inline-sno">${esc(step.step_no)}</div><div class="inline-sbody"><div class="inline-step-title">${esc(step.name || "")}<span class="inline-type">${TYPE_LABEL[step.type] || esc(step.type)}</span>${!recommendation && confidence > 0 ? `<span class="inline-confidence">置信 ${Math.floor(confidence * 100)}%</span>` : ""}</div>` +
+    return `<div class="inline-step ${recommendation ? '' : confClass(confidence)}" id="inline-step-${attr(step.step_no)}"><div class="inline-sno">${esc(step.display_no ?? (index+1))}</div><div class="inline-sbody"><div class="inline-step-title">${esc(step.name || "")}<span class="inline-type">${TYPE_LABEL[step.type] || esc(step.type)}</span>${!recommendation && confidence > 0 ? `<span class="inline-confidence">置信 ${Math.floor(confidence * 100)}%</span>` : ""}</div>` +
       processRecommendationHtml(recommendation) +
+      `<div class="inline-dep">工序编码：${esc(step.step_no)}</div>` +
       (step.description ? `<div class="inline-description">${esc(step.description)}</div>` : "") +
       `<div class="inline-step-grid">${kv("设备", step.equipment)}${kv("工装", step.fixture)}${kv("刀具/量具", step.tooling)}${kv("参数", step.params)}${kv("质量", step.quality)}${step.duration_min != null ? `<div><span class="inline-key">工时:</span> ${esc(step.duration_min)} 分</div>` : ""}</div>` +
       ((step.depends_on || []).length ? `<div class="inline-dep">前序依赖：工序 ${step.depends_on.join("、")}</div>` : "") +

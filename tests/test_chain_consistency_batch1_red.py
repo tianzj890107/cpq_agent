@@ -169,7 +169,9 @@ class BMoneyAndTaxSingleProjection(unittest.TestCase):
                              "金额渲染一律两位小数：%s=%r" % (key, value))
 
     def test_b2_reproduced_rounding_gap_is_disclosed_not_silent(self):
-        view = quote_mod.money_view(_quote())
+        # 旧报价仍保真并披露尾差；新报价已经单价到分后乘数量，不能拿新结果模拟旧缺陷。
+        legacy=dict(_quote(),taxed_unit_price=1.13565,taxed_total=3.40695)
+        view = quote_mod.money_view(legacy)
         fields = view.get("fields") or {}
         self.assertEqual("1.14", fields.get("taxed_unit_price"))
         self.assertEqual("3.41", fields.get("taxed_total"),
@@ -180,7 +182,7 @@ class BMoneyAndTaxSingleProjection(unittest.TestCase):
         self.assertEqual("0.01", view.get("difference"))
 
     def test_b3_quote_document_discloses_the_reconciliation_rule(self):
-        doc = quote_mod.document(_quote())
+        doc = quote_mod.document(dict(_quote(),taxed_unit_price=1.13565,taxed_total=3.40695))
         text = str(doc.get("markdown") or "")
         self.assertIn("含税总额", text, "前提：报价单里本来就有含税总额")
         self.assertTrue(

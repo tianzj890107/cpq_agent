@@ -47,7 +47,7 @@ const $ai = id => document.getElementById(id);
 const aiUrl = (suffix = '') => `/api/projects/${encodeURIComponent(aiPid)}/integration${suffix}`;
 const aiAttr = value => esc(value).replace(/"/g, '&quot;');
 const aiMoney = value => value == null ? '—'
-  : Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+  : Number(value).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const aiSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const aiPlan = () => aiData?.plan || {};
 // 两个「这一步做到哪了」的共享判定：左侧动作的可见性 / role 都由它们推导，
@@ -464,7 +464,7 @@ async function aiPost(path, opts) {
     const partial = aiData?.task_status==='partial'
       || (aiIndustry==='packaging' && path==='process' && aiBusinessParts?.workspace?.assembly_result_state==='partial');
     card.done(partial ? 'partial' : true);
-    if(partial)card.log(['连接依据尚未齐全，已保留有效推荐；请查看工作区缺口，可重新生成。']);
+    if(partial)card.log([path==='name-associations' ? '语义模型不可用，已保留规则关联与未匹配项；请查看工作区缺口。' : '连接依据尚未齐全，已保留有效推荐；请查看工作区缺口，可重新生成。']);
     aiStatus(partial ? `${title}部分完成，连接依据待补` : `${title}已完成`);
     aiPublishTask(partial ? 'task-partial' : 'task-completed', { taskId: taskId, label: title, status: partial ? 'partial' : 'succeeded' });
     if (!keepTab) aiTab = path;
@@ -752,6 +752,11 @@ function aiRenderPackagingLayout() {
       + (candidate ? '<span class="inline-cov-code">排模／草稿候选，尚非确认排模</span>'
         : `<button type="button" class="inline-action" data-ai-layout-confirm="${aiAttr(row.entity_id)}" data-confirmed="${row.confirmed ? 'true' : 'false'}">${row.confirmed ? '撤销确认' : '确认图上排模'}</button>`) + '</div>';
     if (associated.length) html += `<div class="ai-layout-part-title">${associated.map(p=>esc(p.name || p.business_part_code)).join('、')}</div><div class="ai-hint">已关联，无需再次保存，展开可调整。</div>`;
+    if(row.size_source==='demo_horizontal_sheet_estimate')html+='<div class="ai-hint">纸张尺寸为按展开尺寸估算，不是图纸纸张标注。</div>';
+    else if(row.size_source==='cad_layout_text')html+='<div class="ai-hint">纸张尺寸来源：CAD排模文字。</div>';
+    if (row.assignment_source === 'ai_semantic') html += '<details class="ai-layout-picker"><summary class="inline-action">AI关联依据</summary>'
+      + '<div class="ai-hint">根据库内候选语义推荐自动采用，不是图纸直接标注；可在关联零件中调整。</div>'
+      + (row.assignment_evidence || []).map(e=>'<div class="ai-hint">'+esc(e.part_code)+' · 模型自评 '+Math.round(Number(e.confidence||0)*100)+'% · '+esc(e.reason||'')+'</div>').join('')+'</details>';
     if (row.classification_notice) html += `<div class="ai-hint">${esc(row.classification_notice)}</div>`;
     if (row.machine_mm) html += `<div class="ai-hint">上机尺寸：${esc(row.machine_mm.join(' × '))} mm（不作为开料尺寸）</div>`;
     if(row.utilization!=null)html+=`<div class="ai-hint">展开包络面积利用率：${(row.utilization*100).toFixed(2)}%（非刀线净面积）</div>`;
@@ -789,7 +794,7 @@ function aiRenderParams() {
   if (!params) {
     return layoutHtml + `<div class="inline-empty">尚未生成整机参数。点击上方「生成参数推荐」，`
       + `平台会把<strong>你写的整合需求 + 已上传的整合图纸 + 2.1 已确认的零件</strong>一起交给模型，`
-      + `按<strong>报价成品参数字典</strong>（亿纬锂能 DA 梳理 · 产品技术参数）逐项推荐整机参数，`
+      + `按<strong>报价成品参数字典</strong>（裕同包装 DA 梳理 · 产品技术参数）逐项推荐整机参数，`
       + `并给出零件间连接关系与整机 BOM。</div>`;
   }
   const editing = true;   // 参数表一直可填，见 aiRenderActions 的 alwaysEditable
@@ -1237,7 +1242,7 @@ function aiProcessStep(step, index, editing) {
   if (editing) {
     const options = Object.keys(AI_TYPE_LABEL).map(type =>
       `<option value="${type}"${type === step.type ? ' selected' : ''}>${AI_TYPE_LABEL[type]}</option>`).join('');
-    return `<div class="inline-step" data-ai-step data-i="${index}"><div class="inline-sno">${esc(step.step_no)}</div>`
+    return `<div class="inline-step" data-ai-step data-i="${index}"><div class="inline-sno">${esc(step.display_no ?? (index+1))}</div>`
       + `<div class="inline-sbody"><div class="inline-edit-grid">`
       + `<label>工序号</label><input data-f="step_no" type="number" value="${aiAttr(step.step_no)}"/>`
       + `<label>名称</label><input data-f="name" value="${aiAttr(step.name || '')}"/>`
@@ -1251,9 +1256,10 @@ function aiProcessStep(step, index, editing) {
       + `</div></div>`;
   }
   const kv = (key, value) => value ? `<div><span class="inline-key">${key}:</span> ${esc(value)}</div>` : '';
-  return `<div class="inline-step"><div class="inline-sno">${esc(step.step_no)}</div><div class="inline-sbody">`
+  return `<div class="inline-step"><div class="inline-sno">${esc(step.display_no ?? (index+1))}</div><div class="inline-sbody">`
     + `<div class="inline-step-title">${esc(step.name || '')}`
     + `<span class="inline-type">${AI_TYPE_LABEL[step.type] || esc(step.type)}</span></div>`
+    + `<div class="inline-dep">工序编码：${esc(step.step_no)}</div>`
     + (step.description ? `<div class="inline-description">${esc(step.description)}</div>` : '')
     + `<div class="inline-step-grid">${kv('设备', step.equipment)}${kv('工装', step.fixture)}${kv('质量', step.quality)}`
     + (step.duration_min != null ? `<div><span class="inline-key">工时:</span> ${esc(step.duration_min)} 分</div>` : '')
@@ -1770,9 +1776,28 @@ function aiLayoutSelectedCodes(group) {
   return Array.from(group?.querySelectorAll('[data-ai-layout-part-code]:checked') || []).map(input => input.value);
 }
 
-function aiLayoutCadSvg(doc) {
+function aiLayoutPreviewRegion(scene,layout,layouts) {
+  if(Array.isArray(layout?.preview_bbox)&&layout.preview_bbox.length===4)return layout.preview_bbox;
+  const pos=layout?.position;
+  if(!Array.isArray(pos)||pos.length<2)return null;
+  const distance=(p,b)=>Math.max(b[0]-p[0],0,p[0]-b[2])**2+Math.max(b[1]-p[1],0,p[1]-b[3])**2;
+  const frames=(scene.entities||[]).filter(e=>e.closed&&e.points?.length>=4&&e.points.length<=5&&e.bbox?.length===4)
+    .filter(e=>{const b=e.bbox,points=e.points;
+      return points.every(p=>(Math.abs(p[0]-b[0])<.01||Math.abs(p[0]-b[2])<.01)&&(Math.abs(p[1]-b[1])<.01||Math.abs(p[1]-b[3])<.01))
+        &&distance(pos,b)<=(Math.max(b[2]-b[0],b[3]-b[1])*.25)**2
+        &&!(layouts||[]).some(r=>r.entity_id!==layout.entity_id&&r.position?.length>=2&&distance(r.position,b)<=distance(pos,b));});
+  frames.sort((a,b)=>(a.bbox[2]-a.bbox[0])*(a.bbox[3]-a.bbox[1])-(b.bbox[2]-b.bbox[0])*(b.bbox[3]-b.bbox[1]));
+  return frames[0]?.bbox||null;
+}
+
+function aiLayoutCadSvg(doc,layout) {
   const scene = doc?.cad_scene || {};
-  const rows = (scene.entities || []).filter(row => scene.layer_visibility?.[row.layer] !== false);
+  const region=layout?aiLayoutPreviewRegion(scene,layout,aiBusinessParts?.layout_rows||[]):null;
+  if(layout&&!region)return '';
+  const reach=region?Math.max(region[2]-region[0],region[3]-region[1])*.08:0;
+  const local=region?[region[0]-reach,region[1]-reach,region[2]+reach,region[3]+reach]:null;
+  const rows = (scene.entities || []).filter(row => scene.layer_visibility?.[row.layer] !== false)
+    .filter(row=>!local||(row.bbox?.length===4&&row.bbox[0]>=local[0]&&row.bbox[1]>=local[1]&&row.bbox[2]<=local[2]&&row.bbox[3]<=local[3]));
   const boxes = rows.map(row => row.bbox).filter(box => Array.isArray(box) && box.length === 4 && box.every(n => Number.isFinite(Number(n))));
   if (!boxes.length) return '';
   const box = [Math.min(...boxes.map(b=>Number(b[0]))),Math.min(...boxes.map(b=>Number(b[1]))),Math.max(...boxes.map(b=>Number(b[2]))),Math.max(...boxes.map(b=>Number(b[3])))];
@@ -1811,9 +1836,11 @@ async function aiToggleLayoutPreview(button) {
       aiLayoutPreviewCache = {key,promise:api(`/api/projects/${encodeURIComponent(aiPid)}/requirement/packaging-geometry`)};
     }
     const doc = await aiLayoutPreviewCache.promise;
-    const svg = aiLayoutCadSvg(doc);
-    if (!svg) throw new Error('尚无可显示的CAD原图，请先完成图纸解析。');
-    host.innerHTML = '<div class="ai-hint">图纸平面原图 · 保留CAD图层和尺寸标注</div>' + svg;
+    const layout=(aiBusinessParts?.layout_rows||[]).find(r=>r.entity_id===button.dataset.aiLayoutPreview);
+    if(!layout)throw new Error('当前排模记录已变化，请刷新本页。');
+    const svg = aiLayoutCadSvg(doc,layout);
+    if (!svg){host.textContent='当前排模尚未定位到独立图框；可用页面原图入口核对，不把整张图冒充本排模。';return;}
+    host.innerHTML = '<div class="ai-hint">本排模局部原图 · 保留CAD图层和尺寸标注</div>' + svg;
   } catch (error) {
     if (aiLayoutPreviewCache.key === key) aiLayoutPreviewCache.promise = null;
     host.textContent = '排模原图读取失败：' + error.message;
@@ -2381,7 +2408,8 @@ async function aiRefreshPackagingWorkspace() {
 
 async function aiPackagingNext(tab) {
   if(aiBusy||aiDeferredBusy)return {ok:false,error:{code:'busy',message:'已有任务在执行，请稍候'}};
-  aiUserSay('完成排版排模，进入组装工艺。');
+  const prepared=await aiPost('name-associations',{label:'核对排模与材料关联',keepTab:true});
+  if(!prepared.ok)return prepared;
   aiData=await api(aiUrl(''),{method:'PUT',body:JSON.stringify({requirement_note:aiPlan().requirement_note||'',quantity:aiPlan().quantity||1,prepare_packaging_cut_inputs:true})});
   const board=await aiRefreshPackagingWorkspace();
   const key='3.1';

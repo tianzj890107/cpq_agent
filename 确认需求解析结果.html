@@ -1027,9 +1027,9 @@
   <!-- 快速报价面板（批 1 建、批 3 追加四列对比表 renderDiffTable）。
        同源相对路径：8010 根上没有这个文件时会按既有规则转发给 tech_app 前端。 -->
   <script src="/file-policy.js?v=20261015-2"></script>
-  <script src="quick-quote-panel.js?v=20261015-files1"></script>
+  <script src="quick-quote-panel.js?v=20261016-money2"></script>
   <!-- 行业仅决定字段；包装使用共用报价分区，读取不触发定价。 -->
-  <script src="packaging-quote-workspace.js?v=20261015-fields1"></script>
+  <script src="packaging-quote-workspace.js?v=20261016-rules2"></script>
   <script>
     /* 快速报价工作区的页面级入口（Spec 批 3 §2.6）：容器 + 展开/收起。
        只做搬运：rows 由后端工作区（diff_table）给，金额与单位都已在行里排好版；
@@ -1844,7 +1844,10 @@
       }
       if (!stepsData.length) { alert('还没有可导出的内容。'); return; }
       // 导出前硬校验（Spec §4 / §5）：明细非空、数量/币种/单价有效、总金额可复算。
-      const xc = assertQuoteExportable();
+      if (LAST_PACKAGING_PACKAGE && LAST_PACKAGING_QUOTE?.demo_only) {
+        await canCompleteQuoteStep(6, collectStepData(6));
+      }
+      const xc = assertQuoteExportable('document');
       if (!xc.ok) { alert('还不能生成报价单：\n· ' + xc.problems.join('\n· ')); return; }
       const payload = {
         projectName: ($('projectName') && $('projectName').textContent) || '报价单',
@@ -2077,7 +2080,8 @@
       }
     }
     function makeFieldInput(f, editable) {
-      const val = f.value == null ? '' : String(f.value);
+      const original = f.value == null ? '' : String(f.value);
+      const val = f.key==='所属组织' && original==='亿纬锂能' ? '裕同包装' : original;
       if (!editable) {
         const span = document.createElement('span');
         span.textContent = val || '—';
@@ -2088,13 +2092,14 @@
       let el;
       if (f.type === 'select' && Array.isArray(f.options)) {
         el = document.createElement('select');
-        for (const opt of f.options) {
+        const options=f.options.map(opt=>f.key==='所属组织'&&opt==='亿纬锂能'?'裕同包装':opt);
+        for (const opt of options) {
           const o = document.createElement('option');
           o.value = o.textContent = opt;
           if (opt === val) o.selected = true;
           el.appendChild(o);
         }
-        if (val && !f.options.includes(val)) {
+        if (val && !options.includes(val)) {
           const o = document.createElement('option');
           o.value = o.textContent = val; o.selected = true;
           el.appendChild(o);
@@ -2181,6 +2186,12 @@
         updateRowCount(sec);
       };
       content.appendChild(toolbar);
+      if(currentIndustry()==='packaging' && ['s3_markup','s4_markup'].includes(ui.section_id)){
+        const recalculate=document.createElement('button');recalculate.type='button';recalculate.className='btn btn-secondary';
+        recalculate.textContent='读取系统库并重算';recalculate.dataset.systemRuleStep=String(sec.step);
+        recalculate.disabled=busy || (typeof WF!=='undefined'&&WF.loaded&&!WF.canEdit);
+        recalculate.onclick=()=>runMarkupStep(sec.step);toolbar.prepend(recalculate);
+      }
       if (ui.footer) {
         const note = document.createElement('div');
         note.className = 'table-footer-note';
@@ -2271,7 +2282,9 @@
       const sec = sectionShell(ui);
       sec.kind = 'table';
       sec.columns = techParamsColumnsOf(ui) || ui.columns || [];
-      sec.fixedRows=currentIndustry()==='packaging' && ['s3_markup','s4_markup'].includes(ui.section_id);
+      sec.fixedRows=['s3_markup','s4_markup','s5_detail'].includes(ui.section_id);
+      if(currentIndustry()==='packaging' && ui.section_id==='s5_detail')
+        sec.columns=sec.columns.map(c=>({...c,readonly:!['数量','折扣','税率'].includes(c.key)}));
       const content = sec.el.querySelector('.collapse-content');
       const table = document.createElement('table');
       table.className = 'list-table';
@@ -2298,22 +2311,6 @@
         };
       }
       content.appendChild(toolbar);
-      if(currentIndustry()==='packaging' && ['s3_markup','s4_markup','s5_detail'].includes(ui.section_id)){
-        const button=document.createElement('button');button.type='button';button.className='btn btn-secondary';
-        button.textContent='保存并重算';button.dataset.packagingReprice=String(sec.step);
-        button.onclick=()=>repricePackagingWorkspace(sec.step);toolbar.prepend(button);
-        content.addEventListener('input',()=>{PACKAGING_PRICING_DIRTY=true;PACKAGING_PRICING_REQUEST++;});
-      }
-      if(currentIndustry()==='packaging' && ui.section_id==='s3_markup'){
-        // 毛利率入口必须显式可见：费率只从人工输入或已存报价恢复，系统不填默认值。
-        content.insertAdjacentHTML('beforeend', packagingPricingControlsHtml());
-        const marginInput=document.getElementById('packagingMarginInput');
-        const reprice=document.getElementById('packagingRepriceBtn');
-        if(marginInput && PACKAGING_RESTORED_RATE!==null && !marginInput.value)
-          marginInput.value=Number((PACKAGING_RESTORED_RATE*100).toFixed(8));
-        if(marginInput)marginInput.addEventListener('input',()=>{PACKAGING_PRICING_DIRTY=true;PACKAGING_PRICING_REQUEST++;});
-        if(reprice)reprice.addEventListener('click',()=>repricePackagingWorkspace(sec.step));
-      }
       if (ui.footer) {
         const note = document.createElement('div');
         note.className = 'table-footer-note';
@@ -3262,6 +3259,9 @@
         }
         sendToAgent('【流程完成】用户确认结束本次报价流程，请做简短总结。', { echo: false, display: done });
         return;
+      }
+      if(cur===5 && currentIndustry()==='packaging' && LAST_PACKAGING_QUOTE?.rule_pricing){
+        if(!(await repricePackagingWorkspace(5)))return;
       }
       const data = collectStepData(cur);
       const stepName = STEPS[cur - 1];
@@ -4215,7 +4215,7 @@
         }
         payload = data || collectStepData(n);
         if(LAST_PACKAGING_PACKAGE && n>=3 && PACKAGING_PRICING_DIRTY){
-          const verdict={ok:false,code:'pricing_requires_recalculation',message:'报价参数或成本已变化，请在本步保存并重算后继续。',blocking:[],action:'在定价规则、加价规则或报价明细点击保存并重算。'};
+          const verdict={ok:false,code:'pricing_requires_recalculation',message:'成本已变化，请重新计算系统库定价与加价规则。',blocking:[],action:'在第3步重算定价规则，再计算第4步加价规则。'};
           STEP_GATE_VERDICTS[n]=verdict;return verdict;
         }
         if (LAST_PACKAGING_PACKAGE && n >= 3) {
@@ -4266,7 +4266,13 @@
 
     /* 生成 Word / 导入数据库前的硬校验（Spec §4 / §5）：报价明细至少一行，数量、币种、单价有效，
        且总金额 = 折后价格 × 数量 可确定性复算。返回 {ok, problems, rows}。 */
-    function assertQuoteExportable() {
+    function assertQuoteExportable(purpose) {
+      if (purpose === 'document' && typeof LAST_PACKAGING_PACKAGE !== 'undefined'
+          && LAST_PACKAGING_PACKAGE && LAST_PACKAGING_QUOTE?.demo_only) {
+        const verdict = quoteCompletionGate(6);
+        const ok = Boolean(verdict?.ok && verdict.demo_only);
+        return {ok, problems:ok ? [] : [verdict?.message || '请先核对原会话的演示报价与成本版本。'], rows:1};
+      }
       const rows = quoteDetailRows();
       const problems = [];
       if (typeof LAST_PACKAGING_PACKAGE !== 'undefined' && LAST_PACKAGING_PACKAGE
@@ -4451,40 +4457,6 @@
       }
     }
 
-    /* 第 3 步的人工毛利率入口。费率只认人工输入或已存报价恢复，系统不会默认填入费率；
-       「毛利率」与「成本加成率」是两个口径，文案必须写清（不能靠 Agent 猜）。 */
-    function packagingPricingControlsHtml() {
-      return '<div class="packaging-pricing-controls">'
-        + '<label for="packagingMarginInput">毛利率（%）</label>'
-        + '<input id="packagingMarginInput" class="packaging-margin-input" type="number" min="0" max="99.99" step="0.01" inputmode="decimal" placeholder="如 25">'
-        + '<button id="packagingRepriceBtn" class="btn btn-primary" type="button">按此毛利率重算</button>'
-        + '<span class="packaging-pricing-hint">毛利率＝成本 ÷（1－毛利率），不是成本加成率；系统不会默认填入费率，请按本次报价口径填写。</span>'
-        + '</div>';
-    }
-
-    /* 毛利率优先取上面的人工输入框；没有输入框时才退回已渲染行 / 已存报价 —— 不猜数字。 */
-    function packagingMarginRate() {
-      const manual = document.getElementById('packagingMarginInput');
-      if (manual) {
-        const raw = String(manual.value || '').trim();
-        if (!raw) return null;
-        const n = Number(raw);
-        return Number.isFinite(n) && n >= 0 && n < 100 ? n / 100 : null;
-      }
-      if (typeof window.PACKAGING_QUOTE_MARGIN_RATE === 'number') return window.PACKAGING_QUOTE_MARGIN_RATE;
-      const rows = extractSectionRows('s3_markup');
-      for (const row of rows) {
-        for (const key of Object.keys(row || {})) {
-          if (!/毛利|加成|利润率|rate/i.test(key)) continue;
-          const m = String(row[key] === undefined || row[key] === null ? '' : row[key]).match(/-?\d+(\.\d+)?/);
-          if (!m) continue;
-          const v = parseFloat(m[0]);
-          return v > 1 ? v / 100 : v;                 // 页面里可能写成百分数
-        }
-      }
-      return PACKAGING_RESTORED_RATE;
-    }
-
     /* 包装定价块的可见步骤（Spec `packaging-quote-card-sales-view-parity.md` C3）：毛利率输入与
        s3/s4/s5 定价分区只属于第 3–5 步；其余步骤与三行业一致保持隐藏，不再常驻结果区末尾。 */
     function packagingQuotePanelStepVisible(step) {
@@ -4529,7 +4501,7 @@
         (!candidate.source_cost_fingerprint || candidate.source_cost_fingerprint===PACKAGING_COST_FINGERPRINT);
       LAST_PACKAGING_QUOTE=valid?candidate:null;
       PACKAGING_COMMERCIAL_QUOTE=LAST_PACKAGING_QUOTE || snap.packaging_quote || previous;
-      if(changed){PACKAGING_PRICING_DIRTY=true;PACKAGING_PRICING_REQUEST++;}
+      if(changed && !valid){PACKAGING_PRICING_DIRTY=true;PACKAGING_PRICING_REQUEST++;}
       const view=window.PackagingQuoteWorkspace.project(pkg,LAST_PACKAGING_QUOTE,PACKAGING_COMMERCIAL_QUOTE);
       for(const id of ['s1_products','s2_products','s2_techparams','s3_products','s4_products','s3_markup','s4_markup']){
         const f=FORMS.find(x=>x.section_id===id);if(!f)continue;
@@ -4543,7 +4515,7 @@
         if(['s3_markup','s4_markup'].includes(id) && PACKAGING_PRICING_DIRTY && sections.has(id))continue;
         renderTableSection({section_id:id,step:f.step,title:f.title,columns:f.columns,editable:f.editable,rows,
           techparams_columns:f.techparams_columns,techparams_switched:f.techparams_switched,
-          footer:id==='s3_markup' && !LAST_PACKAGING_QUOTE?'填写毛利率后保存并重算；成本变化后需重新定价。':undefined});
+          footer:id==='s3_markup' && !LAST_PACKAGING_QUOTE?'读取系统库定价规则计算；成本变化后需重新计算规则。':undefined});
       }
       if(LAST_PACKAGING_QUOTE && !PACKAGING_PRICING_DIRTY)applyPackagingQuoteRows(LAST_PACKAGING_QUOTE);
       return LAST_PACKAGING_QUOTE;
@@ -4551,23 +4523,16 @@
 
     async function repricePackagingWorkspace(step) {
       if(busy || !LAST_PACKAGING_PACKAGE)return false;
-      const rate=packagingMarginRate();
-      if(rate===null){
-        addErrorBubble('请在第 3 步「定价规则（利润加成）」人工填写 0（含）到 100（不含）的毛利率；系统不会默认填入费率。');
-        return false;
-      }
+      if(step===3 || step===4)return runMarkupStep(step);
+      if(!LAST_PACKAGING_QUOTE?.rule_pricing){addErrorBubble('请先读取系统库定价与加价规则。');return false;}
       const session=currentSessionId, fingerprint=PACKAGING_COST_FINGERPRINT, request=++PACKAGING_PRICING_REQUEST;
       const say=typeof beginUserTurn==='function'?beginUserTurn:addUserBubble;
       say('保存并重算第 '+step+' 步报价。');
       setBusy(true);
       try{
-        // 人工输入框是毛利率的唯一入口：先把它写回定价行，再交给共用读取器（同一口径，不另算金额）。
-        const marginRows=extractSectionRows('s3_markup');
-        if(marginRows[0])marginRows[0]['毛利率（%）']=Number((rate*100).toFixed(8));
-        const options=window.PackagingQuoteWorkspace.readInputs(marginRows,extractSectionRows('s4_markup'),
-          extractSectionRows('s5_detail')[0],LAST_PACKAGING_QUOTE||PACKAGING_COMMERCIAL_QUOTE,LAST_PACKAGING_PACKAGE);
-        options.gross_margin_rate = rate;
-        const inputs=options;
+        const q=LAST_PACKAGING_QUOTE,row=extractSectionRows('s5_detail')[0]||{};
+        const inputs={quote_quantity:Number(row['数量']??q.quote_quantity),tax_rate:Number(row['税率']??q.tax_rate),
+          discount:{code:'discount',rate:1-Number(row['折扣']??(1-q.discount_rate))}};
         if(step===5)inputs.basic_fields=(collectStepData(5).s5_basic||{}).数据 || {};
         const result=await wfApi('/wf/card/pricing-save',{method:'POST',body:{session_id:session,step_no:step,cost_fingerprint:fingerprint,inputs}});
         if(currentSessionId!==session || PACKAGING_COST_FINGERPRINT!==fingerprint || request!==PACKAGING_PRICING_REQUEST)return false;
@@ -4588,7 +4553,7 @@
       try {
         const raw = row && row.inputs_json;
         const quote = (typeof raw === 'string') ? JSON.parse(raw) : (raw || {});
-        return !!(quote && quote.draft);
+        return !!(quote && (quote.draft || quote.demo_only || quote.publish_blocked));
       } catch (e) { return false; }
     }
 
@@ -4881,7 +4846,7 @@
       const m = String(v == null ? '' : v).replace(/[,，\s]/g, '').match(/-?\d+(\.\d+)?/);
       return m ? parseFloat(m[0]) : null;
     }
-    function _fmtNum(n) { return String(Math.round(n * 100) / 100); }
+    function _fmtNum(n) { return new Intl.NumberFormat('en-US',{useGrouping:false,minimumFractionDigits:2,maximumFractionDigits:2}).format(Number(n)); }
     /* ============ 第 3/4 步：加价计算（各一次流式大模型调用，不进智能体循环） ============
        第 3 步 定价-利润加成：取 md_clm_material_price_rule 里「定价」分类规则，
                 依据 产品信息 + 产品技术参数 算「利润加成」；
@@ -4899,9 +4864,10 @@
       const base = _numOf(row['基础成本']) != null ? _numOf(row['基础成本']) : _numOf(row['价格']);
       if (base == null) return row;
       row['基础成本'] = _fmtNum(base);
-      const profit = _numOf(row['利润加成']) || 0;
-      const other = _numOf(row['其他加价']) || 0;
-      row['价格'] = _fmtNum(base + profit + other);
+      const profit = Number(_fmtNum(_numOf(row['利润加成']) || 0));
+      const other = Number(_fmtNum(_numOf(row['其他加价']) || 0));
+      row['利润加成']=_fmtNum(profit);row['其他加价']=_fmtNum(other);
+      row['价格'] = _fmtNum(Number(row['基础成本']) + profit + other);
       return row;
     }
 
@@ -4941,17 +4907,9 @@
     }
 
     async function runMarkupStep(step) {
-      if (currentIndustry() === 'packaging') {
-        if (LAST_PACKAGING_PACKAGE) {
-          await renderPackagingQuotePanel({ packaging_package: LAST_PACKAGING_PACKAGE,
-            packaging_quote: LAST_PACKAGING_QUOTE });
-        } else {
-          addErrorBubble('请先接收工艺与成本结果，再在第3步定价规则填写毛利率。');
-        }
-        return !!LAST_PACKAGING_QUOTE;
-      }
       const cfg = MARKUP_CFG[step];
       if (!cfg || !FORMS.length) return false;
+      const markupSession=currentSessionId;
       await ensureStep1Context();   // 上下文兜底：确保第 1 步各表都在手，别把信息丢了
       const sec = 's' + step;
       const prodF = FORMS.find(x => x.section_id === sec + '_products');
@@ -4983,6 +4941,7 @@
       };
 
       setBusy(true);
+      if(typeof beginUserTurn==='function')beginUserTurn('读取系统库'+cfg.cls+'规则，计算'+cfg.column+'。');
       const act = addToolActivity(
         '第 ' + step + ' 步「' + cfg.label + '」：查询规则库（远程 Postgres）→ 按规则计算' + cfg.column,
         "SELECT rule_name, rule_desc, rule_expression FROM md_clm_material_price_rule" +
@@ -5022,6 +4981,7 @@
       } catch (e) {
         d = { ok: false, error: '无法连接报价助手服务：' + e.message };
       }
+      if(currentSessionId!==markupSession)return false;
       hideTyping();
       finishStreamBubble();
       setBusy(false);
@@ -5030,6 +4990,12 @@
       if (!d || !d.ok) {
         addErrorBubble('第 ' + step + ' 步' + cfg.column + '计算失败：' + ((d && d.error) || '未知错误'));
         return false;
+      }
+      if(currentIndustry()==='packaging' && d.data){
+        PACKAGING_PRICING_DIRTY=false;
+        await renderPackagingQuotePanel(d.data);
+        addAiBubble('系统库'+cfg.cls+'规则计算完成，已保存规则明细和报价金额；刷新可恢复。');
+        return true;
       }
 
       // 规则表
@@ -5122,8 +5088,8 @@
       const disc = _numOf(_s5Get(tr, '折扣'));
       const qty = _numOf(_s5Get(tr, '数量'));
       const rate = _numOf(_s5Get(tr, '税率'));
-      const after = quote * (disc == null ? 1 : disc);
-      const total = after * (qty == null ? 1 : qty);
+      const after = Number(_fmtNum(quote * (disc == null ? 1 : disc)));
+      const total = Number(_fmtNum(after * (qty == null ? 1 : qty)));
       _s5Set(tr, '折后价格', _fmtNum(after));
       _s5Set(tr, '总金额', _fmtNum(total));
       _s5Set(tr, '税金', rate == null ? '' : _fmtNum(total * rate));
@@ -5233,7 +5199,7 @@
       }
       if(currentIndustry()==='packaging' && LAST_PACKAGING_QUOTE){
         applyPackagingQuoteRows(LAST_PACKAGING_QUOTE);s5BindLiveCalc();
-        addAiBubble('报价方案已带入已保存的定价结果。数量、折扣、税率可在原字段修改，修改后点击“保存并重算”；金额由同一引擎生成。');
+        addAiBubble('报价方案已带入系统库定价与加价规则的已保存结果；金额与成本回传保持一致。');
         return true;
       }
       // ② 报价明细：逐产品一行，同名列直接抄 + 默认值 + 公式计算
@@ -5275,8 +5241,8 @@
           const q = _numOf(row['报价']);
           if (q != null) {
             const dc = _numOf(row['折扣']), qt = _numOf(row['数量']), rt = _numOf(row['税率']);
-            const after = q * (dc == null ? 1 : dc);
-            const total = after * (qt == null ? 1 : qt);
+            const after = Number(_fmtNum(q * (dc == null ? 1 : dc)));
+            const total = Number(_fmtNum(after * (qt == null ? 1 : qt)));
             row['折后价格'] = _fmtNum(after);
             row['总金额'] = _fmtNum(total);
             if (rt != null) row['税金'] = _fmtNum(total * rt);

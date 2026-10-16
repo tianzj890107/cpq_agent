@@ -19,7 +19,7 @@ const $ = (id) => document.getElementById(id);
 const status = (m, busy = false) => { $("status").textContent = (busy ? "⏳ " : "") + m; };
 const esc = (s) => String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const money = (v) => (v == null ? "—" : Number(v).toLocaleString("zh-CN", { maximumFractionDigits: 2 }));
+const money = (v) => (v == null ? "—" : Number(v).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 
 const CAT_LABEL = {
   material: "材料费", machining: "机加工", standard_part: "标准件/外购", heat_treat: "热处理",

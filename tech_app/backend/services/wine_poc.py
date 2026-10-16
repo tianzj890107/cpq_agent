@@ -62,7 +62,7 @@ def part_bom_row(row, doc):
         return None  # 多组成按各部分计算，不能被父件演示金额取代。
     return {'bom_category':'optional_part' if is_external_part(row) else 'box_part',
             'item_key':row['business_part_code'],'part_code':row['business_part_code'],
-            'item_name':row['name'],'material':value.get('material_text'),'material_code':'',
+            'item_name':row['name'],'material':value.get('material_text'),'material_code':value.get('material_code') or '',
             'quantity':value.get('quantity') or 1,'unit':'件','length_mm':value.get('length_mm'),'width_mm':value.get('width_mm'),
             'size_source_json':__import__('json').dumps({'kind':value.get('source'),'poc_demo':True},ensure_ascii=False),
             'status':'computed','missing_variables':[],'is_optional':int(is_external_part(row)),
