@@ -92,6 +92,15 @@ def save_pricing(session,step,inputs,user,*,expected_cost_fingerprint,rule_resul
             previous=cpq_wf._snapshot_dict(cpq_wf.step_snapshot(session,current_step,conn=conn))
             stored=previous.get('packaging_quote') or {}
             rules=copy.deepcopy(stored.get('rule_pricing'))
+            # 首次进入下一步时，本步快照尚无定价；继承最近的已存规则而非退回毛利率模式。
+            if rules is None and rule_result is None and step>=4:
+                for prior_step in range(current_step-1,2,-1):
+                    prior=cpq_wf._snapshot_dict(cpq_wf.step_snapshot(session,prior_step,conn=conn))
+                    candidate=prior.get('packaging_quote') or {}
+                    if candidate.get('rule_pricing') is not None:
+                        stored=candidate
+                        rules=copy.deepcopy(candidate['rule_pricing'])
+                        break
             if rules and rule_result is None and stored.get('source_cost_fingerprint')!=expected_cost_fingerprint:
                 raise cpq_wf.WfError('成本版本已变化，请重新读取系统定价规则')
             if rule_result is not None:
@@ -120,7 +129,10 @@ def save_pricing(session,step,inputs,user,*,expected_cost_fingerprint,rule_resul
                     for key in ('quote_quantity','tax_rate','discount'):
                         if key in stored:inputs.setdefault(key,copy.deepcopy(stored[key]))
                 pricing_mode='markup'
-            else:pricing_mode='gross_margin'
+            else:
+                if 'gross_margin_rate' not in inputs:
+                    raise cpq_wf.WfError('尚未取得已保存的系统定价规则，请在当前报价重新读取系统规则后继续，无需重新回传成本')
+                pricing_mode='gross_margin'
             try:result=price(package,pricing_mode=pricing_mode,publish=False,actor=user,**inputs)
             except PricingError as exc:raise cpq_wf.WfError(str(exc)) from exc
             quote=result.get('quote') or result
