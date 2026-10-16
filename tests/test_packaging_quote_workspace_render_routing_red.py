@@ -35,7 +35,7 @@ const store=new Map(),calls=[],panel={workspaceState:{quick_quote_session_id:'ol
 openQuickQuoteSession:async opts=>{calls.push(['create',opts]);return {ok:true,quick_quote_session_id:'new'};},
 quickQuoteSessionId:()=>panel.workspaceState.quick_quote_session_id,
 openQuickQuoteWorkspace:async id=>({ok:true,quote_mode:'quick',quick_quote_session_id:id})};
-const ctx={quickQuoteCreating:false,quickQuotePanelApi:()=>panel,setActiveQuoteMode:()=>{},
+const ctx={homeParsing:false,quoteUploadError:'',pickedQuoteRefs:[],quickQuoteCreating:false,quickQuotePanelApi:()=>panel,setActiveQuoteMode:()=>{},
 quickQuoteStatus:()=>{},techIndustry:()=> 'packaging',rememberQuickQuoteSession:()=>{},
 sessionStorage:{setItem:(k,v)=>store.set(k,v)},alert:msg=>{throw Error(msg);},
 navigateQuickQuoteWorkspace:id=>calls.push(['navigate',id]),quickQuoteKnownIds:()=>[],OPEN_KEYS:{quote:'q'},

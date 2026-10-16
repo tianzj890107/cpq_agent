@@ -1781,6 +1781,7 @@
       const viewingPast = (n !== currentStep);
       $('stepBadge').textContent = viewingPast ? '查看 / 编辑' : '进行中';
       sections.forEach(sec => { sec.el.style.display = (sec.step === n) ? '' : 'none'; });
+      syncSectionNumbers();
       // 包装定价块按步骤显示（Spec `packaging-quote-card-sales-view-parity.md` C3）：它不属于
       // 任何 FORMS 分区，以前不随步骤隐藏 —— 于是销售在第 6 步也看到它常驻。
       const packagingQuotePanelEl = $('packagingQuotePanel');
@@ -1933,6 +1934,36 @@
       return '';
     }
 
+    function syncSectionNumbers() {
+      const host = $('resultsContent');
+      if (!host) return;
+      const forms = typeof FORMS === 'undefined' ? [] : FORMS;
+      const ranks = new Map(forms.map((form, index) => [form.section_id, index]));
+      const entries = [...sections.entries()].filter(([, sec]) => sec.el.parentNode === host);
+      const templates = new Map(forms.map(form => [form.section_id, form]));
+      entries.forEach(([id, sec]) => {
+        if (templates.has(id)) sec.step = Number(templates.get(id).step);
+        sec.el.style.display = sec.step === shownStep ? '' : 'none';
+      });
+      const ordered = entries.slice().sort(([leftId, left], [rightId, right]) =>
+        Number(left.step) - Number(right.step)
+        || (ranks.get(leftId) ?? Number.MAX_SAFE_INTEGER) - (ranks.get(rightId) ?? Number.MAX_SAFE_INTEGER));
+      // 仅顺序确实不对时移动原节点，不重建输入、折叠状态或表格数据。
+      const nodes = new Set(ordered.map(([, sec]) => sec.el));
+      const actual = [...host.children].filter(node => nodes.has(node));
+      if (ordered.some(([, sec], index) => actual[index] !== sec.el)) {
+        ordered.forEach(([, sec]) => host.appendChild(sec.el));
+      }
+      const counts = new Map();
+      ordered.forEach(([, sec]) => {
+        const step = Number(sec.step);
+        const number = (counts.get(step) || 0) + 1;
+        counts.set(step, number);
+        const badge = sec.el.querySelector('.collapse-title .num');
+        if (badge) badge.textContent = String(number);
+      });
+    }
+
     function sectionShell(ui, kindIcon) {
       // 创建/复用 collapse-block 外壳，返回 content 容器
       let sec = sections.get(ui.section_id);
@@ -1944,17 +1975,18 @@
         sec = { el: block };
         sections.set(ui.section_id, sec);
       }
-      sec.step = ui.step;
-      sec.title = ui.title || sec.title || ui.section_id;
+      const template = (typeof FORMS === 'undefined' ? [] : FORMS).find(form => form.section_id === ui.section_id);
+      sec.step = Number(template ? template.step : ui.step ?? sec.step ?? shownStep);
+      sec.title = String(ui.title || sec.title || ui.section_id).replace(/^[\s①-⑳❶-❿]+/, '').trim();
       // 右侧一律可编辑：用户可点击任意分区修改（含系统计算项）
       sec.editable = (typeof currentIndustry==='function' && currentIndustry()==='packaging') ? ui.editable!==false : true;
       if (ui.status) sec.status = ui.status;
       if (ui.source) sec.source = ui.source;
-      const seq = [...sections.values()].filter(s => s.step === ui.step).indexOf(sec) + 1;
       sec.el.innerHTML =
         `<div class="collapse-header" onclick="this.parentElement.classList.toggle('open')">
           <div class="collapse-title">
-            <span class="num">${seq}</span>${escapeHtml(sec.title)}
+            <span class="num"></span>
+            ${escapeHtml(sec.title)}
             ${ui.editable === false ? '<span class="readonly-chip">'+(currentIndustry()==='packaging'?'系统计算':'系统计算·可改')+'</span>' : ''}
             ${statusChipHtml(sec.status)}
           </div>
@@ -1969,7 +2001,8 @@
         src.querySelector('span').textContent = '数据来源：' + sec.source;
         content.appendChild(src);
       }
-      sec.el.style.display = (ui.step === shownStep) ? '' : 'none';
+      sec.el.style.display = (sec.step === shownStep) ? '' : 'none';
+      syncSectionNumbers();
       return sec;
     }
 

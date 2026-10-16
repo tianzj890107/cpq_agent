@@ -25,7 +25,7 @@ class SavedFirst(unittest.TestCase):
         doc = {'business_parts':[{'business_part_code':'a','name':'面纸','reference':{'quantity':1}}]}
         with patch.object(store,'load_meta',return_value={'project_id':'p'}), \
              patch.object(store,'load_requirement',return_value={'requirement_no':'r','data':{'industry':'packaging','quote_quantity':1000}}), \
-             patch.object(packaging_parts,'load_business_parts',return_value=doc), \
+             patch.object(packaging_parts,'load_business_cost_index',return_value=doc), \
              patch.object(da_repo,'load_packaging_cost',return_value=row), \
              patch.object(da_repo,'load_packaging_cost_items',return_value=items), \
              patch.object(cost_review,'load_review') as review, \
@@ -204,5 +204,5 @@ class SavedStorage(unittest.TestCase):
         from tech_app.backend.storage import store
         with patch.object(store,'load_meta',return_value={'project_id':'p'}), \
              patch.object(store,'load_requirement',return_value={'data':{'industry':'packaging'}}), \
-             patch.object(packaging_parts,'load_business_parts',side_effect=RuntimeError('目录读取失败')):
+             patch.object(packaging_parts,'load_business_cost_index',side_effect=RuntimeError('目录读取失败')):
             with self.assertRaisesRegex(RuntimeError,'目录读取失败'):cost_review_loading.saved('p')

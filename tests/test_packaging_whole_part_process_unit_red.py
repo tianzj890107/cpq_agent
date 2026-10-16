@@ -196,7 +196,10 @@ const window={dispatchEvent:()=>{},PackagingConclusionNotes:{basis:()=>({}),
                 self.assertEqual(['',''],[s['section_id'] for s in built['steps']])
                 packaging_route.confirm_route(PID,REQ_NO,actor=fixture.actor())
                 cost=packaging_cost.compute_project(PID,REQ_NO)
-            lines=[line for line in cost['items'] if line['formula_code']=='PKG-C-DIE-CUT']
+            # 使用当前明细口径的公式，不把整件防重复测试锁在已退役0903编号上。
+            from tech_app.backend.services import packaging_detail_cost
+            formula=packaging_detail_cost.select('die_cutting') or 'PKG-C-DIE-CUT'
+            lines=[line for line in cost['items'] if line['formula_code']==formula]
             self.assertEqual(2,len(lines))
             self.assertTrue(all(line['amount'] is not None for line in lines))
             self.assertEqual([2,2],[json.loads(line['inputs_json'])['usage_qty'] for line in lines])

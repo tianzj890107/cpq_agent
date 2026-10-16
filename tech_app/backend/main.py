@@ -3538,7 +3538,12 @@ async def generate_integration_process(
                 from .services import packaging_assembly
                 packaging_demo_flow.sync_integration(project_id,user)
                 plan=packaging_assembly.prepare(project_id,user,force=True,note=note,attachments=atts)
-            return _integration_payload(project_id,plan)
+            result = _integration_payload(project_id,plan)
+            from .services import packaging_assembly
+            result['task_status'] = packaging_assembly.recommendation_state(plan)
+            tasks.report_progress(f'已编制 {len(plan.process.steps) if plan.process else 0} 道跨零件组装工序；'
+                                  f'连接待补 {len(plan.process.open_questions) if plan.process else 0} 项')
+            return result
         plan = integration.load_plan(project_id)
         lookup = _integration_process_lookup(project_id, plan)
         result, coverage = integration.outline_process(

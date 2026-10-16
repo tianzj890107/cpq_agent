@@ -169,7 +169,9 @@ def build(project_id, doc, data, plan, records):
     process=getattr(plan,'process',None)
     process_steps=process.model_dump().get('steps',[]) if process else []
     from . import packaging_assembly
-    process_valid=packaging_assembly.valid(plan,active,records) and all(not p['stale'] and bool(p['plan'].get('steps')) for p in processes)
+    assembly_state=packaging_assembly.recommendation_state(plan)
+    usable_assembly=bool(process_steps) or assembly_state=='succeeded'
+    process_valid=usable_assembly and packaging_assembly.valid(plan,active,records) and all(not p['stale'] and bool(p['plan'].get('steps')) for p in processes)
     assembly_steps=[]
     if process:
         from ..models.process import ProcessPlan
@@ -188,6 +190,7 @@ def build(project_id, doc, data, plan, records):
         'selected_scheme_id':doc.get('selected_scheme_id'),'parts':parts,'layouts':projected_layouts,
         'individual_cuts':cuts,'part_processes':processes,'layout_parts':layout_parts,
         'assembly_steps':assembly_steps,'postprocess_steps':assembly_steps,
+        'assembly_result_state':assembly_state,
         'assembly_scope_changed':process is not None and not packaging_assembly.valid(plan,active,records),
         'assembly_summary':getattr(process,'summary','') if process else '',
         'assembly_questions':[q.model_dump() for q in process.open_questions] if process else [],

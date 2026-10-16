@@ -53,7 +53,9 @@ const aiPlan = () => aiData?.plan || {};
 // 两个「这一步做到哪了」的共享判定：左侧动作的可见性 / role 都由它们推导，
 // 不许各处各写一份（写散了就会出现「参数已经生成、按钮却还是生成」这类漂移）。
 const aiHasParams = () => Boolean(aiData?.status?.has_params);
-const aiHasProcess = () => Boolean(aiData?.status?.has_process);
+const aiHasProcess = () => Boolean(aiData?.status?.has_process)
+  && (aiIndustry !== 'packaging' || aiBusinessParts?.workspace?.assembly_steps?.length > 0
+      || aiBusinessParts?.workspace?.assembly_result_state === 'succeeded');
 
 /* 页签切换 + 重渲染。原先它只在 aiRegisterTechBoardActions 的闭包里用 const 声明，
    而「确认图纸并进入参数推荐」「确认并进入下一页签」这两个收口函数定义在外层，
@@ -288,9 +290,9 @@ function aiProcessCard(title) {
       const state = card.querySelector('.oc-alabel-state');
       // 中断沿用进行中的蓝色 chip：同一张卡、同一个 chip 就地翻转，不新增第二行。
       const interrupted = ok === 'interrupted';
-      card.setAttribute('data-status', interrupted ? 'interrupted' : ok ? 'completed' : 'failed');
-      state.className = `oc-alabel-state ${interrupted ? 'is-interrupted' : ok ? 'is-succeeded' : 'is-failed'}`;
-      state.textContent = interrupted ? '⏸ 中断' : ok ? '✓ 已完成' : '⚠ 失败';
+      card.setAttribute('data-status', interrupted ? 'interrupted' : ok === 'partial' ? 'partial' : ok ? 'completed' : 'failed');
+      state.className = `oc-alabel-state ${interrupted ? 'is-interrupted' : ok === 'partial' ? 'is-partial' : ok ? 'is-succeeded' : 'is-failed'}`;
+      state.textContent = interrupted ? '⏸ 中断' : ok === 'partial' ? '部分完成' : ok ? '✓ 已完成' : '⚠ 失败';
       settled = true;
       // 卡片收尾：仍是「进行中」的过程行（含折叠区里的结果行）一次性收成完成 ✓，
       // 界面上不再留圆圈。
@@ -341,8 +343,12 @@ function aiShowFailure(code, message, traceId) {
 
 /** 这一环节能不能开跑。返回空串表示可以，否则是拦下来的理由。 */
 function aiBlocker(tab) {
-  if(aiIndustry==='packaging')return tab==='process'?(aiBusinessParts?.workspace?.status?.['3.1']?.missing||[]).join('；')
-    :aiBusinessParts?.workspace?.scheme_ready===false?'请先选择当前图纸方案':'';
+  if(aiIndustry==='packaging') {
+    const board=aiBusinessParts?.workspace;
+    if(board?.scheme_ready===false)return '请先选择当前图纸方案';
+    if(tab==='process' && !(board?.parts || []).length)return '请先读取当前方案的业务零件';
+    return '';
+  }
   const state = aiData?.status || {};
   if (tab === 'params') return '';
   if (tab === 'process' && !state.has_params) return '请先完成「参数推荐」：组装工序要按整机 BOM 与连接关系来排。';
@@ -366,7 +372,7 @@ function aiPublishTask(name, extra) {
 // 已经发过同样事件时不再重复，失败时把真实原因原样带过去。
 let aiLastSettle = null;
 function aiRememberSettle(name, subject, extra) {
-  if (name !== 'task-completed' && name !== 'task-failed') return;
+  if (name !== 'task-completed' && name !== 'task-failed' && name !== 'task-partial') return;
   aiLastSettle = { event: name, subject: subject,
                    message: (extra && (extra.error || extra.message)) || '' };
 }
@@ -414,7 +420,7 @@ async function aiIntegrationStepInBackground(step, options) {
       aiSettleIfNeeded('task-failed', 'integrationStep',
         { message: (result.error && result.error.message) || '整合环节未完成，请查看右侧看板提示。' });
     } else {
-      aiSettleIfNeeded('task-completed', 'integrationStep');
+      aiSettleIfNeeded(result?.partial ? 'task-partial' : 'task-completed', 'integrationStep');
     }
   } catch (error) {
     aiSettleIfNeeded('task-failed', 'integrationStep',
@@ -455,12 +461,15 @@ async function aiPost(path, opts) {
     aiData = await aiPollTask(taskId, card, title);
     if(typeof aiIndustry!=='undefined' && aiIndustry==='packaging')await aiRefreshPackagingWorkspace();
     aiEditing[path] = false;
-    card.done(true);
-    aiStatus(`${title}已完成`);
-    aiPublishTask('task-completed', { taskId: taskId, label: title, status: 'succeeded' });
+    const partial = aiData?.task_status==='partial'
+      || (aiIndustry==='packaging' && path==='process' && aiBusinessParts?.workspace?.assembly_result_state==='partial');
+    card.done(partial ? 'partial' : true);
+    if(partial)card.log(['连接依据尚未齐全，已保留有效推荐；请查看工作区缺口，可重新生成。']);
+    aiStatus(partial ? `${title}部分完成，连接依据待补` : `${title}已完成`);
+    aiPublishTask(partial ? 'task-partial' : 'task-completed', { taskId: taskId, label: title, status: partial ? 'partial' : 'succeeded' });
     if (!keepTab) aiTab = path;
     aiRender();
-    return { ok: true };
+    return { ok: true, partial };
   } catch (error) {
     const message = error.message || `${title}失败`;
     const interrupted = aiTaskInterrupted(error);

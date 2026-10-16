@@ -344,6 +344,7 @@ class IntegrationPlan(BaseModel):
     process: Optional[ProcessPlan] = Field(None, description="组装工艺路线")
     packaging_assembly_scope: Optional[str] = None
     packaging_assembly_input_hash: Optional[str] = None
+    packaging_assembly_part_count: Optional[int] = None
     cost: Optional[CostAnalysis] = Field(None, description="整机成本测算")
     # 「参数推荐」的确认：整机参数与连接关系、BOM 由人核对过一遍才往下走。
     # 与 params_final 分开 —— 那个是最后交给报价前的收口，这个是这一环节本身的定稿。

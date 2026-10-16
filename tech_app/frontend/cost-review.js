@@ -1605,6 +1605,13 @@ const crLoadCoordinator = CPQCostReviewLoader.create({
     if(!crData){
       const retry=document.createElement('button');retry.className='inline-action';retry.textContent='重试读取';
       retry.onclick=()=>crStart();$cr('crBody').appendChild(retry);
+    } else {
+      document.getElementById('crVerificationRetry')?.remove();
+      const warning=document.createElement('div');warning.id='crVerificationRetry';warning.className='inline-card';
+      const text=document.createElement('div');text.className='inline-hint';
+      text.textContent='当前展示已保存的成本，核验尚未完成；确认与回传暂不可用。';
+      const retry=document.createElement('button');retry.className='inline-action';retry.textContent='重试核验';
+      retry.onclick=()=>crStart();warning.append(text,retry);$cr('crBody').prepend(warning);
     }
   }
 });

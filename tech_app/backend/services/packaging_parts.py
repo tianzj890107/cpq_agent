@@ -4320,6 +4320,25 @@ def load_business_parts(project_id: str,
     return None
 
 
+def load_business_cost_index(project_id: str) -> Dict[str, Any]:
+    """Read only current part names/usage; do not copy CAD candidates or old versions."""
+    def project(payload):
+        items = payload.get('items') or []
+        doc = next((item for item in items if isinstance(item, dict)), {})
+        result = {key: doc[key] for key in ('business_parts_id', 'business_parts_hash',
+                  'scheme_labels', 'selected_scheme_id', 'poc_demo') if key in doc}
+        rows = []
+        for part in doc.get('business_parts') or []:
+            row = {key: part[key] for key in ('business_part_code', 'name', 'scheme_id', 'quantity') if key in part}
+            for key in ('reference', 'authority', 'poc_inputs'):
+                values = part.get(key) or {}
+                row[key] = {k: values[k] for k in ('quantity', 'mock') if k in values}
+            rows.append(row)
+        result['business_parts'] = rows
+        return result
+    return get_backend().read_projected_doc(project_id, BUSINESS_DOC_KEY, project) or {}
+
+
 def business_parts_reference_document(reference: Any, geometry: Any, *,
                                       bindings: Any = None,
                                       thumbnails: Any = None) -> Dict[str, Any]:

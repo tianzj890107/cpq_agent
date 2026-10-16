@@ -34,6 +34,20 @@ assembly_connections逐条输出{id,name,part_codes,method,evidence}；part_code
 steps每道assembly_connection_ids标明实际完成的连接ID；每道说明哪些零件如何连接。
 不能用绑定全部零件的一道总装或终检代替多处裱合/粘接/安装。缺信息写open_questions。
 无依据不要编胶水牌号、压力或固化时间，不把推断写成CAD确认或库内标准工艺。'''
+SYSTEM += '''
+connection_candidates仅为名称角色线索，不是已确认连接；结合材料、组成及制造工序判断能否采用。
+已有完整制造路线不代表零件之间已经装配。可基于当前名称与材料提出低置信连接建议，明确evidence，
+不要因为没有CAD连接标注就一律返回空。无法判断时如实写open_questions，不强行关联。
+候选不完整，你仍需检查其余零件；不要把候选清单当成预期答案。'''
+
+
+def recommendation_state(plan):
+    process=plan.process
+    if process is None:return 'not_generated'
+    if process.open_questions:return 'partial'
+    if not process.steps and not process.assembly_connections and plan.packaging_assembly_part_count != 1:
+        return 'partial'
+    return 'succeeded'
 
 
 def active_inputs(project_id, doc=None, records=None):
@@ -95,7 +109,8 @@ def prepare(project_id, actor, *, run=None, force=False, note='', automatic=Fals
     doc,records=active_inputs(project_id)
     if not doc.get('business_parts'):raise ValueError('assembly_parts_missing')
     plan=integration.load_plan(project_id)
-    if not force and valid(plan,doc,records):return plan
+    if not force and valid(plan,doc,records) and (len(doc['business_parts'])<2
+            or plan.process.steps or plan.process.assembly_connections):return plan
     interfaces=plan.params.interfaces if plan.params else []
     known,unresolved=connections.known(doc,interfaces,records)
     context=[]
@@ -109,7 +124,8 @@ def prepare(project_id, actor, *, run=None, force=False, note='', automatic=Fals
                         for k in ('length_mm','width_mm')}} for s in row.get('sections') or []],
             'manufacturing_steps':[{k:s.get(k) for k in ('step_no','name','description','part_codes')}
                 for s in (records.get(row['business_part_code'],{}).get('plan') or {}).get('steps') or []]})
-    content=[{'type':'text','text':json.dumps({'parts':context,'connections':known,'unresolved_connections':unresolved,
+    content=[{'type':'text','text':json.dumps({'parts':context,'connections':known,
+        'connection_candidates':connections.candidate_pairs(doc),'unresolved_connections':unresolved,
         'requirement':plan.requirement_note,'note':note},ensure_ascii=False)}]
     content.extend(llm_client.attachment_blocks(attachments or []))
     try:
@@ -152,11 +168,14 @@ def prepare(project_id, actor, *, run=None, force=False, note='', automatic=Fals
             step.note=(step.note or '')+'；未知工时按整盒30秒预算分配，人工费率采用估算，来源保留'
         else:step.time_source=step.time_source or 'unknown'
     plan.process=result;plan.packaging_assembly_scope=SCOPE
+    plan.packaging_assembly_part_count=len(context)
     plan.packaging_assembly_input_hash=input_hash(doc,records,interfaces)
     plan.packaging_route_scheme_id=doc.get('selected_scheme_id')
-    plan.process_confirmed=automatic
-    plan.process_confirmed_by=actor.get('username') if automatic else None
-    plan.process_confirmed_at=now_cst_str() if automatic else None
+    # POC can retain/use valid partial operations; an empty unresolved result is never auto-confirmed.
+    adopted=automatic and (bool(result.steps) or recommendation_state(plan)=='succeeded')
+    plan.process_confirmed=adopted
+    plan.process_confirmed_by=actor.get('username') if adopted else None
+    plan.process_confirmed_at=now_cst_str() if adopted else None
     integration.save_plan(project_id,plan,actor.get('username',''))
     return plan
 
@@ -172,6 +191,7 @@ def save(project_id, result, actor):
     for step in result.steps:step.scope='project'
     result.part_class='packaging'
     plan.process=result;plan.packaging_assembly_scope=SCOPE
+    plan.packaging_assembly_part_count=len(doc.get('business_parts') or [])
     plan.packaging_assembly_input_hash=input_hash(doc,records,interfaces)
     plan.packaging_route_scheme_id=doc.get('selected_scheme_id')
     plan.process_confirmed=False;plan.process_confirmed_by=None;plan.process_confirmed_at=None

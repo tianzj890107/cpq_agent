@@ -33,6 +33,11 @@ def _now() -> str:
 # 接口
 # --------------------------------------------------------------------------- #
 class MetaBackend:
+    def read_projected_doc(self, pid: str, kind: str, project) -> Optional[dict]:
+        """Internal read-only projection; never expose cached mutable documents."""
+        value = self.get_doc(pid, kind)
+        return copy.deepcopy(project(value)) if value is not None else None
+
     def get_meta(self, pid: str) -> Optional[dict]: ...
     def put_meta(self, pid: str, meta: dict) -> None: ...
     def get_doc(self, pid: str, kind: str) -> Optional[dict]: ...
@@ -65,8 +70,10 @@ class JsonMetaBackend(MetaBackend):
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def _read(self, path: Path, *, head: Optional[int] = None, item_match=None) -> Optional[dict]:
+    def _read(self, path: Path, *, head: Optional[int] = None, item_match=None, project=None) -> Optional[dict]:
         def independent(value):
+            if project is not None:
+                return copy.deepcopy(project(value))
             if item_match is not None and isinstance(value, dict) and isinstance(value.get('items'), list):
                 field, expected = item_match
                 value = {**value, 'items': [item for item in value['items']
@@ -145,6 +152,9 @@ class JsonMetaBackend(MetaBackend):
 
     def get_doc_head(self, pid: str, kind: str, count: int = 1) -> Optional[dict]:
         return self._read(self.data_dir / pid / f"{kind}.json", head=max(0, count))
+
+    def read_projected_doc(self, pid: str, kind: str, project) -> Optional[dict]:
+        return self._read(self.data_dir / pid / f"{kind}.json", project=project)
 
     def get_doc_version(self, pid: str, kind: str, field: str, version: str) -> Optional[dict]:
         return self._read(self.data_dir / pid / f"{kind}.json", item_match=(field, version))

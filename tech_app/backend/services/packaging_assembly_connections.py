@@ -6,6 +6,32 @@ import re
 POLICY='assembly_connections/1'
 
 
+def candidate_pairs(doc):
+    """Weak lexical role hints for the model, never accepted connections or chargeable steps."""
+    rows=doc.get('business_parts') or []
+    result=[]
+    for face in rows:
+        name=re.sub(r'\s+','',str(face.get('name') or ''))
+        match=re.fullmatch(r'(.+?)(?:面纸|衬纸|包纸|贴纸)\d*',name)
+        if not match:continue
+        stem=match.group(1)
+        supports=[]
+        for backing in rows:
+            other=re.sub(r'\s+','',str(backing.get('name') or ''))
+            support=re.fullmatch(r'(.+?)(?:灰板|衬板|底板|纸板)\d*',other)
+            if backing is face:continue
+            if (support and support.group(1)==stem) or other==stem:
+                supports.append(backing)
+        # Several plausible layers are ambiguous. Do not turn pairwise combinations into glue facts.
+        if len(supports)!=1:continue
+        backing=supports[0]
+        result.append({'part_codes':[face['business_part_code'],backing['business_part_code']],
+            'name':str(face.get('name'))+' / '+str(backing.get('name')),
+            'evidence':'名称属于同一构件，分别为纸面和承托；只提示检查可能的裱合关系',
+            'source':'name_role_candidate','confidence':.4,'needs_model_judgement':True})
+    return result
+
+
 def generic(name):
     return bool(re.fullmatch(r'(?:整机|整盒|整体|全部零件)?(?:总装|组装|组装成盒)(?:[（(].*[）)])?',str(name).strip()))
 

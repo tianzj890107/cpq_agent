@@ -259,7 +259,8 @@ def _run(project_id: str, task_id: str, kind: str, fn: Callable[[], dict], cad: 
         # 任务函数自带 status=partial 时（CAD 逐件容错：有零件被跳过但仍有成功件），
         # 终态就是 partial —— 它是终态，轮询方不再等待，也不当失败。
         # 其余任务维持既有的 succeeded 语义，异常路径照旧 failed / interrupted。
-        partial = isinstance(result, dict) and result.get("status") == "partial"
+        partial = isinstance(result, dict) and (result.get("status") == "partial"
+                                               or result.get("task_status") == "partial")
         outcome = {
             "status": "partial" if partial else "succeeded",
             "progress": "部分完成" if partial else "完成",

@@ -14,7 +14,7 @@ def saved(project_id):
     if data.get('industry') != 'packaging':
         return None  # Other industries keep their existing source and rules.
     data = requirement_service.resolved_packaging_order_data(data)
-    doc = packaging_parts.load_business_parts(project_id) or {}
+    doc = packaging_parts.load_business_cost_index(project_id)
     row = da_repo.load_packaging_cost(project_id, requirement.get('requirement_no') or '')
     ledger = (packaging_cost._rehydrate(row, da_repo.load_packaging_cost_items(row['estimate_id']))
               if row else {'built': False, 'items': []})
