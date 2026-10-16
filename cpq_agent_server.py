@@ -4672,6 +4672,7 @@ def _handle_quick_quote_session_transfer(session_id: str, body, *, user=None) ->
         return _qq_error("quote_required", "还没有可转出的快速报价：先算价再转。", 409)
     try:
         import cpq_quote_files
+        import cpq_wf                       # 本函数内取业务实例，缺这一行 → NameError 被吞成 409
         quote = dict(quote)
         quote['attachment_refs'] = cpq_quote_files.list_session(session_id, user)
         quote['business_case_id'] = (cpq_wf.get_card(session_id) or {}).get('business_case_id') or ''

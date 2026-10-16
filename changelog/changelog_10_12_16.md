@@ -1,5 +1,12 @@
 # 2026-10-12 至 2026-10-16
 
+## 2026-10-16 快速报价转精准缺 import 修复（仅本地）
+
+- 排查“转精准报价”按钮从 10/14（b4484c8）起必坏的真实原因：`cpq_agent_server.py` 的`_handle_quick_quote_session_transfer` 只在函数体内 `import cpq_quote_files`，却直接调用了模块级从未绑定的 `cpq_wf.get_card(...)`；真实请求触发 `NameError`，又被同函数 `except Exception` 吞成 409，前端只看到英文内部名，既不落库也不报清原因。
+- 修复：在该函数内按同文件既有约定补 `import cpq_wf`，不改任何口径、判据、落库与权限；入口 `quick-quote-panel.js` / `报价首页.html` 的转精准链路随之恢复。
+- 用 stdlib `symtable` 的全仓 undefined-name 回归（`test_tech_backend_undefined_names_dynamic`）把这一类“静态测试看不见、一发请求就 500”的缺陷守住；并扫描 `scripts/`、`open_claude/` 确认无同类漏网。
+- 复验：`test_tech_backend_undefined_names_dynamic` 与 `test_quick_quote_full_flow_state_and_recovery_red` 共 25 项通过；未连库、未改线上项目。
+
 ## 2026-10-16 系统库定价恢复、报价单父件分组与金额到分（仅本地）
 
 - 新Spec `packaging-rule-pricing-and-drawing-presentation`；最初8项专项测试实际出现10处失败，另补Word成本版本失配、共用报价十进制舍入红测并实际失败后实现。包装第3/4步接回原 `md_clm_material_price_rule` 定价/报价规则通道，移除人工毛利率及固定手填加价入口，保留同款“读取系统库并重算”按钮；服务端取原会话成本/商务上下文、校验负责销售和成本指纹后保存规则、表达式、命中金额与报价，刷新只恢复，成本变化或计算失败不伪装成功。
