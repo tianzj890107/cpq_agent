@@ -104,7 +104,7 @@ console.log(JSON.stringify({result,unchanged:before===JSON.stringify(old)}));
         self.assertIn('inline', responses[0].headers['content-disposition'])
         self.assertIn('attachment', responses[1].headers['content-disposition'])
 
-    def test_unmarked_project_does_not_receive_maotai_attachment(self):
+    def test_unmarked_packaging_project_uses_fixed_pdf_per_latest_decision(self):
         from tech_app.backend import main
         from tech_app.backend.services.packaging_requirement_document import build_snapshot
         with patch.object(main, '_workflow_project', return_value={}), \
@@ -112,7 +112,7 @@ console.log(JSON.stringify({result,unchanged:before===JSON.stringify(old)}));
              patch.object(main.store, 'load_requirement', return_value={'data': {'industry': 'packaging'}}), \
              patch.object(main.store, 'load_meta', return_value={}):
             response = main.get_requirement_pdf('P', user={'role': 'engineer'})
-        self.assertNotEqual(PDF_SHA, hashlib.sha256(response.body).hexdigest())
+        self.assertEqual(PDF_SHA, hashlib.sha256(response.body).hexdigest())
         self.assertTrue(response.body.startswith(b'%PDF'))
 
     def test_packaging_merged_approval_does_not_ask_missing_field_confirmation(self):

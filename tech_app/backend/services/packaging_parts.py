@@ -4320,6 +4320,17 @@ def load_business_parts(project_id: str,
     return None
 
 
+def load_business_process_context(project_id: str, part_code: str) -> Dict[str, Any]:
+    """工艺读回仅需当前件和身份；投影在缓存文档复制前执行，不复制整图候选。"""
+    def project(payload):
+        doc = next((item for item in (payload.get('items') or []) if isinstance(item, dict)), {})
+        result = {key: doc[key] for key in ('business_parts_id', 'business_parts_hash') if key in doc}
+        result['business_parts'] = [row for row in doc.get('business_parts') or []
+                                    if isinstance(row, dict) and str(row.get('business_part_code') or '') == part_code]
+        return result
+    return get_backend().read_projected_doc(project_id, BUSINESS_DOC_KEY, project) or {'business_parts': []}
+
+
 def load_business_cost_index(project_id: str) -> Dict[str, Any]:
     """Read only current part names/usage; do not copy CAD candidates or old versions."""
     def project(payload):

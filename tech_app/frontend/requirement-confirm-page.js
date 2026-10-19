@@ -96,7 +96,7 @@ function cfBind() {
 function cfBindOriginalPdf() {
   const modal = document.querySelector('#formModal');
   const open = original => {
-    modal.querySelector('.modal-title').textContent = original ? '原始参考附件（非当前项目数据版）' : '当前项目工艺需求单';
+    modal.querySelector('.modal-title').textContent = original ? '原始参考附件（非当前项目数据版）' : cfPdfInfo.mode === 'reference' ? '工艺需求单' : '当前项目工艺需求单';
     modal.querySelector('iframe').src = cfPdfUrl(false, original);
     const link = modal.querySelector('.modal-link');
     link.href = cfPdfUrl(true, original); link.textContent = original ? '下载原始参考附件' : '下载当前需求单';
@@ -104,7 +104,7 @@ function cfBindOriginalPdf() {
   };
   document.querySelector('#previewForm').onclick = () => open(false);
   document.querySelector('#viewForm').onclick = () => open(false);
-  if (!cfPdfInfo.original_available) return;
+  if (cfPdfInfo.mode === 'reference' || !cfPdfInfo.original_available) return;
   const button = document.createElement('button'); button.type = 'button';
   button.id = 'viewOriginalRequirement'; button.className = 'pdf-action-btn';
   button.textContent = '原始参考附件'; button.onclick = () => open(true);

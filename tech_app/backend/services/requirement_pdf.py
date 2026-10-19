@@ -16,6 +16,11 @@ def supplied_requirement_pdf(saved: dict, meta: dict) -> bytes | None:
     """客户提供的演示需求表原件；不替换别的包装项目或它的图纸。"""
     if not has_original_pdf(saved, meta):
         return None
+    return fixed_packaging_requirement_pdf()
+
+
+def fixed_packaging_requirement_pdf() -> bytes:
+    """当前包装需求单固定展示原件；动态生成器保留，但默认入口不启用。"""
     return (Path(__file__).resolve().parents[1] / 'assets/maotai-wine-requirement.pdf').read_bytes()
 
 
@@ -134,10 +139,10 @@ def _pdf(objects: list[bytes]) -> bytes:
 
 
 def build_requirement_pdf(requirement: dict, project: dict | None = None) -> bytes:
-    """根据当前已保存的需求字段生成多页中文 PDF 表单。"""
+    """包装返回固定需求单；其他行业根据当前已保存字段生成表单。"""
     data = requirement.get("data") or {}
     if data.get('industry') == 'packaging':
-        return render_packaging_snapshot(build_packaging_snapshot(requirement, project or {}))
+        return fixed_packaging_requirement_pdf()
     lines: list[tuple[str, int]] = [
         ("工艺评估需求单", 18),
         (f"需求编号：{_plain(requirement.get('requirement_no'))}    创建时间：{_plain(requirement.get('created_at'))}", 9),

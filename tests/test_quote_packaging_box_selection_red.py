@@ -477,6 +477,12 @@ class DPickSameSourceAsTechParams(PackagingCase):
 # E. 接不住给出口 + 不回归（Spec §2.5 / §3）
 # --------------------------------------------------------------------------- #
 class EExitAndNoRegression(PackagingCase):
+    def test_candidate_handoff_button_label_is_adopt(self):
+        import re
+        button = re.search(r'<button class="cand-btn pick" data-handoff="1">(.*?)</button>', self.html)
+        self.assertIsNotNone(button)
+        self.assertEqual('采用', re.sub(r'<[^>]+>', '', button.group(1)))
+
     def test_e1_new_tooling_says_so_and_offers_the_exit(self):
         module = self.assert_quote_module()
         fake = self.tech(REQ_OK, [BOX_DRAWER, BOX_DRAWER2])

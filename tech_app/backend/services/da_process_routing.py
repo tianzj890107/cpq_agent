@@ -1,11 +1,13 @@
 """DA routing evidence via CPQ's authenticated read-only bridge."""
 import copy
+import hashlib
 import json
 import os
 import threading
 import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import Future
 from . import cpq_kb_client
 from .packaging_part_route_match import is_external_part, normalize_part_name, rank_route_features
 
@@ -29,6 +31,8 @@ CACHE_TTL_SECONDS = _ttl_default()
 _CACHE_MAX = 512
 _cache_lock = threading.Lock()
 _cache = {}
+_inflight_lock = threading.Lock()
+_inflight = {}
 # 缓存是**显式开启**的：只有进了 `cache_scope()`（单个工艺请求的处理期间）才生效。
 # 这样直接调用 `for_row` 的读侧/测试不会被跨调用记忆污染（同一入参的两次读取仍各自读桥）。
 _scope_lock = threading.Lock()
@@ -90,38 +94,59 @@ def _cache_put(key, value):
     with _cache_lock:
         if len(_cache) >= _CACHE_MAX:
             _cache.clear()
-        _cache[key] = (time.monotonic() + ttl, value)
+        _cache[key] = (time.monotonic() + ttl, copy.deepcopy(value))
 
 
 def _fetch(product_item_code, name):
-    key = ('route', str(product_item_code or ''), str(name or ''))
-    cached = _cache_get(key)
-    if cached is not None:
-        return cached
     query=urllib.parse.urlencode({'product_item_code':product_item_code,'name':name})
-    req=urllib.request.Request(cpq_kb_client._base()+'/wf/tech/process-routing?'+query,
-        headers={cpq_kb_client.INTERNAL_TOKEN_HEADER:cpq_kb_client._internal_token(),
-                 'Accept':'application/json'})
-    with urllib.request.urlopen(req,timeout=cpq_kb_client.CPQ_KB_TIMEOUT_SECONDS) as response:
-        payload=json.load(response)
-    if not isinstance(payload,dict) or not payload.get('ok'):
-        raise ValueError('invalid bridge response')
-    _cache_put(key, payload)
-    return payload
+    return _bridge_read(query)
 
 def _fetch_candidates():
-    key = ('candidates',)
-    cached = _cache_get(key)
-    if cached is not None:
-        return cached
-    req=urllib.request.Request(cpq_kb_client._base()+'/wf/tech/process-routing?mode=packaging_candidates',
-        headers={cpq_kb_client.INTERNAL_TOKEN_HEADER:cpq_kb_client._internal_token(),'Accept':'application/json'})
-    with urllib.request.urlopen(req,timeout=cpq_kb_client.CPQ_KB_TIMEOUT_SECONDS) as response:
-        payload=json.load(response)
-    if not isinstance(payload,dict) or not payload.get('ok'):
-        raise ValueError('invalid candidate bridge response')
-    _cache_put(key, payload)
-    return payload
+    return _bridge_read('mode=packaging_candidates')
+
+
+def _bridge_read(query):
+    base = cpq_kb_client._base()
+    token = cpq_kb_client._internal_token()
+    key = (base, hashlib.sha256(token.encode()).hexdigest(), query)
+
+    def read():
+        req = urllib.request.Request(base+'/wf/tech/process-routing?'+query,
+            headers={cpq_kb_client.INTERNAL_TOKEN_HEADER: token, 'Accept': 'application/json'})
+        with urllib.request.urlopen(req, timeout=cpq_kb_client.CPQ_KB_TIMEOUT_SECONDS) as response:
+            payload = json.load(response)
+        if not isinstance(payload, dict) or not payload.get('ok'):
+            raise ValueError('invalid candidate bridge response' if query == 'mode=packaging_candidates'
+                             else 'invalid bridge response')
+        return payload
+
+    if not cache_enabled() or CACHE_TTL_SECONDS <= 0:
+        return read()
+    # 同键合并，不在网络请求期间持锁；不同件/数据源仍可并发。
+    with _inflight_lock:
+        cached = _cache_get(key)
+        if cached is not None:
+            return cached
+        future = _inflight.get(key)
+        leader = future is None
+        if leader:
+            future = Future()
+            _inflight[key] = future
+    if not leader:
+        return copy.deepcopy(future.result())
+    try:
+        payload = read()
+        _cache_put(key, payload)
+        # 所有调用者（包括首个）都拿副本，避免结果被某一件后续处理污染。
+        future.set_result(payload)
+        return copy.deepcopy(payload)
+    except BaseException as exc:
+        future.set_exception(exc)
+        raise
+    finally:
+        with _inflight_lock:
+            if _inflight.get(key) is future:
+                _inflight.pop(key, None)
 
 
 def _similar_route(row, payload):

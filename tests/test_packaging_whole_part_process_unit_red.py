@@ -83,7 +83,7 @@ const window={dispatchEvent:()=>{},PackagingConclusionNotes:{basis:()=>({}),
         legacy={'part_code':'P','plan':plan(),'sections':[{'section_id':'IN','plan':plan()}]}
         namespace={'__name__':'tech_app.backend.main','__package__':'tech_app.backend',
                    'Depends':Depends,'current_user':lambda:None,'_workflow_project':lambda p:None,
-                   '_packaging_business_part_row':lambda *a:{'doc':{},'row':row()},
+                   '_packaging_business_part_row':lambda *a,**k:{'doc':{},'row':row()},
                    'packaging_parts':parts,'_packaging_part_conclusion_version':lambda *a:{'business_stale':False}}
         exec(compile(ast.Module(body=[fn],type_ignores=[]),'whole-part-read','exec'),namespace)
         before=copy.deepcopy(legacy)

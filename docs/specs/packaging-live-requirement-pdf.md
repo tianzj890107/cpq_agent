@@ -1,5 +1,7 @@
 # 包装需求单：参考版式、实时数据与原件分离
 
+> 当前已停用默认动态入口：用户最新决定见 `packaging-fixed-requirement-pdf.md`。以下保留为动态能力的实现记录与独立测试约定，不代表当前页面启用。
+
 日期：2026-10-19。替代 `packaging-demo-requirement-process-handoff` §2 的默认固定原件约定，其余流程不变。
 
 实施状态：已本地实现，ReportLab 4.4.10 与 Droid Sans Fallback 中文字体随包配置；无推送、无部署。原件SHA不变。首批8项实际1失败/7项缺实现错误后实现，后续补充来源、方案、历史成本、缓存和真实DOM检查。

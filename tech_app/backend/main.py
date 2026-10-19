@@ -6580,22 +6580,22 @@ def get_requirement(project_id: str):
     meta = _workflow_project(project_id) or {}
     saved = store.load_requirement(project_id)
     return {"requirement": saved, 'requirement_pdf': {
+        'mode': 'reference' if ((saved or {}).get('data') or {}).get('industry') == 'packaging' else 'dynamic',
         'original_available': requirement_pdf.has_original_pdf(saved or {}, meta)}}
 
 
 @app.get("/api/projects/{project_id}/requirement/pdf")
 def get_requirement_pdf(project_id: str, download: bool = False, user: dict = Depends(current_user)):
-    """生成当前需求单的真实 PDF；确认与审核页共用同一份可追溯表单。"""
+    """包装展示固定原件；其他行业动态生成，确认与审核页共用入口。"""
     _workflow_project(project_id)
     saved = store.load_requirement(project_id) or {}
     # 项目存在但还没建需求单：给一张空白表单（200），不再用 404 与 ACL 的「项目不存在」混淆。
     meta = store.load_meta(project_id) or {}
     if (saved.get('data') or {}).get('industry') == 'packaging':
-        from .services.packaging_requirement_document import load_snapshot
         try:
-            content = requirement_pdf.render_packaging_snapshot(load_snapshot(project_id, saved, meta))
-        except (ImportError, OSError) as exc:
-            raise HTTPException(503, '动态需求单生成组件或中文字体不可用，请联系管理员') from exc
+            content = requirement_pdf.build_requirement_pdf(saved, meta)
+        except OSError as exc:
+            raise HTTPException(503, '固定需求单PDF暂不可用，请联系管理员') from exc
     else:
         content = requirement_pdf.build_requirement_pdf(saved, meta)
     filename = f"requirement_{saved.get('requirement_no') or project_id}.pdf"
@@ -9565,9 +9565,10 @@ PACKAGING_BUSINESS_PART_COST_PATH = \
     "/api/projects/{pid}/requirement/packaging-business-parts/{code}/cost"
 
 
-def _packaging_business_part_row(pid: str, code: str) -> Dict[str, Any]:
+def _packaging_business_part_row(pid: str, code: str, *, process_read: bool = False) -> Dict[str, Any]:
     """取一件业务部件；清单读不到 / 没有这一件都按 404 说清（先导入对照表）。"""
-    doc = packaging_parts.load_business_parts(pid) or {}
+    doc = (packaging_parts.load_business_process_context(pid, code) if process_read
+           else packaging_parts.load_business_parts(pid)) or {}
     row = next((item for item in (doc.get("business_parts") or [])
                 if isinstance(item, dict)
                 and str(item.get("business_part_code") or "") == code), None)
@@ -9886,7 +9887,7 @@ def get_packaging_business_part_process(pid: str, code: str,
     `assumptions` / `source` + 版本七键），另加这四键说清"这份工序是按什么尺寸、哪条路编的"。
     """
     _workflow_project(pid)
-    loaded = _packaging_business_part_row(pid, code)
+    loaded = _packaging_business_part_row(pid, code, process_read=True)
     record = packaging_parts.load_part_process(pid, code) or {}
     body = {"part_code": str(record.get("part_code") or code),
             "sections": record.get('sections') or [],

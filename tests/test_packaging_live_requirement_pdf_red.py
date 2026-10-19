@@ -31,17 +31,41 @@ class LiveRequirementPdf(unittest.TestCase):
     def build(self, req=None, **kwargs):
         return requirement_pdf.build_packaging_snapshot(req or requirement(), {}, **kwargs)
 
-    def test_maotai_default_no_longer_returns_fixed_example(self):
+    def test_packaging_default_returns_fixed_pdf_without_dynamic_reads(self):
         from tech_app.backend import main
         req = requirement(); req['title'] = '茅台当前实际订单'
         with patch.object(main, '_workflow_project', return_value={}), \
              patch.object(main.store, 'load_requirement', return_value=req), \
-             patch('tech_app.backend.services.packaging_requirement_document.load_snapshot', side_effect=lambda pid, saved, meta: self.build(saved)), \
+             patch('tech_app.backend.services.packaging_requirement_document.load_snapshot', side_effect=AssertionError('动态读取不应启用')), \
+             patch.object(requirement_pdf, 'render_packaging_snapshot', side_effect=AssertionError('动态渲染不应启用')), \
              patch.object(main.store, 'load_meta', return_value={}):
             response = main.get_requirement_pdf('ROUND', user={'role': 'engineer'})
-        self.assertNotEqual(ORIGINAL_SHA, hashlib.sha256(response.body).hexdigest())
-        self.assertIn('408', text(response.body))
-        self.assertIn('157', text(response.body))
+        self.assertEqual(ORIGINAL_SHA, hashlib.sha256(response.body).hexdigest())
+
+    def test_packaging_service_entry_also_uses_fixed_pdf(self):
+        with patch.object(requirement_pdf, 'render_packaging_snapshot', side_effect=AssertionError('动态渲染不应启用')):
+            pdf = requirement_pdf.build_requirement_pdf(requirement())
+        self.assertEqual(ORIGINAL_SHA, hashlib.sha256(pdf).hexdigest())
+
+    def test_fixed_mode_metadata_and_missing_asset_do_not_fall_back(self):
+        from fastapi import HTTPException
+        from tech_app.backend import main
+        with patch.object(main, '_workflow_project', return_value={}), \
+             patch.object(main.store, 'load_requirement', return_value=requirement()), \
+             patch.object(main.store, 'load_meta', return_value={}):
+            self.assertEqual('reference', main.get_requirement('ROUND')['requirement_pdf']['mode'])
+            with patch.object(requirement_pdf, 'fixed_packaging_requirement_pdf', side_effect=FileNotFoundError), \
+                 patch.object(requirement_pdf, 'render_packaging_snapshot') as render:
+                with self.assertRaises(HTTPException) as error:
+                    main.get_requirement_pdf('ROUND', user={'role': 'engineer'})
+                self.assertEqual(503, error.exception.status_code)
+                render.assert_not_called()
+
+    def test_non_packaging_still_renders_saved_data(self):
+        req = {'title': '独立非包装需求', 'data': {'industry': 'battery'}}
+        with patch.object(requirement_pdf, 'fixed_packaging_requirement_pdf', side_effect=AssertionError('不能替换其他行业')):
+            pdf = requirement_pdf.build_requirement_pdf(req)
+        self.assertIn('独立非包装需求', text(pdf))
 
     def test_current_data_and_missing_values_not_template_numbers(self):
         req = requirement(); before = copy.deepcopy(req)
@@ -97,7 +121,7 @@ class LiveRequirementPdf(unittest.TestCase):
         self.assertNotEqual(one['data_hash'], two['data_hash'])
         self.assertIn('1.01', text(requirement_pdf.render_packaging_snapshot(one)))
 
-    def test_download_preview_same_data_and_edit_refreshes_document(self):
+    def test_download_preview_remain_fixed_when_form_changes(self):
         from tech_app.backend import main
         req = requirement(); req['title'] = '茅台当前实际订单'
         req['data']['requirement_pdf_template'] = 'maotai_wine_box'
@@ -110,8 +134,8 @@ class LiveRequirementPdf(unittest.TestCase):
             self.assertEqual(one.body, download.body)
             req['data']['inner_length'] = 420
             updated = main.get_requirement_pdf('ROUND', user={'role': 'engineer'})
-        self.assertNotEqual(one.body, updated.body)
-        self.assertIn('420 × 408 × 50.5 mm', text(updated.body))
+        self.assertEqual(one.body, updated.body)
+        self.assertEqual(ORIGINAL_SHA, hashlib.sha256(updated.body).hexdigest())
 
     def test_original_other_project_is_404_and_acl_is_checked_first(self):
         from fastapi import HTTPException
@@ -269,6 +293,11 @@ check(document.querySelector('iframe').getAttribute('src')==='/document?download
 check(document.querySelector('.modal-link').getAttribute('href')==='/document?download=true','default download wrong');
 document.querySelector('#viewOriginalRequirement').remove();cfPdfInfo={original_available:false};cfBindOriginalPdf();
 check(!document.querySelector('#viewOriginalRequirement'),'original shown for unrelated project');
+cfPdfInfo={mode:'reference',original_available:true};cfBindOriginalPdf();
+check(!document.querySelector('#viewOriginalRequirement'),'duplicate original button in fixed mode');
+document.querySelector('#viewForm').click();
+check(document.querySelector('.modal-title').textContent==='工艺需求单','fixed PDF claims live project data');
+check(document.querySelector('iframe').getAttribute('src')==='/document?download=false','fixed default route wrong');
 document.querySelector('#probe').textContent='PASS';
 }catch(error){document.querySelector('#probe').textContent='FAIL: '+error.stack}
 """
