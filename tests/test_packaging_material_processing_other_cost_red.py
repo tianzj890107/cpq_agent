@@ -71,7 +71,8 @@ class NewPresentation(unittest.TestCase):
         self.assertEqual(0,p.returncode,p.stderr)
         html=p.stdout
         self.assertTrue('加工' in html.split('<details')[0])
-        self.assertTrue('组装人工' in html.split('<details')[1])
+        self.assertIn('open',html.split('<details')[1].split('>')[0])
+        self.assertNotIn('组装人工',html)
         self.assertNotIn('模具摊销',html);self.assertNotIn('运输费',html)
         js=(ROOT/'tech_app/frontend/cost-review.js').read_text()
         self.assertIn('<th>材料</th><th>加工</th><th>其他费用</th>',js)
@@ -82,7 +83,7 @@ class NewPresentation(unittest.TestCase):
         script="const assert=require('assert');const esc=String;const crMoney=v=>Number(v||0).toFixed(2);"
         script+="const crData={packaging_cost:{built:true,quote_quantity:1000},expense_policy:"+json.dumps(packaging_cost.EXPENSE_POLICY)+",final:{material:2,processing:6,labor:.3,packaging:1,other:0,others:1.3,total:9.3},parts_total:{material:2,processing:6,others:0,total:8},counts:{parts:2,parts_costed:2},unit_cost:9.3,order_total_cost:9300};"
         script+=js_function(path,'crPackagingBreakdown')+js_function(path,'crRenderTotal')
-        script+="const html=crRenderTotal();assert(html.includes('<th>材料</th><th>加工</th><th>其他费用</th>'));assert(html.includes('6.00</span></td><td><span class=\"number\">1.30'));assert(html.includes('组装人工'));assert(!html.includes('运输费'));assert(!html.includes('模具摊销'));assert(html.includes('9300.00'));"
+        script+="const html=crRenderTotal();assert(html.includes('<th>材料</th><th>加工</th><th>其他费用</th>'));assert(html.includes('6.00</span></td><td><span class=\"number\">1.30'));assert(!html.includes('组装人工'));assert(!html.includes('运输费'));assert(!html.includes('模具摊销'));assert(html.includes('9300.00'));"
         result=subprocess.run(['node','-e',script],capture_output=True,text=True)
         self.assertEqual(0,result.returncode,result.stderr)
 

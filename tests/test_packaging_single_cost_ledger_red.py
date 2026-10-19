@@ -198,7 +198,8 @@ crRunPackagingLedger().then(result => {
 const assert = require('assert'); const crMoney = value => Number(value||0).toFixed(2);
 ''' + source[a:b] + '''
 const html = crPackagingBreakdown({material:14.7,labor:.3,processing:8.03,packaging:.2,other:0,tooling:0,freight:0,others:.5});
-assert(html.includes('材料')); assert(html.includes('组装人工')); assert(html.split('<details')[0].includes('加工'));
+assert(html.includes('材料')); assert(!html.includes('组装人工')); assert(!html.includes('历史人工')); assert(html.split('<details')[0].includes('加工'));
+assert(html.includes('其他费用 0.50')); assert(html.includes('<details class="inline-row" open>'));
 assert(!html.includes('模具摊销')); assert(!html.includes('运输费'));
 assert(!html.includes('制造费用')); assert(html.includes('<details'));
 '''

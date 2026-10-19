@@ -2,6 +2,7 @@
 import math
 import json
 import hashlib
+from cpq_money import money, total as money_total
 
 KEYS = ('material', 'labor', 'processing', 'tooling', 'packaging', 'freight', 'other')
 TOTAL_KEYS = dict(zip(KEYS, ('material_total', 'labor_total', 'process_total',
@@ -198,10 +199,14 @@ def project(doc, ledger, *, include_details=True, detail_part_id=None):
          'total_cost':ledger.get('total_cost'), 'items':ledger.get('items') or [],
          'parts':[{key:row.get(key) for key in ('id','quantity','unit_cost','subtotal')} for row in rows]},
         ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
+    # 与报价回传共用“先取单价到分，再乘订单数量”的结算口径。
+    # 原始账和对账仍保持公式精度；仅整件结算读模型采用到分的单价。
+    raw_unit_cost = final['total']
+    final['total'] = money(raw_unit_cost)
     return {'parts': rows, 'parts_total': _breakdown(allocated), 'final': final,
         'display_version': display_version,
-        'unit_cost':final['total'], 'quote_quantity':_number(ledger.get('quote_quantity')),
-        'order_total_cost':final['total'] * _number(ledger.get('quote_quantity')) if _number(ledger.get('quote_quantity')) else None,
+        'unit_cost':final['total'], 'raw_unit_cost':raw_unit_cost, 'quote_quantity':_number(ledger.get('quote_quantity')),
+        'order_total_cost':money_total(final['total'], _number(ledger.get('quote_quantity'))) if _number(ledger.get('quote_quantity')) else None,
         'cost_unit':'元/只', 'expense_policy':policy,
         'cost_audit':{'largest_items':audit_items[:10],
             'minimum_charge_rows':sum(r['min_charge_applied'] for r in audit_items),
@@ -209,7 +214,7 @@ def project(doc, ledger, *, include_details=True, detail_part_id=None):
         'assembly': {'id': '__assembly__', 'name': '包装整单成本', 'kind': 'assembly',
             'has_cost': usable, 'quantity': 1, 'unit_cost': final['total'], 'subtotal': final['total'],
             'breakdown': final if built else {}, 'cost_stale': built and stale,
-            'summary': '材料 + 工艺加工费 + 其他费用（组装人工、包装及其它项目费用）；同一份账汇总，不重复计费' if current_policy else '历史成本口径，需重算后使用当前费用分类', 'open_questions': len(ledger.get('gaps') or [])},
+            'summary': '材料 + 工艺加工费 + 其他费用；同一份账汇总，不重复计费' if current_policy else '历史成本口径，需重算后使用当前费用分类', 'open_questions': len(ledger.get('gaps') or [])},
         'counts': {'parts': len(rows), 'parts_costed': len(rows) - len(missing),
             'missing': missing, 'zero': zero, 'assembly_costed': usable},
         'ready': bool(rows) and usable and not missing and not zero,

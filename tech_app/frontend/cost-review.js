@@ -517,10 +517,10 @@ function crPackagingBreakdown(breakdown) {
   const labels = {material:'材料', processing:'加工'};
   const historical = typeof crData !== 'undefined' && crData?.packaging_cost?.built
     && crData?.expense_policy !== 'material_processing_assembly_other_no_tooling_freight/2';
-  const extras = {labor:historical?'历史人工（待重算）':'组装人工', packaging:'包装费', other:'其它项目费用'};
+  const extras = {packaging:'包装费', other:'其它项目费用'};
   const main = Object.entries(labels).map(([key,label]) =>
     `<span class="cr-part"><i>${label}</i>${crMoney(breakdown[key])}</span>`).join('');
-  return main + `<details class="inline-row"><summary>其他费用 ${crMoney(breakdown.others)}</summary>`
+  return main + `<details class="inline-row" open><summary>其他费用 ${crMoney(breakdown.others)}</summary>`
     + Object.entries(extras).map(([key,label]) =>
       `<span class="cr-part"><i>${label}</i>${crMoney(breakdown[key])}</span>`).join('')
     + (historical && (Number(breakdown.tooling)||Number(breakdown.freight))
@@ -639,7 +639,7 @@ function crCostDetailHtml(row) {
   let html = `<div class="inline-hint">按当前已保存公式账查看，打开详情不重算。批量 ${esc(crData?.packaging_cost?.quote_quantity ?? '未取得')} 只；每套用量 ${esc(row.quantity ?? '未取得')} 件。</div>`;
   if (!row.has_cost) html += `<div class="inline-warn">${row.cost_stale ? '当前为历史成本，依据已变化，需重算后使用。' : '当前成本尚未完整测算，以下仅展示已保存依据。'}</div>`;
   html += `<div class="inline-totals"><span>材料 ${crMoney(totalsAvailable ? row.breakdown?.material : null)}</span><span>实际加工费 ${crMoney(totalsAvailable ? row.breakdown?.processing : null)}</span><span>单件 ${crMoney(totalsAvailable ? row.unit_cost : null)}</span><span>每套小计 ${crMoney(totalsAvailable ? row.subtotal : null)} 元</span></div>`
-    + '<div class="inline-hint">面板显示两位小数；单件合计使用未舍入金额相加后再舍入，不能用已显示的两项两位小数反推合计。制造人工计入对应零件加工；组装人工与出货包材归整单其他费用，不重复计费。</div>';
+    + '<div class="inline-hint">面板显示两位小数；单件合计使用未舍入金额相加后再舍入，不能用已显示的两项两位小数反推合计。制造人工计入对应零件加工；出货包材及其他项目费用归整单其他费用，不重复计费。</div>';
   const details = row.calculation_details || [];
   if (!details.length) return html + '<div class="inline-empty">没有已保存的逐项计算依据；请完成测算后查看，系统不会编造公式。</div>';
   for (const category of ['material','processing']) {
@@ -729,7 +729,7 @@ function crRenderAssembly() {
   if (!row) return `<div class="inline-empty">还没有整机方案。</div>`;
   let html = `<section class="inline-card"><div class="inline-card-title">${crData?.packaging_cost ? '整单成本' : '组装成本'} · ${esc(row.name)}</div>`
     + `<div class="inline-hint">${crData?.packaging_cost
-      ? '材料与工艺加工费单列；其他费用仅组装人工、出货包材和其它项目费用。制造人工归零件加工，已含人工的加工公式不重复计费。'
+      ? '材料与工艺加工费单列；其他项目费用统一归入其他费用，不重复计费。'
       : '整机成本已包含零件成本，再加组装人工与费用，不与零件合计重复相加。'}</div>`;
   if (!row.has_cost) {
     html += `<div class="inline-warn">⚠ ${crData?.packaging_cost ? '整单成本待测算或已过期，请刷新同一份公式成本账。' : '还没算过整机成本，请先算零件再算整机。'}</div>`;
