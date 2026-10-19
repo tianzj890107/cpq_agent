@@ -3825,7 +3825,7 @@ def _build_quote_docx(data: dict):
         from cpq_commercial_quote import with_context
         package=(cpq_wf.step_snapshot(sid,2) or {}).get('packaging_package') or {}
         commercial=packaging_document(with_context(saved,package,basic))
-        label='演示报价单，不得用于正式交易' if demo_only else '报价单'
+        label='报价单'
         data = dict(data,projectName=saved.get('product_name') or '包装产品',customer=basic.get('客户') or saved.get('customer') or '',
             projectCode='',steps=[{'step':6,'name':label,'sections':commercial['sections']}])
     try:
@@ -3835,10 +3835,8 @@ def _build_quote_docx(data: dict):
     doc = docx.Document()
     proj = (data.get("projectName") or "报价单").strip()
     doc.add_heading("报价单 · " + proj, level=0)
-    if demo_only:
-        doc.add_paragraph('演示报价单，不得用于正式交易。')
     meta = []
-    if data.get("customer"):
+    if saved is None and data.get("customer"):
         meta.append("客户：" + str(data["customer"]))
     if data.get("projectCode"):
         meta.append("项目编码：" + str(data["projectCode"]))

@@ -85,10 +85,10 @@ def expand(records, *, templates=None, box_type_code=""):
                 steps.append(step)
     return steps
 
-def collect(project_id):
+def collect(project_id, document=None):
     from . import packaging_parts
     from . import packaging_layout
-    doc=packaging_layout.active_business_document(packaging_parts.load_business_parts(project_id) or {})
+    doc=packaging_layout.active_business_document(document if document is not None else (packaging_parts.load_business_parts(project_id) or {}))
     rows=doc.get('business_parts') or []
     records=[]
     missing=[]

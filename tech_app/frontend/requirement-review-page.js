@@ -71,7 +71,29 @@ function rrPublishTaskEvent(type, extra) {
   } catch (_) { /* 独立打开无运行时 */ }
 }
 
-async function rrSubmit(){const decision=document.querySelector('input[name="opinion"]:checked').value,comment=document.querySelector('#reviewText').value.trim();if(rrRequirement.status!=='pending_review'){rrToast('当前需求不在待审核状态，请先完成前序确认。',true);return {ok:false,error:{code:'invalid-status',message:'当前需求不在待审核状态。'}};}let waiver=null;if(decision==='approve'&&rrGaps.length){const go=window.confirm(`这一步还有 ${rrGaps.length} 项没完成：\n${rrGaps.join('、')}\n\n确定要带着这些缺口批准通过吗？（点「确定」＝仍要继续）`);if(!go){rrToast(`已停在审核这一步，请先补齐：${rrGaps.join('、')}`,true);return {ok:false,error:{code:'gap-unconfirmed',message:`还有没完成的项：${rrGaps.join('、')}`}};}waiver={reason:`带缺口继续：${rrGaps.join('、')}`,missing_fields:rrGaps};}const taskId=`requirement-review-${decision}`;rrPublishTaskEvent('task-progress',{taskId,status:'running',progress:decision==='approve'?'正在提交审核通过…':'正在提交审核退回…'});try{await api(`/api/projects/${rrPid}/requirement/review`,{method:'POST',body:JSON.stringify(waiver?{decision,comment,waiver}:{decision,comment})});rrPublishTaskEvent('task-completed',{taskId,status:'succeeded'});rrToast(decision==='approve'?'审核通过，已进入图纸解析。':'需求已驳回，已退回创建页。');setTimeout(()=>{if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.requestNavigate(decision==='approve'?'drawing':'requirement-create',rrPid);return;}location.href=decision==='approve'?`index.html?project=${encodeURIComponent(rrPid)}`:`requirement-create.html?project=${encodeURIComponent(rrPid)}`},400);return {ok:true};}catch(err){rrPublishTaskEvent('task-failed',{taskId,status:'failed',error:err.message});rrToast(err.message,true);return {ok:false,error:{code:'action-failed',message:err.message}};}}
+async function rrSubmit(){
+  const decision=document.querySelector('input[name="opinion"]:checked').value;
+  const comment=document.querySelector('#reviewText').value.trim();
+  if(rrRequirement.status!=='pending_review'){
+    rrToast('当前需求不在待审核状态，请先完成前序确认。',true);
+    return {ok:false,error:{code:'invalid-status',message:'当前需求不在待审核状态。'}};
+  }
+  let waiver=null;
+  if(decision==='approve'&&rrGaps.length&&rrRequirement?.data?.industry!=='packaging'){
+    const go=window.confirm(`这一步还有 ${rrGaps.length} 项没完成：\n${rrGaps.join('、')}\n\n确定要带着这些缺口批准通过吗？（点「确定」＝仍要继续）`);
+    if(!go){rrToast(`已停在审核这一步，请先补齐：${rrGaps.join('、')}`,true);return {ok:false,error:{code:'gap-unconfirmed',message:`还有没完成的项：${rrGaps.join('、')}`}};}
+    waiver={reason:`带缺口继续：${rrGaps.join('、')}`,missing_fields:rrGaps};
+  }
+  const taskId=`requirement-review-${decision}`;
+  rrPublishTaskEvent('task-progress',{taskId,status:'running',progress:decision==='approve'?'正在提交审核通过…':'正在提交审核退回…'});
+  try{
+    await api(`/api/projects/${rrPid}/requirement/review`,{method:'POST',body:JSON.stringify(waiver?{decision,comment,waiver}:{decision,comment})});
+    rrPublishTaskEvent('task-completed',{taskId,status:'succeeded'});
+    rrToast(decision==='approve'?'审核通过，已进入图纸解析。':'需求已驳回，已退回创建页。');
+    setTimeout(()=>{if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.requestNavigate(decision==='approve'?'drawing':'requirement-create',rrPid);return;}location.href=decision==='approve'?`index.html?project=${encodeURIComponent(rrPid)}`:`requirement-create.html?project=${encodeURIComponent(rrPid)}`},400);
+    return {ok:true};
+  }catch(err){rrPublishTaskEvent('task-failed',{taskId,status:'failed',error:err.message});rrToast(err.message,true);return {ok:false,error:{code:'action-failed',message:err.message}};}
+}
 async function rrStart(){if(!rrPid){if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.exitToTechHome();return}location.href='home.html';return}try{const [response,pre]=await Promise.all([api(`/api/projects/${rrPid}/requirement`),api(`/api/projects/${rrPid}/requirement/precheck`).catch(()=>({}))]);rrRequirement=response.requirement;rrGaps=(pre&&pre.gaps&&Array.isArray(pre.gaps.labels))?pre.gaps.labels.slice():[];if(!rrRequirement){window.TechEmbed&&window.TechEmbed.embedded?window.TechEmbed.navigateToFile('requirement-create.html',rrPid):location.href=`requirement-create.html?project=${encodeURIComponent(rrPid)}`;return}rrRender()}catch(err){document.querySelector('#app').innerHTML=`<div class="page-toast error" style="position:static">页面加载失败：${rrEsc(err.message)}</div>`}}
 rrStart();
 

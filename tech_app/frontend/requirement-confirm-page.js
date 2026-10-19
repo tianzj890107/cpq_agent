@@ -28,6 +28,18 @@ function cfPrecheckRows() {
     return `<tr class="${rowClass.trim()}"><td class="item-name">${cfEsc(item)}</td><td class="confirm-result"><span class="${status === 'ok' ? 'ok' : 'need-info'}">${result}</span></td><td class="confirm-supplement">${cfEsc(detail)}</td></tr>`;
   }).join('');
 }
+
+// 老AI检查只投影同名目录；未命中项回到当前字段规则，不重跑模型或改写历史。
+function cfCurrentCheck(ruleCheck, savedCheck) {
+  if (cfRequirement?.data?.industry !== 'packaging' || savedCheck?.engine !== 'qwen') return savedCheck?.engine === 'qwen' ? savedCheck : ruleCheck;
+  const rows = Array.isArray(savedCheck.items) ? savedCheck.items : [];
+  const items = (ruleCheck.items || []).map(row => {
+    const match = rows.find(old => old.item === row.item);
+    return match && row.status === 'ok' ? {...row, status: match.status, detail: match.detail} : row;
+  });
+  return {...ruleCheck, items, engine: savedCheck.engine, model: savedCheck.model,
+    model_source: savedCheck.model_source, checked_at: savedCheck.checked_at};
+}
 // 缺口口径只来自后端预检（/requirement/precheck 的 gaps 或 AI 检查结果），本页不另写一套。
 function cfGaps() {
   const gaps = cfPrecheck && cfPrecheck.gaps;
@@ -120,7 +132,7 @@ async function cfAct(kind) {
   if (kind === 'return' && !CF_RETURNABLE_STATUSES.includes(status)) { cfToast('当前需求已经是草稿，不需要退回。', true); return { ok: false, error: { code: 'invalid-status', message: '当前需求已经是草稿。' } }; }
   // L2 缺口不硬拦：有没完成的项时先问「仍要继续」，点继续就把签字交给既有 /requirement/confirm。
   let waiver = null;
-  if (kind === 'confirm') {
+  if (kind === 'confirm' && cfRequirement?.data?.industry !== 'packaging') {
     const gaps = cfGaps();
     if (gaps.length) {
       const go = window.confirm(`这一步还有 ${gaps.length} 项没完成：\n${gaps.join('、')}\n\n确定要带着这些缺口继续吗？（点「确定」＝仍要继续）`);
@@ -147,7 +159,7 @@ async function cfAct(kind) {
 
 async function cfStart() {
   if (!cfPid) { if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.exitToTechHome();return;} location.href = 'home.html'; return; }
-  try { const [req,project,ruleCheck] = await Promise.all([api(`/api/projects/${cfPid}/requirement`),api(`/api/projects/${cfPid}`),api(`/api/projects/${cfPid}/requirement/precheck`)]); cfRequirement = req.requirement; if (!cfRequirement) { window.TechEmbed&&window.TechEmbed.embedded?window.TechEmbed.navigateToFile('requirement-create.html',cfPid):location.href = `requirement-create.html?project=${encodeURIComponent(cfPid)}`; return; } cfProject = project; cfPrecheck = cfRequirement.ai_check?.engine === 'qwen' ? cfRequirement.ai_check : ruleCheck; cfRender(); }
+  try { const [req,project,ruleCheck] = await Promise.all([api(`/api/projects/${cfPid}/requirement`),api(`/api/projects/${cfPid}`),api(`/api/projects/${cfPid}/requirement/precheck`)]); cfRequirement = req.requirement; if (!cfRequirement) { window.TechEmbed&&window.TechEmbed.embedded?window.TechEmbed.navigateToFile('requirement-create.html',cfPid):location.href = `requirement-create.html?project=${encodeURIComponent(cfPid)}`; return; } cfProject = project; cfPrecheck = cfCurrentCheck(ruleCheck, cfRequirement.ai_check); cfRender(); }
   catch (err) { document.querySelector('#app').innerHTML = `<div class="page-toast error" style="position:static">页面加载失败：${cfEsc(err.message)}</div>`; }
 }
 cfStart();

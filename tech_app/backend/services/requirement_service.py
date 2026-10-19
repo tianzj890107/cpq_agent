@@ -778,8 +778,15 @@ def requirement_precheck(project_id: str, doc: RequirementDoc) -> dict:
         ("七、备注与附件（Section G）", [], "原始图纸已上传"),
     ]
     if industry=='packaging':
-        checks=[('需求名称',['title'],'已提供产品需求'),*product_checks,
-                ('交期',['first_sample_due'],'已提供交期')]
+        # 仅此检查投影使用兼容值，不把标题/正文写回或虚构规格字段。
+        data = dict(data)
+        data['project_name'] = data.get('project_name') or meta.get('project_name') or meta.get('name') or doc.title
+        data['description'] = data.get('description') or data.get('quote_requirement_text')
+        product_checks = [row for row in product_checks if row[0].startswith(('3.1 ', '3.2 ', '3.3 ', '3.4 ', '3.5 '))]
+        required = list(dict.fromkeys(key for _, keys, _ in product_checks for key in keys))
+        checks=[('一.项目名称',['project_name'],'已提供项目名称'),
+                ('二.需求',['description'],'已提供需求描述'),
+                ('三.产品技术规格',required,'产品技术规格已录入'),*product_checks]
     items = []
     dynamic_values = {
         str(field.get("key") or ""): field.get("value")
@@ -794,8 +801,9 @@ def requirement_precheck(project_id: str, doc: RequirementDoc) -> dict:
             elif not meta.get("source_filename"):
                 ok_message = '报价需求已承接，图纸将在2.1解析步骤上传'
         if missing:
+            display_missing = [field_label(key) for key in missing] if industry == 'packaging' else missing
             items.append({"item": label, "status": "need_info",
-                          "detail": f"待补充：{', '.join(missing)}", "missing": list(missing)})
+                          "detail": f"待补充：{', '.join(display_missing)}", "missing": list(missing)})
         else:
             items.append({"item": label, "status": "ok", "detail": ok_message})
     needs = [row for row in items if row["status"] == "need_info"]

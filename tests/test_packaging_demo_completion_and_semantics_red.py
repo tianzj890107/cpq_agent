@@ -47,8 +47,8 @@ class DemoCompletion(unittest.TestCase):
         if raw is None:self.skipTest('python-docx unavailable')
         with zipfile.ZipFile(io.BytesIO(raw)) as doc:
             text=doc.read('word/document.xml').decode()
-        self.assertIn('演示报价单',text)
-        self.assertIn('不得用于正式交易',text)
+        self.assertNotIn('演示报价单',text)
+        self.assertNotIn('不得用于正式交易',text)
         self.assertNotIn('CLIENT_FAKE_PRICE',text)
 
     def test_clean_demo_still_is_not_a_formal_quote(self):
@@ -69,7 +69,7 @@ class DemoCompletion(unittest.TestCase):
         result = quote_step_completion_gate(6, {'packaging_package':pkg, 'packaging_quote':priced})
         self.assertTrue(result['ok'], result)
         self.assertTrue(priced['publish_blocked'])
-        self.assertIn('演示报价单', quote.document(priced)['markdown'])
+        self.assertNotIn('演示报价单', quote.document(priced)['markdown'])
         with self.assertRaises(quote.PricingError):quote.document(priced, publish=True)
         with self.assertRaises(quote.PricingError):quote.price(pkg, gross_margin_rate=.25, publish=True)
 

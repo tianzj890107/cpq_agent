@@ -146,12 +146,15 @@ def prepare_names(project_id, actor):
     return True
 
 
-def prepare_route(project_id,actor, *, regenerate_assembly=False, note='', attachments=None, prepare_associations=True):
-    ensure_inputs(project_id,actor)
+def prepare_route(project_id,actor, *, regenerate_assembly=False, note='', attachments=None, prepare_associations=True, confirmed_only=False):
+    if not confirmed_only:
+        ensure_inputs(project_id,actor)
     from . import packaging_process_instances
     from . import tasks
     collected=packaging_process_instances.collect(project_id)
     if collected['missing'] or not collected['active']:
+        if confirmed_only:
+            raise ValueError('当前零件工艺已变化，请重新生成并确认工艺')
         tasks.report_progress(f'项目路线准备：仅补齐缺失工艺 {len(collected["missing"])} 件，其他有效工艺直接复用')
         generated=packaging_demo_inputs.prepare_processes(project_id,actor=actor.get('username',''))
         if generated['failures']:raise ValueError('demo_process_incomplete:'+str(generated['failures']))

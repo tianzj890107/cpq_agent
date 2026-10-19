@@ -6,9 +6,24 @@ ReportLab、系统中文字体或网络安装包，适合内网精简容器部�
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from . import industry_templates
+
+
+def supplied_requirement_pdf(saved: dict, meta: dict) -> bytes | None:
+    """客户提供的演示需求表原件；不替换别的包装项目或它的图纸。"""
+    data = saved.get('data') or {}
+    if data.get('industry') != 'packaging':
+        return None
+    names = [saved.get('title'), data.get('project_name'), data.get('packaging_product_name'),
+             data.get('product_name'), meta.get('name'), meta.get('project_name')]
+    selected = data.get('requirement_pdf_template')
+    if selected != 'maotai_wine_box' and not (not selected and any(
+            '茅台' in str(name or '') for name in names)):
+        return None
+    return (Path(__file__).resolve().parents[1] / 'assets/maotai-wine-requirement.pdf').read_bytes()
 
 
 _LABELS = {

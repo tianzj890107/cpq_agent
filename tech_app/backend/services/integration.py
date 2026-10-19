@@ -1066,13 +1066,22 @@ def confirm_process(project_id: str, user: Optional[dict] = None) -> Integration
     """
     username, display = _flow_actor(user)
     plan = load_plan(project_id)
+    if ((store.load_requirement(project_id) or {}).get('data') or {}).get('industry')=='packaging':
+        from . import packaging_process_confirmation, auth
+        if (user or {}).get('role') not in auth.WRITE_ROLES:
+            raise IntegrationFlowError('需要负责项目的工艺人员确认')
+        current = packaging_process_confirmation.status(project_id, plan=plan)
+        if not current['ready']:
+            raise IntegrationFlowError('请先完成当前全部零件的工艺推荐')
+        if current['confirmed']:
+            return plan
+        plan.packaging_process_confirmation = {'input_hash': current['input_hash'],
+            'confirmed_by': display, 'confirmed_at': now_cst_str()}
+        save_plan(project_id, plan, username)
+        store.audit(project_id, 'packaging_part_process_confirmed', plan.packaging_process_confirmation)
+        return plan
     if plan.process is None:
         raise IntegrationFlowError("还没有组装工艺结果，无法确认")
-    if ((store.load_requirement(project_id) or {}).get('data') or {}).get('industry')=='packaging':
-        from . import packaging_assembly
-        doc,records=packaging_assembly.active_inputs(project_id)
-        if not packaging_assembly.valid(plan,doc,records):
-            raise IntegrationFlowError('请先生成当前方案绑定零件的新增组装工艺')
     plan.process_confirmed = True
     plan.process_confirmed_by = display
     plan.process_confirmed_at = now_cst_str()
@@ -1103,9 +1112,15 @@ def send_to_finance(project_id: str, user: Optional[dict] = None, *,
     """
     # cost_review 反向依赖本模块，函数内延迟导入，避免形成导入环。
     packaging=((store.load_requirement(project_id) or {}).get('data') or {}).get('industry')=='packaging'
+    if packaging:
+        from . import packaging_process_confirmation
+        if not packaging_process_confirmation.status(project_id)['confirmed']:
+            raise IntegrationFlowError('请先确认当前工艺')
+        if target_type != 'user' or not str(target_user_id or '').strip():
+            raise IntegrationFlowError('请选择接收的报价人员')
     if packaging and not draft:
         from . import packaging_demo_flow
-        packaging_demo_flow.prepare_route(project_id,user or {})
+        packaging_demo_flow.prepare_route(project_id,user or {},confirmed_only=True)
         return _send_packaging_finance_draft(project_id,user,product_name=product_name,note=note,
             target_type=target_type,target_role_code=target_role_code,target_user_id=target_user_id,token=token,draft=False)
     if draft:
@@ -1208,8 +1223,11 @@ def _send_packaging_finance_draft(project_id: str, user: Optional[dict], *, prod
     if not parts.get("business_parts") or not route.get("built") or not route.get("steps") or route.get("stale"):
         raise IntegrationFlowError("请先生成当前版本的包装零件清单与包装路线，不能发送空白或过期草稿")
     source_hash = str(parts.get("business_parts_hash") or "")
+    confirmation_hash = str(plan.packaging_process_confirmation.get('input_hash') or '')
     if plan.finance_handoff and plan.finance_handoff.task_id:
-        if plan.finance_handoff.source_business_parts_hash == source_hash:
+        if (plan.finance_handoff.source_business_parts_hash == source_hash
+                and plan.finance_handoff.source_process_confirmation_hash == confirmation_hash
+                and plan.finance_handoff.target_user_id == str(target_user_id or '')):
             return plan
         raise IntegrationFlowError("已有报价人员交接任务，请先处理原任务，不重复派发")
     username, display = _flow_actor(user)
@@ -1234,8 +1252,11 @@ def _send_packaging_finance_draft(project_id: str, user: Optional[dict], *, prod
     plan.finance_handoff = FinanceHandoff(task_id=str(result["task_id"]),
         task_no=str(result.get("task_no") or ""), target_role_name=str(result.get("target_role_name") or "报价人员"),
         target_type=str(result.get("target_type") or target_type or "role"),
+        target_user_id=str(result.get('target_user_id') or target_user_id or ''),
+        target_username=str(result.get('target_username') or ''),
         target_name=str(result.get("target_name") or ""), sent_at=now_cst_str(), sent_by=display,
-        draft=draft, source_business_parts_hash=source_hash)
+        draft=draft, source_business_parts_hash=source_hash,
+        source_process_confirmation_hash=confirmation_hash)
     if not draft:
         # 用户实际确认的是零件工艺交接，不伪造已取消的参数/组装审批。
         plan.confirmed=True;plan.confirmed_by=username;plan.confirmed_at=now_cst_str()

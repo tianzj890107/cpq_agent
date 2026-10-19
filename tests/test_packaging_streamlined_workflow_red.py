@@ -171,11 +171,12 @@ if(restore({requirement:{status:'pending_review',data:{industry:'packaging'}}},{
         doc={'business_parts_hash':'H','business_parts':[{'business_part_code':'A','name':'纸面'}]}
         with patch.object(integration.store,'load_requirement',return_value=req),\
              patch.object(integration,'load_plan',return_value=plan),patch.object(integration,'save_plan'),patch.object(integration.store,'audit'),\
+             patch('tech_app.backend.services.packaging_process_confirmation.status',return_value={'confirmed':True}),\
              patch.object(packaging_demo_flow,'prepare_route') as prepare,patch.object(packaging_parts,'load_business_parts',return_value=doc),\
              patch.object(packaging_route,'load_route',return_value={'built':True,'steps':[{'step_name':'包盒'}]}),\
              patch.object(cost_review,'load_review'),patch.object(cost_review,'save_review'),\
              patch.object(integration.cpq_bridge,'send_to_finance',return_value={'task_id':'T','target_role_name':'报价人员'}) as send:
-            result=integration.send_to_finance('P',{'username':'PE1','role':'engineer'},token='TEST')
+            result=integration.send_to_finance('P',{'username':'PE1','role':'engineer'},token='TEST',target_type='user',target_user_id='FINANCE-ID')
             prepare.assert_called_once();send.assert_called_once()
             self.assertEqual('T',result.finance_handoff.task_id)
             self.assertFalse(result.finance_handoff.draft)
@@ -225,17 +226,15 @@ state.industry='battery';if(visibleMajors().length!==5||visibleStages().length!=
         result=subprocess.run(['node','-e',script],capture_output=True,text=True)
         self.assertEqual(0,result.returncode,result.stderr)
 
-    def test_actual_drawing_send_action_routes_directly_to_pricing(self):
+    def test_actual_drawing_send_action_opens_person_picker_without_navigation(self):
         from tests.test_packaging_whole_part_process_unit_red import js_function
         path=Path(__file__).resolve().parents[1]/'tech_app/frontend/app.js'
         script="""
-let currentProject='P';const API='',calls=[],window={TechEmbed:{requestNavigate:s=>calls.push(s)}};
-const fetch=async(url,options)=>{calls.push(url);const b=JSON.parse(options.body);
-if(b.target_role_code!=='finance_mgr')throw Error('role changed');return {ok:true,json:async()=>({finance:{task_id:'T'}})};};
+let currentProject='P';const API='',calls=[],window={TechEmbed:{requestNavigate:s=>calls.push(s)},
+PackagingHandoff:{open:options=>{calls.push(options.projectId);return {ok:true}}}};
 """+js_function(path,'sendPackagingPartsToPricing')+"""
 sendPackagingPartsToPricing().then(result=>{
-if(!result.ok||result.result.task_id!=='T'||calls[1]!=='cost')throw Error('handoff failed');
-if(calls.some(c=>c==='process'))throw Error('removed stage entered');
+if(!result.ok||calls.length!==1||calls[0]!=='P')throw Error('person picker not opened or page navigated');
 }).catch(e=>{console.error(e);process.exit(1)});
 """
         result=subprocess.run(['node','-e',script],capture_output=True,text=True)

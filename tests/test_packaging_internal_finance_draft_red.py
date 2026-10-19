@@ -12,6 +12,7 @@ class InternalFinanceDraftTest(unittest.TestCase):
         parts = {'business_parts_id': 'b1', 'business_parts_hash': 'h1',
                  'business_parts': [{'business_part_code': 'BP1', 'name': '圆底板'}]}
         with patch.object(integration, 'load_plan', return_value=plan), \
+             patch('tech_app.backend.services.packaging_process_confirmation.status', return_value={'confirmed': True}), \
              patch.object(integration.store, 'load_requirement', return_value=requirement), \
              patch.object(packaging_route, 'load_route', return_value={'built': True, 'steps': [{'name': '模切'}]}), \
              patch.object(packaging_parts, 'load_business_parts', return_value=parts), \
@@ -19,7 +20,7 @@ class InternalFinanceDraftTest(unittest.TestCase):
                  'task_id': 'task1', 'task_no': 'COST-1'}) as bridge, \
              patch.object(integration, 'save_plan'), patch.object(integration.store, 'audit'):
             result = integration.send_to_finance('p1', {'username': 'PE1'}, draft=True,
-                                                target_type='role', target_role_code='finance_mgr')
+                                                target_type='user', target_user_id='FINANCE-ID')
         self.assertFalse(result.confirmed)
         self.assertFalse(result.params_confirmed)
         self.assertFalse(result.process_confirmed)

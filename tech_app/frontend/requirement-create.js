@@ -274,7 +274,7 @@ rcPersist=async function(submit){
     rcPendingWaiver=null;
     const missingEntries=rcRequiredFieldEntries();
     const missing=rcRequiredFieldErrors(missingEntries);
-    if(missing.length){
+    if(missing.length && rcData().industry !== 'packaging'){
       const go=window.confirm(`这一步还有 ${missing.length} 项没填好：\n${missing.join('、')}\n\n确定要带着这些缺口继续吗？（点「确定」＝仍要继续）`);
       if(!go){rcToast(`请先填写必填项：${missing.join('、')}`,true);rcFocusFirstRequiredField(missingEntries);return;}
       rcPendingWaiver={reason:`带缺口继续：${missing.join('、')}`,missing_fields:missing};

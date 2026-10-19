@@ -764,11 +764,22 @@ def send_to_finance(user: dict, session_id: str, title: str, customer: str = "",
     if user.get("role_code") != "process_mgr":
         raise BridgeError(
             f"只有工艺经理能把工艺发给报价人员测算；当前是「{user.get('role_name')}」")
-    return _side_task(user, session_id, title, customer, project_name,
+    recipient = None
+    packaging = (((payload or {}).get('tech_cost') or {}).get('requirement') or {}).get('industry') == 'packaging'
+    if target_type == 'user' and packaging:
+        recipient = next((row for row in cpq_auth.list_users()
+                          if str(row.get('user_id')) == str(target_user_id)), None)
+        if (not recipient or recipient.get('role_code') != 'finance_mgr'
+                or recipient.get('status') not in (None, '', 'active')):
+            raise BridgeError('请选择有效的报价人员')
+    result = _side_task(user, session_id, title, customer, project_name,
                       cpq_wf.TASK_KIND_TECH_COST,
                       note or "工艺与整机参数已确认，请做成本测算", payload or {},
                       target_user_id=target_user_id, target_type=target_type,
                       target_role_code=target_role_code)
+    if recipient:
+        result.update(target_username=recipient['username'], target_user_id=str(recipient['user_id']))
+    return result
 
 
 def _repair_missing_packaging_snapshot(conn, existing, result):

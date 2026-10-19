@@ -2486,6 +2486,12 @@ def _confirm_integration_process(project_id: str) -> dict:
         plan = integration.confirm_process(project_id, _actor_user())
     except integration.IntegrationFlowError as exc:
         return {"applied": False, "action": "confirm-process", "error": str(exc)}
+    if integration.requirement_industry(project_id) == 'packaging':
+        from . import packaging_process_confirmation
+        state = packaging_process_confirmation.status(project_id, plan=plan)
+        return {'applied': state['confirmed'], 'action': 'confirm-process',
+                'packaging_process_confirmed': state['confirmed'], 'confirmed_by': state['confirmed_by'],
+                'note': '零件工艺已确认，请点击发送至报价人员并选择接收人。'}
     return {"applied": True, "action": "confirm-process", "process_confirmed": True,
             "confirmed_by": plan.process_confirmed_by or "",
             "status": _integration_status(project_id),

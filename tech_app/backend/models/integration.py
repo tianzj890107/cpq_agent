@@ -311,6 +311,9 @@ class FinanceHandoff(BaseModel):
     sent_by: Optional[str] = None
     draft: bool = False
     source_business_parts_hash: str = ""
+    source_process_confirmation_hash: str = ""
+    target_user_id: str = ""
+    target_username: str = ""
 
 
 class IntegrationWaiver(BaseModel):
@@ -339,6 +342,7 @@ class IntegrationPlan(BaseModel):
     requirement_note: str = Field("", description="用户在 2.2 输入的整合需求(参与参数推荐)")
     quantity: int = Field(1, description="成本测算的核算批量(台)")
     packaging_cut_settings: dict = Field(default_factory=dict, description="包装开料余量配置，不改变成品需求")
+    packaging_process_confirmation: dict = Field(default_factory=dict, description="当前包装零件工艺的人工确认及输入版本")
     drawings: List[IntegrationDrawing] = Field(default_factory=list, description="整合图纸")
     params: Optional[IntegrationParamPlan] = Field(None, description="参数推荐结果")
     process: Optional[ProcessPlan] = Field(None, description="组装工艺路线")

@@ -30,7 +30,12 @@ window.fetch = (url, opts = {}) => {
       headers: Object.assign({}, opts.headers, { Authorization: "Bearer " + authToken }),
     });
   }
-  return _fetch(url, opts);
+  const change = typeof url === 'string' && !['GET','HEAD'].includes(String(opts.method || 'GET').toUpperCase())
+    && url.match(/\/api\/projects\/([^/]+)\/(?:requirement\/packaging-business-parts(?:\/|$)|parts\/[^/]+\/process(?:\/|$))/);
+  const changingProject = change && decodeURIComponent(change[1]);
+  if (changingProject) window.PackagingHandoff?.beginChange(changingProject);
+  const result = _fetch(url, opts);
+  return changingProject ? result.finally(()=>window.PackagingHandoff?.endChange(changingProject)) : result;
 };
 // 媒体 URL(<img>/STL 无法带请求头)用 ?token= 透传
 const mediaUrl = (u) =>
@@ -3462,12 +3467,9 @@ function packagingBusinessPartRows(doc) {
 
 async function sendPackagingPartsToPricing(){
   if(!currentProject)return {ok:false,error:{message:'请先打开项目'}};
-  const response=await fetch(`${API}/api/projects/${currentProject}/integration/send-to-finance`,{
-    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_type:'role',target_role_code:'finance_mgr'})});
-  const result=await response.json();
-  if(!response.ok)return {ok:false,error:{message:typeof result.detail==='string'?result.detail:(result.detail?.message||'发送失败')}};
-  window.TechEmbed?.requestNavigate('cost',currentProject);
-  return {ok:true,result:{message:'已发送报价人员核算成本',task_id:result.finance?.task_id}};
+  const project=currentProject;
+  return window.PackagingHandoff.open({projectId:project,isCurrent:()=>currentProject===project,
+    onSent:()=>status('已发送至报价人员')});
 }
 
 // 业务部件行的「单件工艺 / 成本」目标解析（Spec
@@ -5079,6 +5081,7 @@ async function refreshPackagingParts() {
   if (!isCurrentRead() || currentProject !== loadingProject) return null;
   currentPackagingParts = parts;
   currentPackagingBusinessParts = business;
+  if (business?.business_parts?.length) window.PackagingHandoff?.refresh(loadingProject).catch(()=>{});
   renderTree(currentIR || {});
   const supplement = async () => {
   if (!isCurrentRead() || currentProject !== loadingProject) return;
@@ -6010,6 +6013,7 @@ function parseActionReadiness(input) {
 
 async function openProject(pid) {
   currentProject = pid;
+  window.PackagingHandoff?.activate(pid);
   currentSelectedId = null;
   diffPick = []; $("diffView").innerHTML = "";
   // 装载态与首屏占位（Spec C1 / C4）：进函数第一件事就说"在读"，并在**发第一个请求之前**
@@ -7330,6 +7334,8 @@ function markPartProcessReady(projectId, partId) {
 }
 function partsProcessComplete() {
   if (!drawingParsed()) return false;
+  if (typeof currentPackagingBusinessParts !== 'undefined' && currentPackagingBusinessParts?.business_parts?.length)
+    return Boolean(window.PackagingHandoff?.current(currentProject).ready);
   const parts = (currentIR && currentIR.parts) || [];
   if (!parts.length) return false;
   return parts.every((part) => processReadyParts.has(partProcessKey(currentProject, part.part_id)));
@@ -7339,7 +7345,16 @@ function partsProcessComplete() {
 function refreshBoardActionState() {
   const runtime = window.TechBoardRuntime;
   if (runtime && typeof runtime.refreshState === "function") runtime.refreshState();
+  if (currentProject && currentPackagingBusinessParts?.business_parts?.length)
+    window.PackagingHandoff?.refresh(currentProject).catch(error=>status('工艺确认状态读取失败：'+error.message,true));
 }
+
+window.addEventListener('agent:task-progress', event => {
+  const detail = event.detail || {};
+  if (!currentProject || !/工艺|解析/.test(String(detail.label || ''))) return;
+  if (['queued','running'].includes(detail.status)) window.PackagingHandoff?.invalidate(currentProject);
+  else window.PackagingHandoff?.refresh(currentProject).catch(()=>{});
+});
 
 /* 首次进入已有 IR 的项目：按当前零件表各只读探一次，复用 partHasExistingProcess；
    同一份零件表只探一次，并发只放一个在跑（单飞）。 */
@@ -7725,21 +7740,31 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
         }
         const requirement=await fetch(`${API}/api/projects/${currentProject}/requirement`).then(r=>r.json());
         const packaging=Boolean(requirement?.requirement?.data?.industry==='packaging');
-        if(packaging)return sendPackagingPartsToPricing();
+        if(packaging){
+          try{
+            if(window.PackagingHandoff.current(currentProject).error){
+              await window.PackagingHandoff.refresh(currentProject);
+              return {ok:true,result:{message:'工艺状态已重新读取'}};
+            }
+            await window.PackagingHandoff.confirm(currentProject);
+            return {ok:true,result:{message:'工艺已确认，请选择报价人员发送'}};
+          }catch(error){return {ok:false,error:{message:error.message}};}
+        }
         window.TechEmbed.requestNavigate("process", currentProject);
         return { ok: true };
       },
       // 单行对象字面量：与同文件既有条目一致，避免多行 `})` 打断按行取块的静态契约。
       // 主按钮三段式：只有全部零件都有工艺推荐之后，确认才是主按钮。
-      getState: () => ({ label:packagingBusinessPartRows(currentPackagingBusinessParts).length?'确认工艺并发送报价人员':'确认解析结果',
-                         visible: drawingParsed(), enabled: true, busy: false,
-                         role: partsProcessComplete() ? "primary" : "aux" }),
+      getState: () => ({ label:window.PackagingHandoff?.current(currentProject).error?'重新读取工艺状态':packagingBusinessPartRows(currentPackagingBusinessParts).length?'确认工艺':'确认解析结果',
+                         visible: drawingParsed() && !window.PackagingHandoff?.current(currentProject).confirmed,
+                         enabled: currentPackagingBusinessParts?.business_parts?.length ? Boolean(window.PackagingHandoff?.current(currentProject).ready || window.PackagingHandoff?.current(currentProject).error) && !allPartsProcessBusy : true,
+                         busy: false, role: currentPackagingBusinessParts?.business_parts?.length || partsProcessComplete() ? 'primary' : 'aux' }),
     },
     sendPartsToPricing: {
       label:'发送至报价人员',role:'aux',order:26,
       prompt:'将当前零件工艺发送给报价人员核算成本。',
       run:()=>sendPackagingPartsToPricing(),
-      getState:()=>({visible:Boolean(currentPackagingBusinessParts?.business_parts?.length),enabled:partsProcessComplete(),busy:false}),
+      getState:()=>({visible:Boolean(currentPackagingBusinessParts?.business_parts?.length && window.PackagingHandoff?.current(currentProject).confirmed),enabled:!allPartsProcessBusy,busy:false}),
     },
     runAllPartProcesses: {
       label: "一键生成全部工艺推荐",

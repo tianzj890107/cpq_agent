@@ -42,8 +42,7 @@ def document(quote, basic=None):
         {'title':'金额汇总','kind':'form','data':totals},{'title':'商务条款','kind':'form','data':terms}]
     title='包装报价单'
     lines=['# '+title,'']
-    if q.get('demo_only'):lines+=['演示报价单，不得用于正式交易。','']
-    elif q.get('draft'):lines+=['报价状态：草稿','']
+    if q.get('draft') and not q.get('demo_only'):lines+=['报价状态：草稿','']
     for s in sections:
         lines+=['## '+s['title']]
         if s['kind']=='table':

@@ -401,6 +401,9 @@ class DCompletenessGateTest(unittest.TestCase):
         result = _precheck(filled)
         sections = {row["item"]: row for row in result["items"]}
         for section, (title, _) in PACKAGING_BLOCKS.items():
+            if section == '3.6':
+                self.assertNotIn('3.6 商务与价格', sections)
+                continue
             key = f"{section} {title}"
             self.assertIn(key, sections, f"确认页缺少检查项 {key}")
             self.assertEqual(sections[key]["status"], "ok",

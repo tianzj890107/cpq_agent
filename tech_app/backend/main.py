@@ -3420,6 +3420,13 @@ def confirm_integration_process(project_id: str, user: dict = Depends(current_us
     return _integration_payload(project_id, plan)
 
 
+@app.get("/api/projects/{project_id}/integration/process/confirmation")
+def packaging_process_confirmation_state(project_id: str, user: dict = Depends(current_user)):
+    _workflow_project(project_id)
+    from .services import packaging_process_confirmation
+    return packaging_process_confirmation.status(project_id)
+
+
 @app.post("/api/projects/{project_id}/integration/params/autofill")
 async def autofill_integration_params(
     project_id: str, note: str = Form(""), user: dict = Depends(current_user),
@@ -3800,8 +3807,9 @@ def integration_send_to_finance(project_id: str, body: IntegrationPublishBody,
     access = None
     target_user = str(body.target_user_id or "").strip()
     if target_user and str(body.target_type or "user") == "user":
+        target_username = plan.finance_handoff.target_username if packaging else target_user
         access = cost_flow.grant_task_project_access(
-            project_id, username=target_user,
+            project_id, username=target_username,
             task_id=str(plan.finance_handoff.task_id or ""),
             role="finance_manager", author=user.get("username", "system"))
     return {**_integration_payload(project_id, plan),
@@ -6210,17 +6218,18 @@ status 只能是 ok 或 need_info。不要输出 Markdown、不要追加解释�
 
 
 def _normalize_requirement_ai_check(rule_check: dict, result: RequirementAiCheckResult) -> dict:
-    """模型输出即使少项/标签轻微偏差，也固定映射回确认页的 11 项检查表。"""
+    """映射回当前行业检查目录，包装不接受旧行业项按位置覆盖。"""
     reference = rule_check.get("items") or []
     raw = result.items or []
+    packaging = bool(reference and reference[0].get('item') == '一.项目名称')
 
     def match(label: str, index: int):
         for row in raw:
             candidate = (row.item or "").strip()
-            if candidate == label or (candidate and (candidate in label or label in candidate)):
+            if candidate == label or (not packaging and candidate and (candidate in label or label in candidate)):
                 return row
         # Qwen 已被要求固定顺序；仅在数量完全一致时按顺序兜底，避免错位覆盖。
-        return raw[index] if len(raw) == len(reference) else None
+        return raw[index] if not packaging and len(raw) == len(reference) else None
 
     rows = []
     for index, fallback in enumerate(reference):
@@ -6228,6 +6237,8 @@ def _normalize_requirement_ai_check(rule_check: dict, result: RequirementAiCheck
         raw_status = (row.status if row else fallback["status"]).strip().lower()
         status = "ok" if raw_status in ("ok", "确认ok", "通过", "完整") else "need_info"
         detail = (row.detail if row and row.detail else fallback["detail"]).strip()
+        if packaging and fallback['status'] != 'ok':
+            status, detail = fallback['status'], fallback['detail']
         rows.append({"item": fallback["item"], "status": status, "detail": detail[:240]})
     summary = (result.summary or "").strip()[:500]
     if not summary:
@@ -6242,6 +6253,7 @@ def _normalize_requirement_ai_check(rule_check: dict, result: RequirementAiCheck
         "model": actual_model,
         "model_source": "runtime_actual" if actual_model else "unavailable",
         "checked_at": _now_str(),
+        "gaps": rule_check.get('gaps') or {},
     }
 
 
@@ -6575,7 +6587,13 @@ def get_requirement_pdf(project_id: str, download: bool = False, user: dict = De
     _workflow_project(project_id)
     saved = store.load_requirement(project_id) or {}
     # 项目存在但还没建需求单：给一张空白表单（200），不再用 404 与 ACL 的「项目不存在」混淆。
-    content = requirement_pdf.build_requirement_pdf(saved, store.load_meta(project_id) or {})
+    meta = store.load_meta(project_id) or {}
+    try:
+        content = requirement_pdf.supplied_requirement_pdf(saved, meta)
+    except OSError as exc:
+        raise HTTPException(503, '工艺需求评估表附件暂不可用，请重试或联系管理员') from exc
+    if content is None:
+        content = requirement_pdf.build_requirement_pdf(saved, meta)
     filename = f"requirement_{saved.get('requirement_no') or project_id}.pdf"
     disposition = "attachment" if download else "inline"
     return Response(content=content, media_type="application/pdf", headers={
@@ -6695,12 +6713,13 @@ def extract_requirement_documents(project_id: str, user: dict = Depends(current_
 @app.post("/api/projects/{project_id}/requirement/ai-check")
 def ai_check_requirement(project_id: str, user: dict = Depends(current_user)):
     """用户手动触发的 Qwen 审阅；不重试，结果与模型/时间一同落入需求单留痕。"""
-    _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
     meta = _workflow_project(project_id)
     saved = store.load_requirement(project_id)
     if not saved:
         raise HTTPException(404, "需求单不存在")
     doc = RequirementDoc(**saved)
+    packaging = doc.data.get('industry') == 'packaging'
+    _require(user, auth.WRITE_ROLES if packaging else auth.MANAGER_ROLES, '需要负责项目的工艺人员权限')
     rule_check = requirement_service.requirement_precheck(project_id, doc)
     payload = json.dumps(
         {"requirement_no": doc.requirement_no, "title": doc.title, "status": doc.status, "data": doc.data},
@@ -6722,8 +6741,16 @@ def ai_check_requirement(project_id: str, user: dict = Depends(current_user)):
             ])
         else:
             content.append(llm_client.text_block("【原始工程图过大，本次仅检查表单字段】"))
+    system = _REQUIREMENT_AI_CHECK_SYSTEM
+    if packaging:
+        system = ('你是包装工艺需求评估工程师。只检查输入资料，不猜测缺失信息。'
+                  '必须按以下目录逐项返回，名称及顺序完全一致：\n'
+                  + '\n'.join(row['item'] for row in rule_check['items'])
+                  + '\n仅输出JSON：{"summary":"简短结论","items":[{"item":"目录原名",'
+                    '"status":"ok或need_info","detail":"依据或待补充信息"}]}。'
+                    '不检查客户信用、商务价格；需求确认不要求先解析图纸。')
     result = llm_client.run(
-        _REQUIREMENT_AI_CHECK_SYSTEM, content, RequirementAiCheckResult, max_tokens=1800,
+        system, content, RequirementAiCheckResult, max_tokens=1800,
     )
     check = _normalize_requirement_ai_check(rule_check, result)
     doc.ai_check = check

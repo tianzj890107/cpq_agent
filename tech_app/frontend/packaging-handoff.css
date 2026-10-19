@@ -1,0 +1,30 @@
+/* 与既有发送人员弹窗一致；选择范围仅限包装图纸页弹窗。 */
+#packagingPricingDialog {
+  position: fixed; inset: 0; z-index: 9999; display: flex;
+  align-items: center; justify-content: center; background: rgba(15,23,42,.45);
+}
+#packagingPricingDialog .ai-send-box {
+  width: 400px; max-width: 92vw; max-height: 90vh; overflow: auto;
+  border-radius: 14px; box-shadow: 0 24px 60px rgba(0,0,0,.28);
+  background: #fff; color: var(--oc-text-1,#111827); font-size: 13px;
+}
+#packagingPricingDialog h3 { margin: 0; font-size: 16px; }
+#packagingPricingDialog .ai-send-head { padding: 18px 22px 4px; }
+#packagingPricingDialog .ai-send-head p { margin: 6px 0 0; font-size: 12px; color: var(--oc-text-3,#6b7280); line-height: 1.6; }
+#packagingPricingDialog .ai-send-body { padding: 14px 22px 4px; }
+#packagingPricingDialog .ai-send-row { margin-bottom: 12px; }
+#packagingPricingDialog label { display: block; margin-bottom: 5px; }
+#packagingPricingDialog select, #packagingPricingDialog input {
+  width: 100%; box-sizing: border-box; padding: 9px 11px; font-size: 13px;
+  border: 1px solid var(--oc-border-3,#e2e5ea); border-radius: 8px; color: inherit; background: #fff;
+}
+#packagingPricingDialog .ai-send-msg { min-height: 18px; padding: 0 22px; color: var(--oc-text-2,#4b5563); }
+#packagingPricingDialog .ai-send-foot { display: flex; gap: 10px; padding: 8px 22px 20px; }
+#packagingPricingDialog button {
+  flex: 1; padding: 9px 0; border: 1px solid var(--oc-border-3,#e2e5ea);
+  border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+#packagingPricingDialog .cancel { background: #fff; color: var(--oc-text-2,#4b5563); }
+#packagingPricingDialog .send { background: var(--oc-accent,#0060e6); color: #fff; }
+#packagingPricingDialog button:disabled { opacity: .6; cursor: not-allowed; }
+#packagingPricingDialog [hidden] { display: none; }
