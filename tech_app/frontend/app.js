@@ -924,6 +924,9 @@ function renderDrawingEntry(filename) {
 /* 2.1「这一步做到哪了」的唯一判定：有解析结果（零件或标准件）才算有效。
    左侧主按钮的 role、收口动作的可见性都由它推导，不许各处各写一份。 */
 function drawingParsed() {
+  // 包装项目的业务零件清单落在 business parts 文档里，不会回填 currentIR。
+  // 只看 currentIR 会让 2.1 的「确认工艺」永远 visible=false、批量按钮也永远当不了主按钮。
+  if (packagingBusinessPartRows(currentPackagingBusinessParts).length) return true;
   return Boolean(currentIR && ((currentIR.parts || []).length || (currentIR.standard_parts || []).length));
 }
 

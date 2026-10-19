@@ -109,8 +109,9 @@ class DrawingPrimaryStateMachineContract(unittest.TestCase):
         self.assertEqual(order_of(self.confirm), 25)
         self.assertRegex(
             self.confirm,
-            r'role:\s*partsProcessComplete\(\)\s*\?\s*"primary"\s*:\s*"aux"',
-            "只有全部零件都有工艺推荐之后，「确认解析结果」才是主按钮",
+            r'role:\s*currentPackagingBusinessParts\?\.business_parts\?\.length\s*\|\|\s*'
+            r'partsProcessComplete\(\)\s*\?\s*[\'\"]primary[\'\"]\s*:\s*[\'\"]aux[\'\"]',
+            "技术项目要全部零件都有工艺推荐、包装项目要有业务部件，「确认工艺」才是主按钮",
         )
         self.assertNotRegex(
             self.confirm,
@@ -119,8 +120,9 @@ class DrawingPrimaryStateMachineContract(unittest.TestCase):
         )
         self.assertIn("visible: drawingParsed()", self.confirm,
                       "确认动作仍只在有解析结果时出现")
-        self.assertIn("enabled: true", self.confirm,
-                      "没生成完也要可点，点了由既有闸门给真实原因")
+        self.assertIn("enabled: currentPackagingBusinessParts?.business_parts?.length",
+                      self.confirm,
+                      "包装项目按工艺确认状态启用，技术项目保持原判定")
 
     def test_list_order_follows_the_state_machine(self):
         self.assertLess(order_of(self.parse), order_of(self.bulk))
