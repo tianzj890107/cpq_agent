@@ -144,9 +144,12 @@ if(restore({requirement:{status:'pending_review',data:{industry:'packaging'}}},{
         doc={'project_id':'P','title':'技术要求','data':{'industry':'packaging','customer_credit':'SECRET-CREDIT',
             'final_customer_name':'SECRET-CUSTOMER','project_code':'SECRET-PROJECT','packaging_product_name':'礼盒','inner_length':200}}
         pdf=build_requirement_pdf(doc)
+        import io
+        from pypdf import PdfReader
+        text='\n'.join(page.extract_text() or '' for page in PdfReader(io.BytesIO(pdf)).pages)
         for value in ['SECRET-CREDIT','SECRET-CUSTOMER','SECRET-PROJECT']:
-            self.assertNotIn(value.encode('utf-16-be').hex().upper().encode(),pdf)
-        self.assertIn('产品技术规格'.encode('utf-16-be').hex().upper().encode(),pdf)
+            self.assertNotIn(value,text)
+        self.assertIn('产品技术规格',text)
 
     def test_actual_word_contains_commercial_tables_not_route_dump(self):
         import io,zipfile

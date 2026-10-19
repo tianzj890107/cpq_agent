@@ -3,7 +3,7 @@
 function cfSubLabel(no){var a=(typeof window!=='undefined'&&window.CpqWorkflowStages)||{};return typeof a.subLabel==='function'?a.subLabel(no):String(no||'');}
 /* 确认需求页：默认展示本地规则；仅点击“AI 检查”才会调用模型。 */
 const cfPid = TechProjectContext.bind().project;
-let cfRequirement = null, cfProject = null, cfPrecheck = null;
+let cfRequirement = null, cfProject = null, cfPrecheck = null, cfPdfInfo = {};
 const cfEsc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[char]));
 
 function cfToast(message, error = false) { const el = document.createElement('div'); el.className = `page-toast${error ? ' error' : ''}`; el.textContent = message; document.body.append(el); setTimeout(() => el.remove(), 3600); }
@@ -50,7 +50,7 @@ function cfGaps() {
     .map(row => String(row?.item || '').trim()).filter(Boolean);
 }
 function cfSourceUrl() { const token = localStorage.getItem('authToken') || localStorage.getItem('cad_engine_token'); const base = `/api/projects/${encodeURIComponent(cfPid)}/source`; return token ? `${base}?token=${encodeURIComponent(token)}` : base; }
-function cfPdfUrl(download = false) { const token = localStorage.getItem('authToken') || localStorage.getItem('cad_engine_token'); const params = new URLSearchParams(); if (download) params.set('download', 'true'); if (token) params.set('token', token); const query = params.toString(); return `/api/projects/${encodeURIComponent(cfPid)}/requirement/pdf${query ? `?${query}` : ''}`; }
+function cfPdfUrl(download = false, original = false) { const token = localStorage.getItem('authToken') || localStorage.getItem('cad_engine_token'); const params = new URLSearchParams(); if (download) params.set('download', 'true'); if (token) params.set('token', token); const query = params.toString(); return `/api/projects/${encodeURIComponent(cfPid)}/requirement/pdf${original ? '/original' : ''}${query ? `?${query}` : ''}`; }
 
 function cfTechnicalFields(data){
   return [['产品名称',data.packaging_product_name||data.product_name],['型号 / 盒型',data.box_type],
@@ -90,6 +90,25 @@ function cfBind() {
   document.querySelector('#downloadForm').onclick = () => { window.location.href = cfPdfUrl(true); }; document.querySelector('#runAiCheck').onclick = cfRunAiCheck;
   document.querySelector('#bringAi').onclick = () => { const area = document.querySelector('#confirmationNote'); area.value = area.value ? `${area.value}\n${cfPrecheck.generated_note}` : cfPrecheck.generated_note; area.focus(); };
   document.querySelector('#confirmPass').onclick = () => cfAct('confirm'); document.querySelector('#returnDraft').onclick = () => cfAct('return');
+  cfBindOriginalPdf();
+}
+
+function cfBindOriginalPdf() {
+  const modal = document.querySelector('#formModal');
+  const open = original => {
+    modal.querySelector('.modal-title').textContent = original ? '原始参考附件（非当前项目数据版）' : '当前项目工艺需求单';
+    modal.querySelector('iframe').src = cfPdfUrl(false, original);
+    const link = modal.querySelector('.modal-link');
+    link.href = cfPdfUrl(true, original); link.textContent = original ? '下载原始参考附件' : '下载当前需求单';
+    modal.classList.add('active');
+  };
+  document.querySelector('#previewForm').onclick = () => open(false);
+  document.querySelector('#viewForm').onclick = () => open(false);
+  if (!cfPdfInfo.original_available) return;
+  const button = document.createElement('button'); button.type = 'button';
+  button.id = 'viewOriginalRequirement'; button.className = 'pdf-action-btn';
+  button.textContent = '原始参考附件'; button.onclick = () => open(true);
+  document.querySelector('.pdf-actions').append(button);
 }
 
 async function cfRunAiCheck() {
@@ -159,7 +178,7 @@ async function cfAct(kind) {
 
 async function cfStart() {
   if (!cfPid) { if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.exitToTechHome();return;} location.href = 'home.html'; return; }
-  try { const [req,project,ruleCheck] = await Promise.all([api(`/api/projects/${cfPid}/requirement`),api(`/api/projects/${cfPid}`),api(`/api/projects/${cfPid}/requirement/precheck`)]); cfRequirement = req.requirement; if (!cfRequirement) { window.TechEmbed&&window.TechEmbed.embedded?window.TechEmbed.navigateToFile('requirement-create.html',cfPid):location.href = `requirement-create.html?project=${encodeURIComponent(cfPid)}`; return; } cfProject = project; cfPrecheck = cfCurrentCheck(ruleCheck, cfRequirement.ai_check); cfRender(); }
+  try { const [req,project,ruleCheck] = await Promise.all([api(`/api/projects/${cfPid}/requirement`),api(`/api/projects/${cfPid}`),api(`/api/projects/${cfPid}/requirement/precheck`)]); cfRequirement = req.requirement; if (!cfRequirement) { window.TechEmbed&&window.TechEmbed.embedded?window.TechEmbed.navigateToFile('requirement-create.html',cfPid):location.href = `requirement-create.html?project=${encodeURIComponent(cfPid)}`; return; } cfProject = project; cfPdfInfo = req.requirement_pdf || {}; cfPrecheck = cfCurrentCheck(ruleCheck, cfRequirement.ai_check); cfRender(); }
   catch (err) { document.querySelector('#app').innerHTML = `<div class="page-toast error" style="position:static">页面加载失败：${cfEsc(err.message)}</div>`; }
 }
 cfStart();

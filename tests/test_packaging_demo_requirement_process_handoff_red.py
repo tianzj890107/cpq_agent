@@ -89,14 +89,14 @@ console.log(JSON.stringify({result,unchanged:before===JSON.stringify(old)}));
         self.assertEqual(HEADINGS, [row['item'] for row in check['items']])
         self.assertTrue(any(row['status'] == 'need_info' for row in check['items']))
 
-    def test_marked_maotai_pdf_preview_and_download_return_original_attachment(self):
+    def test_marked_maotai_original_preview_and_download_return_original_attachment(self):
         from tech_app.backend import main
         saved = {'title': '茅台酒盒', 'data': {'industry': 'packaging',
                  'requirement_pdf_template': 'maotai_wine_box'}}
         with patch.object(main, '_workflow_project', return_value={}), \
              patch.object(main.store, 'load_requirement', return_value=saved), \
              patch.object(main.store, 'load_meta', return_value={}):
-            responses = [main.get_requirement_pdf('P', download=value, user={'role': 'engineer'})
+            responses = [main.get_original_requirement_pdf('P', download=value, user={'role': 'engineer'})
                          for value in (False, True)]
         for response in responses:
             self.assertEqual(PDF_SHA, hashlib.sha256(response.body).hexdigest())
@@ -106,7 +106,9 @@ console.log(JSON.stringify({result,unchanged:before===JSON.stringify(old)}));
 
     def test_unmarked_project_does_not_receive_maotai_attachment(self):
         from tech_app.backend import main
+        from tech_app.backend.services.packaging_requirement_document import build_snapshot
         with patch.object(main, '_workflow_project', return_value={}), \
+             patch('tech_app.backend.services.packaging_requirement_document.load_snapshot', return_value=build_snapshot({'data': {'industry': 'packaging'}}, {})), \
              patch.object(main.store, 'load_requirement', return_value={'data': {'industry': 'packaging'}}), \
              patch.object(main.store, 'load_meta', return_value={}):
             response = main.get_requirement_pdf('P', user={'role': 'engineer'})

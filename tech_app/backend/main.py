@@ -6577,8 +6577,10 @@ def list_requirements():
 
 @app.get("/api/projects/{project_id}/requirement")
 def get_requirement(project_id: str):
-    _workflow_project(project_id)
-    return {"requirement": store.load_requirement(project_id)}
+    meta = _workflow_project(project_id) or {}
+    saved = store.load_requirement(project_id)
+    return {"requirement": saved, 'requirement_pdf': {
+        'original_available': requirement_pdf.has_original_pdf(saved or {}, meta)}}
 
 
 @app.get("/api/projects/{project_id}/requirement/pdf")
@@ -6588,11 +6590,13 @@ def get_requirement_pdf(project_id: str, download: bool = False, user: dict = De
     saved = store.load_requirement(project_id) or {}
     # 项目存在但还没建需求单：给一张空白表单（200），不再用 404 与 ACL 的「项目不存在」混淆。
     meta = store.load_meta(project_id) or {}
-    try:
-        content = requirement_pdf.supplied_requirement_pdf(saved, meta)
-    except OSError as exc:
-        raise HTTPException(503, '工艺需求评估表附件暂不可用，请重试或联系管理员') from exc
-    if content is None:
+    if (saved.get('data') or {}).get('industry') == 'packaging':
+        from .services.packaging_requirement_document import load_snapshot
+        try:
+            content = requirement_pdf.render_packaging_snapshot(load_snapshot(project_id, saved, meta))
+        except (ImportError, OSError) as exc:
+            raise HTTPException(503, '动态需求单生成组件或中文字体不可用，请联系管理员') from exc
+    else:
         content = requirement_pdf.build_requirement_pdf(saved, meta)
     filename = f"requirement_{saved.get('requirement_no') or project_id}.pdf"
     disposition = "attachment" if download else "inline"
@@ -6600,6 +6604,22 @@ def get_requirement_pdf(project_id: str, download: bool = False, user: dict = De
         "Content-Disposition": f'{disposition}; filename="{filename}"',
         "Cache-Control": "no-store",
     })
+
+
+@app.get('/api/projects/{project_id}/requirement/pdf/original')
+def get_original_requirement_pdf(project_id: str, download: bool = False, user: dict = Depends(current_user)):
+    _workflow_project(project_id)
+    saved = store.load_requirement(project_id) or {}
+    try:
+        content = requirement_pdf.supplied_requirement_pdf(saved, store.load_meta(project_id) or {})
+    except OSError as exc:
+        raise HTTPException(503, '原始参考附件暂不可用，请联系管理员') from exc
+    if content is None:
+        raise HTTPException(404, '当前项目没有适用的原始参考附件')
+    disposition = 'attachment' if download else 'inline'
+    return Response(content=content, media_type='application/pdf', headers={
+        'Content-Disposition': f'{disposition}; filename="original_requirement_reference.pdf"',
+        'Cache-Control': 'no-store'})
 
 
 def _requirement_flow(fn, project_id: str, user: dict, comment: str, *rest):

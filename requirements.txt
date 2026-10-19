@@ -19,6 +19,7 @@ ezdxf==1.4.4
 Pillow==12.3.0
 pdfplumber==0.11.10
 pypdf==6.14.2
+reportlab==4.4.10
 PyMuPDF==1.26.4
 python-docx==1.2.0
 rich==15.0.0

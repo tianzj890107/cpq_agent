@@ -14,16 +14,28 @@ from . import industry_templates
 
 def supplied_requirement_pdf(saved: dict, meta: dict) -> bytes | None:
     """客户提供的演示需求表原件；不替换别的包装项目或它的图纸。"""
-    data = saved.get('data') or {}
-    if data.get('industry') != 'packaging':
-        return None
-    names = [saved.get('title'), data.get('project_name'), data.get('packaging_product_name'),
-             data.get('product_name'), meta.get('name'), meta.get('project_name')]
-    selected = data.get('requirement_pdf_template')
-    if selected != 'maotai_wine_box' and not (not selected and any(
-            '茅台' in str(name or '') for name in names)):
+    if not has_original_pdf(saved, meta):
         return None
     return (Path(__file__).resolve().parents[1] / 'assets/maotai-wine-requirement.pdf').read_bytes()
+
+
+def has_original_pdf(saved: dict, meta: dict) -> bool:
+    data = saved.get('data') or {}
+    names = [saved.get('title'), data.get('project_name'), data.get('packaging_product_name'),
+             data.get('product_name'), meta.get('name'), meta.get('project_name')]
+    template = data.get('requirement_pdf_template')
+    return data.get('industry') == 'packaging' and (template == 'maotai_wine_box' or (
+        not template and any('茅台' in str(name or '') for name in names)))
+
+
+def build_packaging_snapshot(requirement, project, **kwargs):
+    from .packaging_requirement_document import build_snapshot
+    return build_snapshot(requirement, project, **kwargs)
+
+
+def render_packaging_snapshot(snapshot):
+    from .packaging_requirement_render import render
+    return render(snapshot)
 
 
 _LABELS = {
@@ -124,6 +136,8 @@ def _pdf(objects: list[bytes]) -> bytes:
 def build_requirement_pdf(requirement: dict, project: dict | None = None) -> bytes:
     """根据当前已保存的需求字段生成多页中文 PDF 表单。"""
     data = requirement.get("data") or {}
+    if data.get('industry') == 'packaging':
+        return render_packaging_snapshot(build_packaging_snapshot(requirement, project or {}))
     lines: list[tuple[str, int]] = [
         ("工艺评估需求单", 18),
         (f"需求编号：{_plain(requirement.get('requirement_no'))}    创建时间：{_plain(requirement.get('created_at'))}", 9),

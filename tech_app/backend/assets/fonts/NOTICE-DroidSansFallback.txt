@@ -1,0 +1,16 @@
+Copyright (c) 2005-2008, The Android Open Source Project
+
+Licensed under the Apache License, Version 2.0.
+The complete license is in LICENSE-Apache-2.0.txt in this directory.
+
+This unmodified Droid Sans Fallback font resource was extracted from the
+existing PyMuPDF 1.26.4 CJK font buffer. No MuPDF executable code is included
+in this font asset. Runtime PDF rendering uses ReportLab and this local font.
+
+Upstream font and copyright/license notice:
+https://github.com/ArtifexSoftware/mupdf/tree/master/resources/fonts/droid
+https://raw.githubusercontent.com/ArtifexSoftware/mupdf/master/resources/fonts/droid/NOTICE
+
+File: DroidSansFallback.ttf
+SHA256: ee38813ea00c3e32add4268fff7fff9e39417b4913cb13be2415164a47807cc2
+Bundled on: 2026-10-19
