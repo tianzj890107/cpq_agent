@@ -10,7 +10,7 @@ from pypdf import PdfReader
 from tech_app.backend.services import requirement_pdf
 
 ROOT = Path(__file__).resolve().parents[1]
-ORIGINAL_SHA = '91081be68614406f62de0fb18ccc35303da91ea66e6b05c0484f2ac489dac7dc'
+ORIGINAL_SHA = '12e57984ff007c0f591d489c80dbbaf8199870823f9d914f94c86fbf8e83e704'
 
 
 def requirement():
@@ -30,6 +30,12 @@ def text(pdf):
 class LiveRequirementPdf(unittest.TestCase):
     def build(self, req=None, **kwargs):
         return requirement_pdf.build_packaging_snapshot(req or requirement(), {}, **kwargs)
+
+    def test_fixed_pdf_visible_date_is_2026_10_20(self):
+        pdf = requirement_pdf.fixed_packaging_requirement_pdf()
+        content = text(pdf)
+        self.assertIn('2026-10-20', content)
+        self.assertNotIn('2026-10-19', content)
 
     def test_packaging_default_returns_fixed_pdf_without_dynamic_reads(self):
         from tech_app.backend import main

@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FRONT = ROOT / 'tech_app/frontend'
 HEADINGS = ['一.项目名称', '二.需求', '三.产品技术规格', '3.1 产品与订单',
             '3.2 成品尺寸与盒型', '3.3 材料', '3.4 印刷与表面工艺', '3.5 包装与物流']
-PDF_SHA = '91081be68614406f62de0fb18ccc35303da91ea66e6b05c0484f2ac489dac7dc'
+PDF_SHA = '12e57984ff007c0f591d489c80dbbaf8199870823f9d914f94c86fbf8e83e704'
 
 
 class PackagingDemoHandoff(unittest.TestCase):
