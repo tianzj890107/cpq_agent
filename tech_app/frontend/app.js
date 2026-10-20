@@ -930,6 +930,18 @@ function drawingParsed() {
   return Boolean(currentIR && ((currentIR.parts || []).length || (currentIR.standard_parts || []).length));
 }
 
+// 所有图纸页操作共用同一判定，异步状态切换时也不能同时声明两颗主按钮。
+function drawingPrimaryAction() {
+  if (!drawingParsed()) return "parseDrawing";
+  if (packagingBusinessPartRows(currentPackagingBusinessParts).length) {
+    const handoff = window.PackagingHandoff?.current(currentProject);
+    if (handoff?.confirmed) return "sendPartsToPricing";
+    if (handoff?.ready || handoff?.error) return "confirmDrawingResult";
+    return "runAllPartProcesses";
+  }
+  return partsProcessComplete() ? "confirmDrawingResult" : "runAllPartProcesses";
+}
+
 // #actionSheet 八颗按钮唯一的启用判定：解析成功与打开已有项目两处共用，
 // 不许各写一份（#btnMoreImport3d / #btnMoreReview 曾只在解析成功那一刻启用，
 // 打开已有项目后永远置灰，用户点不了 —— 那是缺陷不是设计）。
@@ -7712,7 +7724,7 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
           // 装载态原样报到看板（Spec C3）：按钮灰着是"还在读"还是"读完了但不能解析"，
           // 看板据此决定提示语；`enabled` 仍以 #btnParse.disabled 为准（不许换来源）。
           state: pageLoadState,
-          role: drawingParsed() ? "aux" : "primary",
+          role: drawingPrimaryAction() === "parseDrawing" ? "primary" : "aux",
         };
       },
     },
@@ -7761,13 +7773,13 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
       getState: () => ({ label:window.PackagingHandoff?.current(currentProject).error?'重新读取工艺状态':packagingBusinessPartRows(currentPackagingBusinessParts).length?'确认工艺':'确认解析结果',
                          visible: drawingParsed() && !window.PackagingHandoff?.current(currentProject).confirmed,
                          enabled: currentPackagingBusinessParts?.business_parts?.length ? Boolean(window.PackagingHandoff?.current(currentProject).ready || window.PackagingHandoff?.current(currentProject).error) && !allPartsProcessBusy : true,
-                         busy: false, role: currentPackagingBusinessParts?.business_parts?.length || partsProcessComplete() ? 'primary' : 'aux' }),
+                         busy: false, role: drawingPrimaryAction() === "confirmDrawingResult" ? 'primary' : 'aux' }),
     },
     sendPartsToPricing: {
       label:'发送至报价人员',role:'aux',order:26,
       prompt:'将当前零件工艺发送给报价人员核算成本。',
       run:()=>sendPackagingPartsToPricing(),
-      getState:()=>({visible:Boolean(currentPackagingBusinessParts?.business_parts?.length && window.PackagingHandoff?.current(currentProject).confirmed),enabled:!allPartsProcessBusy,busy:false}),
+      getState:()=>({visible:Boolean(currentPackagingBusinessParts?.business_parts?.length && window.PackagingHandoff?.current(currentProject).confirmed),enabled:!allPartsProcessBusy,busy:false,role:drawingPrimaryAction() === "sendPartsToPricing" ? 'primary' : 'aux'}),
     },
     runAllPartProcesses: {
       label: "一键生成全部工艺推荐",
@@ -7781,7 +7793,7 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
           enabled: Boolean(currentProject) && packagingBusinessPartRows(currentPackagingBusinessParts).length > 0
             && !allPartsProcessBusy,
           busy: Boolean(allPartsProcessBusy),
-          role: (drawingParsed() && !partsProcessComplete()) ? "primary" : "aux",
+          role: drawingPrimaryAction() === "runAllPartProcesses" ? "primary" : "aux",
         };
       },
     },

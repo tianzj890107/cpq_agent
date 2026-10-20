@@ -792,8 +792,7 @@
       const detail = primaryDiagnostic(entries, primaries);
       primaryDiagnosticShown = detail;
       console.error('[tech-workbench] ' + detail);
-      // 两个以上主按钮是明确的快照毛病：标题行按 error 等级说出来（清除时回落步骤状态）。
-      if (primaries.length > 1) setBoardNotice(detail, 'error');
+      // 内部动作契约诊断只留控制台，不覆盖业务状态，也不向用户暴露实现字段。
     }
     setChatButton($('techChatPrimary'), {
       label: primaryEntry ? primaryEntry.label : '主要操作',
