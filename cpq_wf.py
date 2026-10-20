@@ -86,6 +86,7 @@ TASK_STATUS_LABELS = {
     "claimed": "进行中",
     "completed": "已完成",
     "cancelled": "已撤回",
+    "archived": "已归档",
 }
 
 # 卡片总状态（awaiting_handoff = 本步已完成、下一步归别人，正等着推送任务流）
@@ -662,6 +663,8 @@ def sync_card(session_id: str, user: dict, title: str = "", customer: str = "",
         conn = cpq_auth._connect()
     try:
         card = _fetch_card(conn, session_id)
+        if card and card.get('overall_status') == 'archived':
+            return card  # 旧标签页同步不得把已归档项目重新变成进行中。
         now = _now()
         # 只有显式传了行业才归一化写入；留空表示「这次没有行业信息」，不拿默认值覆盖。
         wanted_industry = (cpq_industries.normalize(industry)
@@ -1792,9 +1795,9 @@ def my_cards(user: dict) -> list:
         cur = cpq_auth._exec(
             conn,
             f"SELECT {', '.join('c.' + c for c in _CARD_COLS)} FROM cpq_wf_card c"
-            " WHERE c.creator_user_id = %s OR c.current_owner = %s"
+            " WHERE c.overall_status <> 'archived' AND (c.creator_user_id = %s OR c.current_owner = %s"
             "    OR EXISTS (SELECT 1 FROM cpq_wf_task t WHERE t.card_id = c.card_id"
-            "               AND t.claimed_by_user_id = %s)"
+            "               AND t.claimed_by_user_id = %s))"
             " ORDER BY c.updated_at DESC", (uid, uid, uid))
         cards = [_card_row(r) for r in cur.fetchall()]
         for c in cards:
@@ -1835,7 +1838,7 @@ def card_detail(session_id: str, user: dict) -> dict:
         "current_step_name": (cur_row or {}).get("step_name", ""),
         "need_role_code": need_role,
         "need_role_name": ROLES.get(need_role, need_role),
-        "can_edit": can_do_step(user, cur_step) if user else False,
+        "can_edit": can_do_step(user, cur_step) if user and card['overall_status'] != 'archived' else False,
         "pending_task": pending[0] if pending else None,
         # 本步已完成但还没交出去：前端要挡住流程、催用户推送任务
         "awaiting_handoff": card["overall_status"] == "awaiting_handoff" and not pending,

@@ -2896,8 +2896,12 @@ def list_history(limit: int = 200) -> list:
     out = []
     if not os.path.isdir(HISTORY_DIR):
         return out
+    from cpq_project_archive import read_index
+    archived = set(read_index(HISTORY_DIR)['archived_sessions'])
     for name in os.listdir(HISTORY_DIR):
         if not name.endswith(".json"):
+            continue
+        if name[:-5] in archived:
             continue
         data = load_history(name[:-5])
         if not data:
