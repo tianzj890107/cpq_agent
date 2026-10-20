@@ -1040,6 +1040,32 @@ def write_material(project_id: str, user: Optional[dict] = None, *,
             "written": record.model_dump()}
 
 
+def cost_completion_task_id(project_id: str, source_task_id: str, plan) -> str:
+    """区分找回原报价的工艺来源任务与本次应完成的报价人员成本任务。
+
+    只修复空上下文或明确属于本项目的工艺来源上下文；其他显式编号不猜、不替换，
+    留给桥接事务既有的类型、项目、领取人校验。兼容已打开的旧成本页面。
+    """
+    supplied = str(source_task_id or '').strip()
+    finance = str(getattr(getattr(plan, 'finance_handoff', None), 'task_id', '') or '').strip()
+    if supplied and supplied == finance:
+        return supplied
+    requirement = store.load_requirement(project_id) or {}
+    meta = store.load_meta(project_id) or {}
+    origins = {str(value or '').strip() for value in (
+        (requirement.get('data') or {}).get('source_task_id'), meta.get('quote_task_id'))}
+    origins.discard('')
+    if supplied and supplied not in origins:
+        return supplied
+    if finance:
+        return finance
+    if supplied:
+        raise CostFlowError('当前页面携带的是工艺来源任务，尚未找到本项目的成本测算任务；'
+                            '请从本人已领取的成本待办进入后回传，工艺任务不会被关闭',
+                            status_code=409, code='cost_task_context_missing')
+    return ''
+
+
 def send_to_quote(project_id: str, user: Optional[dict] = None, *,
                   product_name: str = "", spec: str = "", note: str = "",
                   token: str = "", source_task_id: str = "") -> dict:
@@ -1050,12 +1076,12 @@ def send_to_quote(project_id: str, user: Optional[dict] = None, *,
     否则断路 / 超时就会留下"销售已收到任务、技术待办还挂着"的半完成状态。
     这里只在拿到明确成功结果（含 handoff_id）之后才写项目留痕。
     """
-    _ready(project_id)
+    _, plan, _ = _ready(project_id)
     # 走正文，不走 2.2 那个路由函数：那里的权限认的是工艺经理。
     result = integration_send_to_quote_body(
         project_id, product_name=product_name, spec=spec, note=note,
-        token=token, user=user,completion_task_id=source_task_id or str(
-            getattr(integration.load_plan(project_id).finance_handoff,'task_id','') or ''))
+        token=token, user=user,
+        completion_task_id=cost_completion_task_id(project_id, source_task_id, plan))
     ir, plan, review = cost_review_ctx(project_id)
     handoff = result.get("handoff") or {}
     # 来源待办关没关、为什么没关，都随这一次回传的结果一起回给界面（可追溯到 handoff_id）
@@ -1122,7 +1148,7 @@ def return_to_process(project_id: str, user: Optional[dict] = None, *,
         requirement_customer(requirement, req_data),
         str(requirement.get("product_name") or req_data.get("product_name") or ""),
         note or "成本已确认，请做最终工艺确认与报告",
-        package, target_user_id, str(source_task_id or ""),
+        package, target_user_id, cost_completion_task_id(project_id, source_task_id, plan),
         # 结果版本随交接一起交出去：它是服务端幂等五元组的一部分（同一版只交一次）。
         str(package.get("result_version") or ""))
     # 来源待办由服务端在那一次回传命令的同一个事务里关掉 —— 技术侧不再另发关闭请求。
