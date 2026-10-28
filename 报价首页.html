@@ -66,7 +66,7 @@
 
     body {
       font-family: 'Inter', 'PingFang SC', -apple-system, sans-serif;
-      background: linear-gradient(135deg, #F4F8FF 0%, #F4F8FF 100%);
+      background: #FFFFFF;
       color: var(--text-primary);
       font-size: 14px;
       line-height: 1.5;
@@ -385,9 +385,9 @@
     }
 
     .page-container {
-      max-width: 960px;
+      max-width: 1200px;
       margin: 0 auto;
-      padding: 100px var(--space-2xl) var(--space-xl) 72px;
+      padding: 92px 32px 32px 88px;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
@@ -464,13 +464,30 @@
     /* Greeting */
     .greeting {
       text-align: center;
-      margin-bottom: var(--space-xl);
+      margin-bottom: 32px;
     }
 
+    .brand-lockup {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      margin: 0 auto 24px;
+    }
+
+    .fuxi-logo, .company-logo {
+      display: block;
+      min-width: 0;
+      height: auto;
+    }
+    .fuxi-logo { width: 228px; }
+    .company-logo { width: 205px; }
+    .brand-divider { flex: 0 0 1px; height: 48px; background: var(--border-color); }
+
     .greeting-title {
-      font-size: 24px;
+      font-size: 34px;
       font-weight: 700;
-      margin-bottom: var(--space-sm);
+      margin-bottom: 18px;
     }
 
     .greeting-title .highlight {
@@ -480,53 +497,96 @@
     }
 
     .greeting-subtitle {
-      font-size: 16px;
-      color: var(--text-secondary);
+      font-size: 18px;
+      color: #92959F;
+      line-height: 1.7;
     }
 
     /* Category Tags */
     .category-tags {
       display: flex;
       justify-content: center;
-      gap: var(--space-sm);
+      gap: 14px;
       flex-wrap: wrap;
-      margin-bottom: var(--space-xl);
+      margin-bottom: 28px;
     }
 
     .category-tag {
       display: inline-flex;
       align-items: center;
-      gap: var(--space-xs);
-      padding: var(--space-sm) var(--space-lg);
-      background-color: var(--bg-card);
-      border: 1px solid var(--border-color);
+      gap: 10px;
+      padding: 10px 22px 10px 14px;
+      background: linear-gradient(180deg, #FFFFFF 0%, #F8FAFD 100%);
+      border: 1px solid #E0E7F0;
       border-radius: var(--radius-full);
-      font-size: 13px;
-      color: var(--text-primary);
+      font: inherit;
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: .2px;
+      color: #475569;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.95), 0 2px 4px rgba(30,55,90,.03);
       cursor: pointer;
-      transition: all var(--transition-fast);
+      transition: background 180ms ease, border-color 180ms ease, color 180ms ease,
+        box-shadow 180ms ease, transform 180ms ease;
+    }
+
+    .category-tag > .ti {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      flex: 0 0 32px;
+      border-radius: 50%;
+      background: #EDF2FA;
+      color: #64748B;
+      font-size: 17px;
+      transition: background 180ms ease, color 180ms ease;
+    }
+
+    .category-tag[hidden] { display: none; }
+    .category-tag:focus-visible, .send-btn:focus-visible {
+      outline: 3px solid var(--color-primary-border);
+      outline-offset: 4px;
     }
 
     .category-tag:hover {
-      border-color: var(--color-primary);
+      border-color: #B4D0F8;
       color: var(--color-primary);
-      background-color: var(--color-primary-light);
+      background: linear-gradient(180deg, #FFFFFF 0%, #EEF5FF 100%);
+      box-shadow: inset 0 1px 0 white, 0 5px 14px rgba(0,96,230,.08);
+      transform: translateY(-1px);
     }
 
+    .category-tag:hover > .ti { background: #E0EDFF; color: var(--color-primary); }
+
     .category-tag.active {
-      background-color: var(--color-primary);
-      border-color: var(--color-primary);
+      background: linear-gradient(145deg, #2582FA 0%, #0060E6 60%, #0053CA 100%);
+      border-color: #0766DE;
       color: white;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.28), 0 5px 14px rgba(0,96,230,.20);
+    }
+    .category-tag.active > .ti { background: rgba(255,255,255,.16); color: white; }
+    .category-tag.active:hover { box-shadow: inset 0 1px 0 rgba(255,255,255,.32), 0 7px 18px rgba(0,96,230,.24); }
+    .category-tag:active { transform: translateY(0); }
+    @media (prefers-reduced-motion: reduce) {
+      .category-tag, .category-tag > .ti { transition: none; }
+      .category-tag:hover { transform: none; }
     }
 
     /* Unified Input Card */
     .unified-input-card {
       background-color: var(--bg-card);
-      border-radius: 16px;
+      border-radius: 28px;
       border: 1px solid var(--border-color);
-      padding: 24px;
-      margin-bottom: 30px;
-      box-shadow: 0 2px 8px rgba(0,0,0, 0.04);
+      padding: 16px 24px;
+      margin-bottom: 44px;
+      box-shadow: 0 18px 48px rgba(37, 57, 101, .12);
+      min-width: 0;
+    }
+
+    .unified-input-card:focus-within {
+      border-color: var(--color-primary-border);
     }
 
     .unified-content {
@@ -573,11 +633,14 @@
     }
 
     .unified-textarea {
+      display: block;
       width: 100%;
+      min-height: 104px;
+      max-height: 280px;
       padding: 12px 0;
       border: none;
       outline: none;
-      font-size: 14px;
+      font-size: 18px;
       font-family: inherit;
       color: var(--text-primary);
       resize: none;
@@ -593,8 +656,8 @@
       display: flex;
       align-items: center;
       gap: 12px;
-      padding-top: 14px;
-      border-top: 1px solid var(--border-light);
+      flex-wrap: wrap;
+      padding-top: 12px;
     }
 
     .upload-section {
@@ -621,11 +684,12 @@
     }
 
     .send-btn {
-      width: 36px;
-      height: 36px;
+      width: 48px;
+      height: 48px;
+      flex: 0 0 48px;
       background: linear-gradient(135deg, var(--color-purple), var(--color-primary));
       border: none;
-      border-radius: 8px;
+      border-radius: 50%;
       color: white;
       cursor: pointer;
       display: flex;
@@ -645,6 +709,87 @@
     }
 
     /* ===== List Section ===== */
+    .analytics-panel[hidden], .list-section[hidden], .greeting[hidden],
+    .unified-input-card[hidden], .nav-container[hidden], .category-tags[hidden],
+    .analytics-resume[hidden], .analytics-status[hidden] { display: none; }
+    body.analytics-fullscreen { overflow: hidden; }
+    .analytics-panel {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      height: 100dvh;
+      border: 0;
+      border-radius: 0;
+      background: white;
+      overflow: hidden;
+      min-width: 0;
+    }
+    .analytics-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      height: 44px;
+      flex: 0 0 44px;
+      padding: 0 max(12px, env(safe-area-inset-right)) 0 max(12px, env(safe-area-inset-left));
+      border-bottom: 1px solid var(--border-light);
+    }
+    .analytics-toolbar strong { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+    .analytics-options { position: relative; margin-left: auto; }
+    .analytics-options > summary { cursor: pointer; list-style: none; }
+    .analytics-options > summary::-webkit-details-marker { display: none; }
+    .analytics-menu {
+      position: absolute;
+      top: 36px;
+      right: 0;
+      z-index: 2;
+      width: min(300px, calc(100vw - 24px));
+      padding: 12px;
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(15, 23, 42, .12);
+      background: white;
+    }
+    .analytics-resume { display: block; align-self: center; margin: -24px auto 24px; }
+    .analytics-action {
+      border: 1px solid var(--border-color);
+      background: white;
+      border-radius: 8px;
+      padding: 6px 12px;
+      font: inherit;
+      font-size: 13px;
+      color: var(--color-primary);
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .analytics-action:hover { background: var(--color-primary-light); }
+    .analytics-action:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+    .analytics-status {
+      position: absolute;
+      top: 56px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1;
+      width: max-content;
+      max-width: calc(100% - 32px);
+      padding: 10px 16px;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      box-shadow: var(--shadow-md);
+      background: white;
+    }
+    .analytics-status, .analytics-demand {
+      color: var(--text-secondary);
+      font-size: 12px;
+    }
+    .analytics-demand summary { cursor: pointer; }
+    .analytics-demand { margin-top: 12px; }
+    .analytics-demand p { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; margin-top: 8px; }
+    .analytics-frame { display: block; width: 100%; flex: 1; min-height: 0; height: 0; border: 0; }
+    .send-btn { font-size: 14px; }
+
     .list-section {
       background-color: var(--bg-card);
       border-radius: 12px;
@@ -1041,9 +1186,29 @@
 
     /* Responsive */
     @media (max-width: 768px) {
+      .page-container { padding: 40px 16px 24px 72px; }
+      .brand-lockup { gap: 12px; margin-bottom: 20px; }
+      .fuxi-logo { width: 145px; }
+      .company-logo { width: 135px; }
+      .brand-divider { height: 32px; }
+      .greeting-title { font-size: 26px; }
+      .greeting-subtitle { font-size: 14px; }
+      .category-tags { gap: 8px; }
+      .category-tag { font-size: 15px; padding: 10px 16px; }
+      .category-tag > .ti { width: 28px; height: 28px; flex-basis: 28px; font-size: 16px; }
+      .unified-input-card { padding: 14px 16px; border-radius: 22px; }
+      .unified-textarea { font-size: 16px; }
       .card-grid {
         grid-template-columns: repeat(2, 1fr);
       }
+    }
+    @media (max-width: 480px) {
+      .category-tag { font-size: 14px; padding: 10px 12px; }
+      .greeting-title { font-size: 22px; }
+      .list-header { flex-wrap: wrap; gap: 12px; }
+      .list-tabs { gap: 12px; flex-wrap: wrap; }
+      .search-input { width: 100%; min-width: 0; }
+      .card-grid { grid-template-columns: minmax(0, 1fr); }
     }
     /* ---------- 历史抽屉 / 设置弹窗（与工作台一致） ---------- */
     .overlay { position: fixed; inset: 0; background: rgba(15,16,25,0.35); opacity: 0; visibility: hidden; transition: opacity 0.18s; z-index: 900; }
@@ -1273,29 +1438,30 @@
     <div class="chat-container">
       <!-- Greeting -->
       <div class="greeting">
-        <h1 class="greeting-title">
-          <span class="highlight">创作无限可能</span>，智能报价
-        </h1>
-        <p class="greeting-subtitle">今天我能帮你做些什么？</p>
+        <div class="brand-lockup">
+          <img class="fuxi-logo" src="assets/brand/fuxi-logo.png" alt="FUXI" width="300" height="104">
+          <span class="brand-divider" aria-hidden="true"></span>
+          <img class="company-logo" src="assets/brand/company-logo.png" alt="硕磐智能 BOULDERAI TECHNOLOGIES" width="205" height="46">
+        </div>
+        <h1 class="greeting-title">伏羲相伴，智慧相随</h1>
+        <p class="greeting-subtitle">把复杂的工作交给 FUXI，让专业的 AI Agent 为你创造更多可能</p>
       </div>
 
       <!-- Category Tags -->
       <div class="category-tags">
-        <span class="category-tag active"><i class="ti ti-brain"></i> 报价助手</span>
-        <span class="category-tag"><i class="ti ti-settings"></i> 配置助手</span>
-        <span class="category-tag"><i class="ti ti-scale"></i> 规则助手</span>
-        <span class="category-tag"><i class="ti ti-tools"></i> 技术工艺</span>
+        <button type="button" class="category-tag active" aria-pressed="true"><i class="ti ti-brain" aria-hidden="true"></i> 报价智能体</button>
+        <button type="button" class="category-tag" hidden aria-pressed="false"><i class="ti ti-settings" aria-hidden="true"></i> 配置助手</button>
+        <button type="button" class="category-tag" hidden aria-pressed="false"><i class="ti ti-scale" aria-hidden="true"></i> 规则助手</button>
+        <button type="button" class="category-tag" aria-pressed="false"><i class="ti ti-tools" aria-hidden="true"></i> 技术工艺智能体</button>
+        <button type="button" class="category-tag" aria-pressed="false"><i class="ti ti-chart-bar" aria-hidden="true"></i> 经营分析智能体</button>
       </div>
 
       <!-- Unified Input + Introduction Card -->
       <div class="unified-input-card">
-        <div class="unified-content">
-          <p class="unified-intro">请输入需求描述，或直接上传文件内容（表格、文档或者图片等），帮你一件智能报价。</p>
-        </div>
-        <textarea class="unified-textarea" placeholder="请输入你的问题或需求描述..." rows="3"></textarea>
+        <textarea class="unified-textarea" aria-label="需求描述" placeholder="告诉我你想完成什么，我来帮你执行" rows="3"></textarea>
         <div class="unified-input-area">
           <div class="upload-section" id="uploadSection">
-            <i class="ti ti-upload"></i>
+            <i class="ti ti-plus"></i>
             <span id="uploadLabel">上传文件</span>
             <input id="fileInput" type="file" multiple hidden
               accept=".doc,.docx,.pdf,.xls,.xlsx,.csv,.md,.txt,.png,.jpg,.jpeg">
@@ -1325,14 +1491,37 @@
             </select>
           </div>
           <div class="char-counter">0/500</div>
-          <button class="send-btn">
-            <i class="ti ti-send"></i>
+          <button class="send-btn" type="button" aria-label="发送需求">
+            <i class="ti ti-arrow-up" aria-hidden="true"></i>
           </button>
         </div>
       </div>
 
+      <button class="analytics-action analytics-resume" id="analyticsResume" type="button" hidden>继续上次分析 <i class="ti ti-arrow-right" aria-hidden="true"></i></button>
+
+      <section class="analytics-panel" id="analyticsPanel" aria-label="经营分析智能体" hidden>
+        <div class="analytics-toolbar">
+          <button class="analytics-action" id="analyticsEdit" type="button"><i class="ti ti-arrow-left" aria-hidden="true"></i> 返回首页</button>
+          <strong>经营分析智能体</strong>
+          <details class="analytics-options">
+            <summary class="analytics-action" aria-label="更多分析操作">更多 <i class="ti ti-dots" aria-hidden="true"></i></summary>
+            <div class="analytics-menu">
+              <button class="analytics-action" id="analyticsRetry" type="button">重新加载</button>
+              <a class="analytics-action" id="analyticsExternal" target="_blank" rel="noopener noreferrer">独立打开 <i class="ti ti-external-link" aria-hidden="true"></i></a>
+              <details class="analytics-demand">
+                <summary>本次分析需求</summary>
+                <p id="analyticsPrompt"></p>
+                <button class="analytics-action" id="analyticsCopy" type="button">复制需求</button>
+              </details>
+            </div>
+          </details>
+        </div>
+        <p class="analytics-status" id="analyticsStatus" role="status" aria-live="polite" hidden></p>
+        <iframe class="analytics-frame" id="analyticsFrame" title="经营分析工作台" referrerpolicy="no-referrer"></iframe>
+      </section>
+
       <!-- List Section -->
-      <div class="list-section">
+      <div class="list-section" hidden>
         <div class="list-header">
           <div class="list-tabs">
             <div class="list-tab">我的报价</div>
@@ -1502,7 +1691,9 @@
   <!-- 批次 10 / ## 139：首页唯一口径模块（三页签 + 待办口径 + 卡片渲染口径），必须在业务脚本之前加载 -->
   <script src="tech-home-board.js?v=b11"></script>
   <script src="cpq_auth.js"></script>
+  <script src="home-analytics.js?v=3"></script>
   <script>
+    HomeAnalytics.init(document);
     // 导航展开/收起
     function toggleNav() {
       const collapsed = document.getElementById('navCollapsed');
@@ -1537,6 +1728,9 @@
     const counter = document.querySelector('.char-counter');
     if (textarea && counter) {
       textarea.addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = Math.min(280, Math.max(104, this.scrollHeight)) + 'px';
+        this.style.overflowY = this.scrollHeight > 280 ? 'auto' : 'hidden';
         const len = this.value.length;
         counter.textContent = len + '/500';
         if (len > 500) {
@@ -1560,7 +1754,9 @@
       tech: 'tech-workbench.html',  // 技术工艺统一工作台：左会话 + 右九步工作台（1.1→3.3），同源 8010 反向代理
     };
     const MODES = {
-      quote:  { tag: '报价助手', intro: '请输入需求描述，或直接上传文件内容（表格、文档或图片等），帮你一键智能报价。',
+      // 用户提供的默认正文；报价正文待补充。仅填入 value，不自动发送。
+      quote:  { tag: '报价智能体', intro: '请输入需求描述，或直接上传文件内容（表格、文档或图片等），帮你一键智能报价。',
+                prefill: '',
                 ph: '请输入需求描述…（例如：帮我给××客户的储能项目做报价）', newBtn: '新建报价',
                 tabs: ['我的报价', '待办任务', '全部报价'], activeTab: 2, searchPh: '支持通过客户名&项目名搜索',
                 title: '<span class="highlight">创作无限可能</span>，智能报价' },
@@ -1572,10 +1768,16 @@
                 ph: '请输入你的问题或需求描述...', newBtn: '创建',
                 tabs: ['我的规则', '全部规则'], activeTab: 1, searchPh: '支持通过名称&编号搜索',
                 title: '<span class="highlight">创作无限可能</span>，智能助手' },
-      tech:   { tag: '技术工艺助手', intro: '请上传零件图纸与需求/工艺说明文档（可分开上传），或直接描述零件与工艺要求，帮你评估并拆解出结构化工艺路线。',
+      tech:   { tag: '技术工艺智能体', intro: '请上传零件图纸与需求/工艺说明文档（可分开上传），或直接描述零件与工艺要求，帮你评估并拆解出结构化工艺路线。',
+                prefill: '茅台酒盒\n尺寸：50mm*40mm*30mm；盖面纸，铜版纸，180克重， 亮膜；底面纸 铜版纸，哑膜，180克重；盖板材 灰板， 厚度2.5mm，V槽，闭合方式：天地盖 ，包装品类：酒盒、盒型：高档酒盒；预计首批定1000个',
                 ph: '请输入零件与工艺评估需求…（例如：45钢法兰盘，批量500，关键面Ra1.6，评估加工工艺路线）', newBtn: '新建工艺评估',
                 tabs: ['我的清单', '待办任务', '全部清单'], activeTab: 2, searchPh: '支持通过名称&编号搜索',
                 title: '<span class="highlight">创作无限可能</span>，智能工艺' },
+      analytics: { tag: '经营分析智能体', intro: '描述你想了解的经营问题，进入经营分析工作台。',
+                prefill: '为什么2月份管理单元2800采购订单金额过高，按照已审批口径，有什么改进措施和行动建议，分析数据周期1~4月',
+                ph: '请输入经营分析需求，例如：分析本季度收入、毛利及变化原因',
+                newBtn: '开始分析', tabs: [], activeTab: 0, searchPh: '',
+                title: '伏羲相伴，智慧相随' },
     };
 
     // ===== 首页卡片：真实数据（三个助手的历史会话），不再使用演示假数据 =====
@@ -1888,6 +2090,7 @@
        本次请求结束就释放，失败不会被缓存，登录态变化后仍然重试。 */
     const LOAD_INFLIGHT = {};
     async function loadCards(mode) {
+      if (mode === 'analytics') return;
       if (!cardGrid) return;
       if (LOAD_INFLIGHT[mode]) return LOAD_INFLIGHT[mode];
       const run = (async () => {
@@ -1962,6 +2165,7 @@
     }
 
     function renderCards() {
+      if (currentMode === 'analytics') return;
       if (!cardGrid) return;
       const mode = currentMode;
       let rows = SESSIONS[mode];
@@ -2165,7 +2369,7 @@
     // tech 模式切到「图纸 / 需求文档」两个槽 + 行业模板，隐藏通用「上传文件」；离开 tech 时还原。
     function applyUploadMode(mode) {
       const isTech = mode === 'tech';
-      if (uploadSection) uploadSection.style.display = isTech ? 'none' : '';
+      if (uploadSection) uploadSection.style.display = isTech || mode === 'analytics' ? 'none' : '';
       if (techUploadDraw) techUploadDraw.style.display = isTech ? '' : 'none';
       if (techUploadReq) techUploadReq.style.display = isTech ? '' : 'none';
       const ib = document.getElementById('techIndustryBox');
@@ -2240,6 +2444,7 @@
     }
 
     function tagToMode(label) {
+      if (label.includes('经营分析')) return 'analytics';
       if (label.includes('工艺') || label.includes('技术')) return 'tech';
       return label.includes('配置') ? 'config' : (label.includes('规则') ? 'rule' : 'quote');
     }
@@ -2318,10 +2523,20 @@
       const m = MODES[mode];
       document.querySelectorAll('.category-tag').forEach((t) => {
         t.classList.toggle('active', tagToMode(t.textContent) === mode);
+        t.setAttribute('aria-pressed', String(tagToMode(t.textContent) === mode));
       });
-      if (greetingTitle) greetingTitle.innerHTML = m.title;
+      if (greetingTitle) greetingTitle.innerHTML = mode === 'quote' || mode === 'tech'
+        ? '伏羲相伴，智慧相随' : m.title;
       if (introEl) introEl.textContent = m.intro;
-      if (textarea) { textarea.placeholder = m.ph; textarea.focus(); }
+      if (textarea) {
+        textarea.placeholder = m.ph;
+        if (textarea.dataset.prefillMode !== mode) {
+          textarea.value = m.prefill || '';
+          textarea.dataset.prefillMode = mode;
+          textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        textarea.focus();
+      }
       if (newQuoteBtn) newQuoteBtn.innerHTML = '<i class="ti ti-plus"></i> ' + m.newBtn;
       const tabsWrap = document.querySelector('.list-tabs');
       if (tabsWrap) {
@@ -2339,6 +2554,7 @@
         searchInput.value = '';
       }
       applyUploadMode(mode); // tech 模式显示「图纸/需求文档」两个上传槽，其它模式用通用上传
+      if (typeof HomeAnalytics !== 'undefined') HomeAnalytics.setMode(mode);
       loadCards(mode); // 拉取该助手的真实历史会话并渲染卡片
       syncAssistantUrl(mode); // 用 replaceState 同步 ?assistant=，刷新/分享可恢复同一模式
     }
@@ -2420,6 +2636,7 @@
       });
     })();
     function requestNavigate(intent, requirement) {
+      if (intent === 'analytics') { HomeAnalytics.open(requirement); return; }
       // 技术工艺：不走 CPQ 项目确认框。用首页「图纸/需求文档」两槽上传的文件在 tech_app 建项目，
       // 再进入 process_drawing 的「接受工艺评估需求」页（图纸已关联，可继续补充/下一步）。
       if (intent === 'tech') { techCreateAndGo(); return; }
@@ -2530,6 +2747,7 @@
 
     async function submitRequirement() {
       const text = (textarea && textarea.value.trim()) || '';
+      if (currentMode === 'analytics') { HomeAnalytics.open(text); return; }
       if (!text && !pickedFiles.length) { if (textarea) textarea.focus(); return; }
       if (homeParsing) { alert('附件正在解析中，请稍候…'); return; }
       // 路由 = 当前选中的助手标签，不再做对话意图识别跳转
