@@ -40,9 +40,10 @@ class HomeFuxiQuoteTech(unittest.TestCase):
         mode_end = HOME.index("\n    };", mode_start) + len("\n    }")
         node = shutil.which("node") or '/Users/sunjiongjun/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node'
         script = "const assert = require('node:assert/strict'); const modes = " + HOME[mode_start:mode_end] + r""";
-assert.equal(modes.tech.prefill, '茅台酒盒\n尺寸：50mm*40mm*30mm；盖面纸，铜版纸，180克重， 亮膜；底面纸 铜版纸，哑膜，180克重；盖板材 灰板， 厚度2.5mm，V槽，闭合方式：天地盖 ，包装品类：酒盒、盒型：高档酒盒；预计首批定1000个');
+const fullQuote = '茅台酒盒\n尺寸：50mm*40mm*30mm；盖面纸，铜版纸，180克重， 亮膜；底面纸 铜版纸，哑膜，180克重；盖板材 灰板， 厚度2.5mm，V槽，闭合方式：天地盖 ，包装品类：酒盒、盒型：高档酒盒；预计首批定1000个';
+assert.equal(modes.quote.prefill, fullQuote);
+assert.equal(modes.tech.prefill, fullQuote.replace('预计首批定1000个', ''));
 assert.equal(modes.analytics.prefill, '为什么2月份管理单元2800采购订单金额过高，按照已审批口径，有什么改进措施和行动建议，分析数据周期1~4月');
-assert.equal(modes.quote.prefill, '', '报价正文尚未提供');
 """
         result = subprocess.run([node, '-e', script], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
