@@ -1,0 +1,86 @@
+{
+  "browser": "Chrome/156.0.8078.49",
+  "six_steps": "done",
+  "card_status": "completed",
+  "quote": {
+    "product_name": "茅台酒盒",
+    "customer": "测试客户",
+    "specification": "200×150×80mm；天地盖；配合间隙1.8mm；V槽；盖/底180g铜版纸亮/哑膜；灰板2.5mm",
+    "product_code": "YT-RB-01001-A",
+    "quantity": 1000,
+    "currency": "CNY",
+    "demo": true,
+    "tax_percent": "13",
+    "net_unit_price": "15.50",
+    "net_total": "15500.00",
+    "tax_amount": "2015.00",
+    "gross_total": "17515.00"
+  },
+  "requests": [
+    {
+      "session_id": "S",
+      "action": "prepare",
+      "data": {
+        "prompt": "茅台酒盒普通报价六步演示验收。成本仅为演示假设。\n【直接报价参数】{\"1\": {\"product_name\": \"茅台酒盒\", \"product_code\": \"YT-RB-01001-A\", \"customer\": \"测试客户\", \"specification\": \"200×150×80mm；天地盖；配合间隙1.8mm；V槽；盖/底180g铜版纸亮/哑膜；灰板2.5mm\", \"quantity\": 1000}, \"2\": {\"unit_cost\": \"10.125\", \"currency\": \"CNY\", \"cost_source\": \"仅本地流程验收假设成本，非真实成本单\", \"confirmed\": true, \"demo\": true}, \"3\": {\"margin_percent\": \"25\"}, \"4\": {\"addon_per_unit\": \"2\", \"tax_percent\": \"13\"}}【/直接报价参数】"
+      }
+    },
+    {
+      "session_id": "S",
+      "action": "complete",
+      "step": 1,
+      "data": {
+        "product_name": "茅台酒盒",
+        "product_code": "YT-RB-01001-A",
+        "customer": "测试客户",
+        "specification": "200×150×80mm；天地盖；配合间隙1.8mm；V槽；盖/底180g铜版纸亮/哑膜；灰板2.5mm",
+        "quantity": "1000"
+      }
+    },
+    {
+      "session_id": "S",
+      "action": "complete",
+      "step": 2,
+      "data": {
+        "unit_cost": "10.125",
+        "currency": "CNY",
+        "cost_source": "仅本地流程验收假设成本，非真实成本单",
+        "cost_usage": "demo",
+        "confirmed": true,
+        "demo": true
+      }
+    },
+    {
+      "session_id": "S",
+      "action": "complete",
+      "step": 3,
+      "data": {
+        "margin_percent": "25"
+      }
+    },
+    {
+      "session_id": "S",
+      "action": "complete",
+      "step": 4,
+      "data": {
+        "addon_per_unit": "2",
+        "tax_percent": "13"
+      }
+    },
+    {
+      "session_id": "S",
+      "action": "complete",
+      "step": 5,
+      "data": {}
+    },
+    {
+      "session_id": "S",
+      "action": "complete",
+      "step": 6,
+      "data": {}
+    }
+  ],
+  "prompt": "茅台酒盒普通报价六步演示验收。成本仅为演示假设。\n【直接报价参数】{\"1\": {\"product_name\": \"茅台酒盒\", \"product_code\": \"YT-RB-01001-A\", \"customer\": \"测试客户\", \"specification\": \"200×150×80mm；天地盖；配合间隙1.8mm；V槽；盖/底180g铜版纸亮/哑膜；灰板2.5mm\", \"quantity\": 1000}, \"2\": {\"unit_cost\": \"10.125\", \"currency\": \"CNY\", \"cost_source\": \"仅本地流程验收假设成本，非真实成本单\", \"confirmed\": true, \"demo\": true}, \"3\": {\"margin_percent\": \"25\"}, \"4\": {\"addon_per_unit\": \"2\", \"tax_percent\": \"13\"}}【/直接报价参数】",
+  "word_download": "completed",
+  "refresh": "completed_restored",
+  "storage": "controlled transactional fixture"
+}
