@@ -1,0 +1,11 @@
+{
+  "browser": "Chrome/156.0.8078.49",
+  "prompt": "茅台酒盒，客户是贵州茅台。\n\n成品内尺寸：200mm×150mm×80mm。\n盖面纸：铜版纸，180克重，亮膜；\n底面纸：铜版纸，180克重，哑膜；\n盖板材：灰板，厚度2.5mm；\nV槽，闭合方式：天地盖；\n包装品类：酒盒，盒型：高档酒盒；\n配合间隙：1.8mm。\n预计首批定1000个。",
+  "step1": "done",
+  "step2": "pending",
+  "pricing_gaps": [
+    "系统缺少该成品当前有效的未税成本记录"
+  ],
+  "quote": null,
+  "storage": "controlled transactional fixture"
+}

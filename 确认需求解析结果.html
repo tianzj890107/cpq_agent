@@ -2399,11 +2399,11 @@
       // 未登录/服务未就绪时（GATE_BLOCKED）连同输入一起锁死，避免绕过登录直接跟智能体对话
       const lock = v || GATE_BLOCKED;
       $('chatSend').disabled = lock;
-      $('btnNext').disabled = lock || !!WF.directCompleted;
+      $('btnNext').disabled = lock || !!WF.directCompleted || !!WF.directBlocked;
       $('btnPrev').disabled = lock || currentStep <= 1;
       const qfs = $('qaFillStep'), qs = $('qaStep'), qp = $('qaPrev'), qsend = $('qaSend');
       if (qfs) qfs.disabled = lock || !!WF.directQuote;
-      if (qs) qs.disabled = lock || !!WF.directCompleted;
+      if (qs) qs.disabled = lock || !!WF.directCompleted || !!WF.directBlocked;
       if (qp) qp.disabled = lock || currentStep <= 1;
       if (qsend) qsend.disabled = lock || !!WF.directQuote;
       const inp = $('chatInput');
@@ -2850,7 +2850,7 @@
         WF.stepStarted = !!d.step_started;       // 本步是否已按下「开始本步骤」
         WF.loaded = !!d.card;
         WF.directQuote = !!d.direct_quote;
-        if (!WF.directQuote) WF.directCompleted = false;
+        if (!WF.directQuote) { WF.directCompleted = false; WF.directBlocked = false; }
         STEPS[1] = WF.directQuote ? '报价成本确认' : '工艺确认';
         document.dispatchEvent(new CustomEvent('cpq-direct-state', {detail: {session: currentSessionId, enabled: WF.directQuote}}));
         WF.fetchFailed = false;
@@ -3101,6 +3101,14 @@
         wfShow('wf-note-primary', '<i class="ti ti-clock"></i> <b>已转交·待领取</b>：' +
           escapeHtml(WF.pendingTask.source_label || '') + '。对方领取后即可继续第 ' +
           WF.pendingTask.next_step_no + ' 步。');
+        return;
+      }
+      if (WF.directQuote && WF.directBlocked) {
+        wfShow('wf-note-danger', '客户需求已保存；系统报价依据未齐备，等待内部维护。');
+        return;
+      }
+      if (WF.directQuote && WF.directCompleted) {
+        wfShow('wf-note-ok', '本单六步报价已完成，可下载已保存报价单。');
         return;
       }
       if (WF.canEdit) {
@@ -4434,9 +4442,10 @@
       refresh: () => wfRefresh(true),
       say: text => addAiBubble(text),
       lock: value => setBusy(value),
-      mount: (panel, current, viewing, completed, title) => {
+      mount: (panel, current, viewing, completed, title, blocked = false) => {
         WF.directQuote = true;
         WF.directCompleted = completed;
+        WF.directBlocked = blocked;
         currentStep = current; shownStep = viewing; maxStep = Math.max(maxStep, current);
         STEPS[1] = '报价成本确认';
         sections.forEach(sec => { sec.el.style.display = 'none'; });
@@ -4448,7 +4457,7 @@
         $('bottomBar').style.display = '';
         $('viewBar').classList.remove('show');
         $('btnPrev').disabled = busy || viewing <= 1;
-        $('btnNext').disabled = busy || completed;
+        $('btnNext').disabled = busy || completed || blocked;
         $('btnNextText').textContent = completed ? '流程已完成' : viewing < current ? '回到当前步骤' : current === 6 ? '确认输出报价单' : '确认，进入下一步';
         $('btnExport').style.display = completed ? '' : 'none';
         $('btnImportDb').style.display = 'none';

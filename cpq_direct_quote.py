@@ -75,6 +75,9 @@ def normalize(step, data):
 
 
 def parse_prompt(prompt):
+    if isinstance(prompt, str) and PROMPT_OPEN not in prompt and PROMPT_CLOSE not in prompt:
+        from cpq_customer_quote import parse_customer_prompt
+        return parse_customer_prompt(prompt)
     if (not isinstance(prompt, str) or len(prompt) > 100000
             or prompt.count(PROMPT_OPEN) != 1 or prompt.count(PROMPT_CLOSE) != 1):
         raise ValueError('请提供唯一且完整的【直接报价参数】JSON参数块')
@@ -128,6 +131,12 @@ def advance(state, step, data):
     if isinstance(step, bool) or not isinstance(step, int) or not 1 <= step <= 6:
         raise ValueError('步骤号无效')
     values = normalize(step, data)
+    if state.get('auto_pricing'):
+        if step >= 2 and state.get('pricing_gaps'):
+            raise ValueError('系统报价依据尚未齐备：'+'；'.join(state['pricing_gaps']))
+        expected = normalize(step, state['prompt_inputs'].get(str(step), {}))
+        if values != expected:
+            raise ValueError('本单采用系统绑定的需求和报价依据；修改规格请在第1步重新发送需求')
     if step < state['next_step']:
         if state['steps'].get(str(step)) == values:
             return copy.deepcopy(state)
@@ -170,6 +179,14 @@ def command(session_id, user, action='read', *, step=None, data=None):
     prepared = parse_prompt((data or {}).get('prompt')) if action == 'prepare' and isinstance(data, dict) else None
     if action == 'prepare' and prepared is None:
         raise ValueError('缺少直接报价提示词')
+    auto = bool(prepared is not None and '_customer_requirement' in prepared)
+    metadata = {}
+    if auto:
+        from cpq_customer_quote import prepare_customer
+        prepared = prepare_customer(prepared)
+        metadata = dict(auto_pricing=True, pricing_gaps=prepared.pop('_pricing_gaps'),
+                        pricing_evidence=prepared.pop('_pricing_evidence'),
+                        customer_requirement=prepared.pop('_customer_requirement'))
     conn = cpq_wf.tx_connect()
     try:
         with conn.transaction():
@@ -193,15 +210,20 @@ def command(session_id, user, action='read', *, step=None, data=None):
                 state = new_state()
                 if prepared is not None:
                     state['prompt_inputs'] = prepared
+                    state.update(metadata)
                 _store(conn, session_id, state)
                 cpq_wf._log(conn, int(card['card_id']), None, int(user['user_id']),
                             'direct_quote_enabled', 1, 1, '销售经理启用本单直接报价')
             elif action == 'prepare':
-                if state['next_step'] != 1 and state.get('prompt_inputs') != prepared:
+                if state['next_step'] != 1 and (state.get('prompt_inputs') != prepared
+                                               or bool(state.get('auto_pricing')) != auto):
                     raise ValueError('已有确认步骤，不能替换提示词参数，请新建报价')
-                if state.get('prompt_inputs') != prepared:
+                if state['next_step'] == 1 and (state.get('prompt_inputs') != prepared or auto):
                     state = copy.deepcopy(state)
                     state['prompt_inputs'] = prepared
+                    for key in ('auto_pricing','pricing_gaps','pricing_evidence','customer_requirement'):
+                        state.pop(key, None)
+                    state.update(metadata)
                     _store(conn, session_id, state)
             elif action == 'complete':
                 updated = advance(state, step, data)

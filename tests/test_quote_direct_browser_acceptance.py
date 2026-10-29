@@ -53,11 +53,19 @@ class CDP:
 @unittest.skipUnless(os.environ.get('CPQ_BROWSER_ACCEPTANCE')=='1' and CHROME.exists(),
                      '须显式开启Chrome浏览器验收')
 class BrowserAcceptance(unittest.TestCase):
+    customer_only=False
+    missing_cost=False
+    evidence_name=''
     def test_prompt_then_six_original_next_clicks_and_word(self):
         fixture=contracts.WorkflowTests('test_real_workflow_six_steps_no_handoff_and_persistent_read')
         fixture.setUp();self.addCleanup(fixture.doCleanups)
         self.fixture=fixture;self.requests=[];self.download=None
+        if self.missing_cost:
+            catalog=fixture.customer_catalog();catalog['costs']=[]
+            override=patch('cpq_customer_quote.load_catalog',return_value=catalog)
+            override.start();self.addCleanup(override.stop)
         self.artifacts=Path(os.environ.get('CPQ_ACCEPTANCE_ARTIFACT_DIR') or tempfile.mkdtemp(prefix='cpq-direct-evidence-'))
+        self.artifacts=self.artifacts/self.evidence_name
         self.artifacts.mkdir(parents=True,exist_ok=True)
         with patch('cpq_auth._backend','test'),patch('cpq_auth.whoami',return_value=fixture.user),\
              patch('cpq_wf.get_card',side_effect=lambda sid:fixture.card),\
@@ -90,7 +98,11 @@ class BrowserAcceptance(unittest.TestCase):
         process=subprocess.Popen([str(CHROME),'--headless=new','--disable-gpu','--no-first-run',
             '--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+str(profile),'about:blank'],
             stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-        self.addCleanup(lambda:process.terminate() if process.poll() is None else None)
+        def close_browser():
+            if process.poll() is None:process.terminate()
+            try:process.wait(timeout=10)
+            except subprocess.TimeoutExpired:process.kill();process.wait(timeout=10)
+        self.addCleanup(close_browser)
         port_file=profile/'DevToolsActivePort'
         for _ in range(200):
             if port_file.exists():break
@@ -155,6 +167,9 @@ true;
                 inputs=self.fixture.inputs_for_prompt()
                 inputs['2']['cost_source']='仅本地流程验收假设成本，非真实成本单'
                 prompt='茅台酒盒普通报价六步演示验收。成本仅为演示假设。\n【直接报价参数】'+json.dumps(inputs,ensure_ascii=False)+'【/直接报价参数】'
+                if self.customer_only:
+                    prompt=self.fixture.natural_prompt()
+                    self.assertNotRegex(prompt,'成本|毛利|税率|JSON|直接报价参数')
                 await evaluate("document.getElementById('chatInput').focus()")
                 await cdp.call('Input.insertText',{'text':prompt},session)
                 await evaluate("document.getElementById('chatSend').click()")
@@ -165,6 +180,25 @@ true;
                     result=await cdp.call('Page.captureScreenshot',{'format':'png'},session)
                     (self.artifacts/name).write_bytes(base64.b64decode(result['data']))
                 await screenshot('step1.png')
+                if self.missing_cost:
+                    await evaluate("document.getElementById('btnNext').click()")
+                    await wait_for('!busy')
+                    self.assertEqual('done',self.fixture.statuses[1])
+                    self.assertEqual('pending',self.fixture.statuses[2])
+                    self.assertTrue(await evaluate("document.getElementById('btnNext').disabled"))
+                    self.assertIn('系统缺少该成品当前有效的未税成本记录',await evaluate("document.getElementById('directQuotePanel').textContent"))
+                    self.assertEqual(0,await evaluate("document.querySelectorAll('#directQuotePanel [name=unit_cost]').length"))
+                    self.assertIsNone(self.fixture.q.state_for('S')['quote'])
+                    await screenshot('step2-blocked.png')
+                    await cdp.call('Page.reload',session=session)
+                    await wait_for('!!window.CpqDirectHost && !!window.CpqDirect')
+                    await evaluate(bootstrap);await evaluate('wfRefresh(true)')
+                    self.assertTrue(await evaluate("document.getElementById('btnNext').disabled"))
+                    (self.artifacts/'result.json').write_text(json.dumps({'browser':browser['product'],
+                        'prompt':prompt,'step1':'done','step2':'pending','pricing_gaps':self.fixture.q.state_for('S')['pricing_gaps'],
+                        'quote':None,'storage':'controlled transactional fixture'},ensure_ascii=False,indent=2))
+                    print('缺价浏览器验收证据：'+str(self.artifacts))
+                    return
                 for step in range(1,7):
                     self.assertFalse(await evaluate("document.getElementById('btnNext').disabled"))
                     if step==2:
@@ -209,3 +243,13 @@ true;
                 reader.cancel()
                 await asyncio.gather(reader,return_exceptions=True)
         process.wait(timeout=10)
+
+
+class CustomerBrowserAcceptance(BrowserAcceptance):
+    customer_only=True
+    evidence_name='customer-ready'
+
+
+class CustomerMissingCostBrowserAcceptance(CustomerBrowserAcceptance):
+    missing_cost=True
+    evidence_name='customer-missing-cost'

@@ -115,6 +115,44 @@ class DirectQuoteTests(unittest.TestCase):
     def inputs_for_prompt(self):
         return {str(step):values for step,values in self.inputs().items() if step<=4}
 
+    def natural_prompt(self):
+        return """茅台酒盒，客户是贵州茅台。
+
+成品内尺寸：200mm×150mm×80mm。
+盖面纸：铜版纸，180克重，亮膜；
+底面纸：铜版纸，180克重，哑膜；
+盖板材：灰板，厚度2.5mm；
+V槽，闭合方式：天地盖；
+包装品类：酒盒，盒型：高档酒盒；
+配合间隙：1.8mm。
+预计首批定1000个。"""
+
+    def test_plain_language_prompt_extracts_customer_facts_only(self):
+        result=self.q.parse_prompt(self.natural_prompt())
+        self.assertEqual('茅台酒盒',result['1']['product_name'])
+        self.assertEqual('贵州茅台',result['1']['customer'])
+        self.assertEqual(1000,result['1']['quantity'])
+        self.assertIn('200mm×150mm×80mm',result['1']['specification'])
+        self.assertIn('配合间隙：1.8mm',result['1']['specification'])
+        self.assertIn('厚度2.5mm',result['1']['specification'])
+        self.assertNotIn('2',result)
+        self.assertEqual('180',result['_customer_requirement']['lid_face_paper_gsm'])
+        self.assertEqual('哑膜',result['_customer_requirement']['base_lamination'])
+
+    def test_plain_language_does_not_guess_missing_or_conflicting_specs(self):
+        prompt=self.natural_prompt()
+        for old,new in [('客户是贵州茅台',''),('预计首批定1000个',''),
+                        ('配合间隙：1.8mm',''),('150mm','0mm'),
+                        ('盖面纸：铜版纸，180克重，亮膜','盖面纸：铜版纸，亮膜'),
+                        ('预计首批定1000个','预计首批定1000个，数量2000个')]:
+            with self.subTest(old=old),self.assertRaises(ValueError):self.q.parse_prompt(prompt.replace(old,new))
+
+    def test_plain_language_supports_original_unit_and_separator_style(self):
+        prompt=self.natural_prompt().replace('×','*').replace('mm','毫米').replace('，',',').replace('：',':')
+        result=self.q.parse_prompt(prompt)
+        self.assertEqual(1000,result['1']['quantity'])
+        self.assertEqual('180',result['_customer_requirement']['lid_face_paper_gsm'])
+
     def test_page_javascript_sends_six_steps_and_preserves_demo_choice(self):
         root=Path(__file__).resolve().parents[1]
         script=r"""
@@ -186,7 +224,8 @@ class WorkflowTests(unittest.TestCase):
                     raise
             def close(conn):pass
         self.conn=Conn()
-        for item in [patch('cpq_wf.tx_connect',return_value=self.conn),
+        for item in [patch('cpq_customer_quote.load_catalog',side_effect=self.customer_catalog),
+                     patch('cpq_wf.tx_connect',return_value=self.conn),
                      patch('cpq_auth._connect',return_value=self.conn),
                      patch('cpq_wf._fetch_card',side_effect=lambda c,s:copy.deepcopy(self.card) if s=='S' else None),
                      patch('cpq_wf.step_snapshot',side_effect=lambda s,n,conn=None:copy.deepcopy(self.snaps.get(n))),
@@ -196,6 +235,7 @@ class WorkflowTests(unittest.TestCase):
 
     inputs=DirectQuoteTests.inputs
     inputs_for_prompt=DirectQuoteTests.inputs_for_prompt
+    natural_prompt=DirectQuoteTests.natural_prompt
 
     def execute(self,conn,sql,args=()):
         from unittest.mock import Mock
@@ -294,6 +334,48 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual({n:'pending' for n in range(1,7)},self.statuses)
         self.assertEqual('10.125',prepared['state']['prompt_inputs']['2']['unit_cost'])
 
+    def customer_catalog(self):
+        facts={
+          'inner_length':'200','inner_width':'150','inner_height':'80',
+          'lid_face_paper':'铜版纸','base_face_paper':'铜版纸',
+          'lid_face_paper_gsm':'180','base_face_paper_gsm':'180',
+          'lid_lamination':'亮膜','base_lamination':'哑膜','lid_grey_board_thickness':'2.5',
+          'closure_type':'天地盖','v_groove':'是','fit_clearance':'1.8',
+          'packaging_category':'酒盒','box_family':'高档酒盒','quote_quantity':'1000',
+          'cost_currency':'CNY'}
+        active={'is_deleted':False,'effective_status':True,'latest':True}
+        return {
+          'products':[dict(active,product_item_code='TEST-WINE-200',product_item_name='茅台酒盒',
+                           para_code=k,para_value=v,data_source='test-fixture-demo') for k,v in facts.items()],
+          'costs':[dict(active,material_code='TEST-WINE-200',material_unit_price='10.125',
+                        md_clm_material_cost_cnf_id='COST-1',data_source='test-fixture-demo')],
+          'factors':[dict(factor_code='MARGIN-1',industry='packaging',factor_type='margin',
+                          value='0.25',source='test-fixture-demo'),
+                     dict(factor_code='TAX-1',industry='packaging',factor_type='tax',value='0.13',source='test-fixture-demo')],
+          'addons':[dict(active,md_clm_material_price_rule_id='ADDON-1',data_source='packaging',
+                        rule_classification='报价',rule_expression='def 加价金额 = 2\n基础价格 + 加价金额')],
+        }
+
+    def test_plain_prompt_prepares_and_completes_the_same_card(self):
+        prepared=self.q.command('S',self.user,'prepare',data={'prompt':self.natural_prompt()})
+        self.assertEqual([],prepared['state']['pricing_gaps'])
+        self.assertEqual('10.125',prepared['state']['prompt_inputs']['2']['unit_cost'])
+        for step in range(1,7):
+            data=prepared['state']['prompt_inputs'].get(str(step),{})
+            result=self.q.command('S',self.user,'complete',step=step,data=data)
+        self.assertEqual('completed',result['card']['overall_status'])
+        self.assertEqual('17515.00',result['state']['quote']['gross_total'])
+
+    def test_customer_prompt_missing_system_cost_stops_at_step_two(self):
+        catalog=self.customer_catalog();catalog['costs']=[]
+        with patch('cpq_customer_quote.load_catalog',return_value=catalog):
+            result=self.q.command('S',self.user,'prepare',data={'prompt':self.natural_prompt()})
+        self.assertTrue(result['state']['pricing_gaps'])
+        self.q.command('S',self.user,'complete',step=1,data=result['state']['prompt_inputs']['1'])
+        with self.assertRaises(ValueError):self.q.command('S',self.user,'complete',step=2,data=self.inputs()[2])
+        self.assertEqual('done',self.statuses[1]);self.assertEqual('pending',self.statuses[2])
+        self.assertIsNone(self.q.state_for('S')['quote'])
+
     def test_authenticated_handler_runs_all_six_and_downloads_saved_document(self):
         import cpq_suite_server
         from unittest.mock import Mock
@@ -315,6 +397,64 @@ class WorkflowTests(unittest.TestCase):
             handler.send_response.assert_called_once_with(200)
             self.assertTrue(handler.wfile.getvalue().startswith(b'PK'))
             self.assertEqual('completed',self.card['overall_status'])
+
+
+class CustomerCatalogTests(unittest.TestCase):
+    def setUp(self):
+        import cpq_customer_quote
+        import cpq_direct_quote
+        self.c=cpq_customer_quote;self.q=cpq_direct_quote
+        fixture=WorkflowTests('test_plain_prompt_prepares_and_completes_the_same_card')
+        self.catalog=fixture.customer_catalog()
+        self.parsed=self.q.parse_prompt(fixture.natural_prompt())
+
+    def test_parameter_and_price_rule_evidence_are_pinned(self):
+        result=self.c.prepare_customer(self.parsed,self.catalog)
+        evidence=result['_pricing_evidence']
+        self.assertEqual(len(self.catalog['products']),len(evidence['product_parameters']))
+        self.assertEqual('COST-1',evidence['cost_record']['md_clm_material_cost_cnf_id'])
+        self.assertEqual('MARGIN-1',evidence['margin_rules'][0]['factor_code'])
+        self.assertEqual('ADDON-1',evidence['addon_rules'][0]['md_clm_material_price_rule_id'])
+
+    def test_only_exact_active_spec_quantity_and_current_cost_are_used(self):
+        for section,key,value in [('products','is_deleted',True),('products','effective_status',False),
+                                  ('costs','price_expiration_date','2000-01-01'),('costs','is_deleted',True),
+                                  ('costs','data_source','unknown'),('costs','material_unit_price','0')]:
+            catalog=copy.deepcopy(self.catalog);catalog[section][0][key]=value
+            with self.subTest(section=section,key=key):
+                result=self.c.prepare_customer(self.parsed,catalog)
+                self.assertTrue(result['_pricing_gaps']);self.assertNotIn('2',result)
+        for key,value in [('base_lamination','亮膜'),('quote_quantity','5000'),('lid_grey_board_thickness','2.0')]:
+            catalog=copy.deepcopy(self.catalog)
+            for row in catalog['products']:
+                if row['para_code']==key:row['para_value']=value
+            with self.subTest(key=key):self.assertTrue(self.c.prepare_customer(self.parsed,catalog)['_pricing_gaps'])
+
+    def test_missing_addons_or_battery_rules_cannot_silently_mean_zero(self):
+        for rows in [[],[dict(self.catalog['addons'][0],data_source='ywln-rule')],
+                     [dict(self.catalog['addons'][0],rule_expression='基础价格 + 模型估算')]]:
+            catalog=copy.deepcopy(self.catalog);catalog['addons']=rows
+            result=self.c.prepare_customer(self.parsed,catalog)
+            self.assertTrue(result['_pricing_gaps']);self.assertNotIn('4',result)
+
+    def test_reference_standard_cost_is_never_an_order_cost(self):
+        catalog=copy.deepcopy(self.catalog);catalog['costs']=[]
+        catalog['boxes']=[dict(box_type_code='TEST-WINE-200',standard_cost='12.5',source_type='demo')]
+        result=self.c.prepare_customer(self.parsed,catalog)
+        self.assertTrue(result['_pricing_gaps']);self.assertNotIn('2',result)
+
+    def test_system_prices_are_bound_and_client_cannot_promote_demo(self):
+        prepared=self.c.prepare_customer(self.parsed,self.catalog)
+        state=self.q.new_state();state.update(auto_pricing=True,pricing_gaps=[],
+            prompt_inputs={k:v for k,v in prepared.items() if k in ('1','2','3','4')})
+        state=self.q.advance(state,1,state['prompt_inputs']['1'])
+        for key,value in [('demo',False),('unit_cost','0.01'),('cost_source','客户随意填价')]:
+            data=copy.deepcopy(state['prompt_inputs']['2']);data[key]=value
+            with self.subTest(key=key),self.assertRaises(ValueError):self.q.advance(state,2,data)
+
+    def test_lookup_unavailable_does_not_enable_fake_empty_catalog(self):
+        with patch('cpq_db.connect',side_effect=RuntimeError('offline')):
+            with self.assertRaisesRegex(ValueError,'数据读取失败'):self.c.load_catalog()
 
 
 if __name__ == '__main__':unittest.main()

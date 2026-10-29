@@ -70,11 +70,25 @@
     if (!state || session !== host.session()) return;
     const current = Math.min(state.next_step, 6);
     viewing = Math.max(1, Math.min(Number(step) || current, current));
-    const readonly = viewing < state.next_step;
+    const confirmed = viewing < state.next_step;
+    const readonly = confirmed || !!state.auto_pricing;
     panel.replaceChildren(); error.textContent = ''; form = null;
     el('h2', state.next_step === 7 && viewing === 6 ? '六步报价已完成' : '第 ' + viewing + ' 步 · ' + titles[viewing - 1], panel);
     panel.appendChild(error);
-    if (readonly) el('p', '本步已确认，以下为已保存内容。', panel);
+    if (confirmed) el('p', '本步已确认，以下为已保存内容。', panel);
+    if (state.auto_pricing) {
+      el('p', '客户规格已识别；成本、毛利率、税率和加价由系统有效记录提供，不需要客户补填。', panel);
+      if (state.pricing_gaps && state.pricing_gaps.length) {
+        el('p', '系统报价依据尚未齐备，需要内部维护：', panel);
+        const list = el('ul', undefined, panel);
+        state.pricing_gaps.forEach(gap => el('li', gap, list));
+        if (viewing >= 2) {
+          el('p', '客户需求已保存。内部依据补齐前，不能完成成本确认或输出报价单。', panel);
+          host.mount(panel, current, viewing, false, titles[viewing - 1], true);
+          return;
+        }
+      }
+    }
     form = el('form', undefined, panel);
     const data = Object.assign({}, viewing === 1 ? host.seed() : {},
       (state.prompt_inputs || {})[String(viewing)] || {}, state.steps[String(viewing)] || {});
@@ -121,11 +135,15 @@
     pending = true; host.lock(true); error.textContent = '';
     const step = state.next_step;
     const values = Object.fromEntries(new FormData(form));
-    if (step === 2) { values.confirmed = form.elements.confirmed.checked; values.demo = values.cost_usage === 'demo'; }
+    if (step === 2) {
+      values.confirmed = form.elements.confirmed.checked;
+      values.demo = state.auto_pricing ? state.prompt_inputs['2'].demo : values.cost_usage === 'demo';
+    }
     try {
       await api('complete', {step, data: values});
       view(); await host.refresh();
-      host.say('第' + step + '步已确认' + (state.next_step === 7 ? '，六步报价已完成，可下载报价单。' : '，请核对第' + state.next_step + '步并继续。'));
+      host.say('第' + step + '步已确认' + (state.next_step === 7 ? '，六步报价已完成，可下载报价单。' :
+        state.auto_pricing && state.pricing_gaps.length ? '，系统报价依据未齐备，暂不能继续成本确认。' : '，请核对第' + state.next_step + '步并继续。'));
       return true;
     } catch (e) { error.textContent = e.message; return false; }
     finally { pending = false; host.lock(false); }
@@ -137,9 +155,13 @@
     try {
       await api('prepare', {data: {prompt}});
       view(); await host.refresh();
-      host.say('已读取完整直接报价参数。请核对右侧第1步，然后使用原来的“下一步”逐步完成六步。');
+      host.say(state.auto_pricing ? '已识别客户规格并检查系统报价依据，请核对右侧客户需求后点下一步。' :
+        '已读取完整直接报价参数。请核对右侧第1步，然后使用原来的“下一步”逐步完成六步。');
       return true;
-    } catch (e) { host.say('直接报价参数未通过：' + e.message); return false; }
+    } catch (e) {
+      host.say((prompt.includes('【直接报价参数】') ? '直接报价参数未通过：' : '客户需求暂不能继续：') + e.message);
+      return false;
+    }
     finally { pending = false; host.lock(false); }
   }
   async function open() {
@@ -158,6 +180,12 @@
     if (entry) entry.textContent = event.detail.enabled ? '继续本单直接报价' : '本单直接报价';
   });
   document.addEventListener('cpq-auth-change', () => { state = null; session = null; panel.remove(); });
-  window.CpqDirect = {open, next, view, restore, fromPrompt, download,
-    hasPrompt: text => typeof text === 'string' && (text.includes('【直接报价参数】') || text.includes('【/直接报价参数】'))};
+  function hasPrompt(text) {
+    if (typeof text !== 'string') return false;
+    if (text.includes('【直接报价参数】') || text.includes('【/直接报价参数】')) return true;
+    const intent = text.replace(/不(?:转|经过)(?:技术工艺|工艺经理)|无需转(?:技术工艺|工艺经理)/g, '');
+    if (/(?:转交|转|交给)(?:技术工艺|工艺经理)/.test(intent)) return false;
+    return /酒盒|礼盒|包装盒/.test(text) && /尺寸\s*[:：]?/.test(text) && /盖面纸/.test(text);
+  }
+  window.CpqDirect = {open, next, view, restore, fromPrompt, download, hasPrompt};
 })();

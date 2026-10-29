@@ -1,0 +1,85 @@
+{
+  "browser": "Chrome/156.0.8078.49",
+  "six_steps": "done",
+  "card_status": "completed",
+  "quote": {
+    "product_name": "茅台酒盒",
+    "customer": "贵州茅台",
+    "specification": "成品内尺寸：200mm×150mm×80mm。\n盖面纸：铜版纸，180克重，亮膜；\n底面纸：铜版纸，180克重，哑膜；\n盖板材：灰板，厚度2.5mm；\nV槽，闭合方式：天地盖；\n包装品类：酒盒，盒型：高档酒盒；\n配合间隙：1.8mm。\n预计首批定1000个。",
+    "product_code": "TEST-WINE-200",
+    "quantity": 1000,
+    "currency": "CNY",
+    "demo": true,
+    "tax_percent": "13.00",
+    "net_unit_price": "15.50",
+    "net_total": "15500.00",
+    "tax_amount": "2015.00",
+    "gross_total": "17515.00"
+  },
+  "requests": [
+    {
+      "session_id": "S",
+      "action": "prepare",
+      "data": {
+        "prompt": "茅台酒盒，客户是贵州茅台。\n\n成品内尺寸：200mm×150mm×80mm。\n盖面纸：铜版纸，180克重，亮膜；\n底面纸：铜版纸，180克重，哑膜；\n盖板材：灰板，厚度2.5mm；\nV槽，闭合方式：天地盖；\n包装品类：酒盒，盒型：高档酒盒；\n配合间隙：1.8mm。\n预计首批定1000个。"
+      }
+    },
+    {
+      "session_id": "S",
+      "action": "complete",
+      "step": 1,
+      "data": {
+        "product_name": "茅台酒盒",
+        "product_code": "TEST-WINE-200",
+        "customer": "贵州茅台",
+        "specification": "成品内尺寸：200mm×150mm×80mm。\n盖面纸：铜版纸，180克重，亮膜；\n底面纸：铜版纸，180克重，哑膜；\n盖板材：灰板，厚度2.5mm；\nV槽，闭合方式：天地盖；\n包装品类：酒盒，盒型：高档酒盒；\n配合间隙：1.8mm。\n预计首批定1000个。",
+        "quantity": "1000"
+      }
+    },
+    {
+      "session_id": "S",
+      "action": "complete",
+      "step": 2,
+      "data": {
+        "unit_cost": "10.125",
+        "currency": "CNY",
+        "cost_source": "系统成品成本记录#COST-1；test-fixture-demo",
+        "confirmed": true,
+        "demo": true
+      }
+    },
+    {
+      "session_id": "S",
+      "action": "complete",
+      "step": 3,
+      "data": {
+        "margin_percent": "25.00"
+      }
+    },
+    {
+      "session_id": "S",
+      "action": "complete",
+      "step": 4,
+      "data": {
+        "addon_per_unit": "2",
+        "tax_percent": "13.00"
+      }
+    },
+    {
+      "session_id": "S",
+      "action": "complete",
+      "step": 5,
+      "data": {}
+    },
+    {
+      "session_id": "S",
+      "action": "complete",
+      "step": 6,
+      "data": {}
+    }
+  ],
+  "prompt": "茅台酒盒，客户是贵州茅台。\n\n成品内尺寸：200mm×150mm×80mm。\n盖面纸：铜版纸，180克重，亮膜；\n底面纸：铜版纸，180克重，哑膜；\n盖板材：灰板，厚度2.5mm；\nV槽，闭合方式：天地盖；\n包装品类：酒盒，盒型：高档酒盒；\n配合间隙：1.8mm。\n预计首批定1000个。",
+  "word_download": "completed",
+  "refresh": "completed_restored",
+  "storage": "controlled transactional fixture"
+}
