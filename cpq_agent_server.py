@@ -500,7 +500,9 @@ def fixed_forms_catalog(industry=None) -> list:
             entry["industry"] = quote_industry_templates.normalize(industry)
         from cpq_quote_workspace import catalog_entry
         entry=catalog_entry(entry,quote_industry_templates.normalize(industry))
-        if entry is not None:out.append(entry)
+        if entry is not None:
+            from cpq_quote_defaults import with_recommendations
+            out.append(with_recommendations(entry, industry))
     out.sort(key=lambda x: (x["step"], x.pop("_ord")))
     return out
 

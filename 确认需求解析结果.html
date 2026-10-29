@@ -1192,6 +1192,7 @@
         const byId = new Map((meta.forms || []).map(f => [f.section_id, f]));
         FORMS.forEach(f => {
           const got = byId.get(f.section_id);
+          if (got) { f.recommended_values = got.recommended_values; f.recommended_rows = got.recommended_rows; }
           if (/_techparams$/.test(f.section_id || '') && got) {
             f.techparams_columns = got.techparams_columns || null;
             f.techparams_source = got.techparams_source || '';
@@ -2653,10 +2654,9 @@
       service_life: '寿命', hermeticity: '密封性',
     };
 
-    /* 新建报价弹框里的 项目名称/客户名称 -> 直接填进 s1_basic「测算基本信息」的
-       「项目名称」「客户」两个字段（确定性带入，不经大模型；其余字段留空骨架）。 */
-    function fillBasicFromProject(projectName, customer) {
-      const want = { '项目名称': (projectName || '').trim(), '客户': (customer || '').trim() };
+    /* 项目元数据确定性带入基本信息，不依赖大模型；未知客户保持空白。 */
+    function fillBasicFromProject(projectName, customer, projectCode) {
+      const want = { '项目名称': (projectName || '').trim(), '客户': (customer || '').trim(), '测算单号': (projectCode || '').trim() };
       if (!want['项目名称'] && !want['客户']) return;
       const f = FORMS.find(x => x.section_id === 's1_basic');
       if (!f) return;
@@ -2669,6 +2669,59 @@
         action: 'render_form', step: f.step, section_id: 's1_basic',
         title: f.title, editable: f.editable, fields: fields,
       });
+    }
+
+    // 草稿仅以新会话ID索引；刷新恢复已有值，不给历史会话重新套模板。
+    function rememberNewQuoteDraft() {
+      if (!currentSessionId || currentStep !== 1) return;
+      try {
+        const key = 'cpq:newQuoteDraft:' + currentSessionId;
+        if (sessionStorage.getItem(key)) sessionStorage.setItem(key, JSON.stringify(collectStepData(1)));
+      } catch (error) { /* 临时存储不可用时仍可正常确认并保存服务端快照。 */ }
+    }
+    function restoreNewQuoteDraft() {
+      if (currentStep !== 1) return;
+      let draft;
+      try { draft = JSON.parse(sessionStorage.getItem('cpq:newQuoteDraft:' + currentSessionId) || 'null'); } catch (error) { return; }
+      if (!draft) return;
+      const existing = collectStepData(1);
+      FORMS.filter(f => f.step === 1).forEach(f => {
+        const value = (draft[f.section_id] || {}).数据;
+        const saved = (existing[f.section_id] || {}).数据;
+        const populated = Array.isArray(saved) ? saved.length > 0
+          : Object.values(saved || {}).some(v => v !== '' && v != null);
+        if (!value || populated) return; // 服务端已保存快照优先。
+        if (Array.isArray(value)) renderTableSection({...f, rows: value});
+        else renderFormSection({...f, fields: (f.fields || []).map(field =>
+          ({...field, type: 'text', value: value[field.key] ?? ''}))});
+      });
+    }
+    document.addEventListener('input', event => {
+      if (event.target.closest && event.target.closest('#resultsContent')) rememberNewQuoteDraft();
+    });
+    document.addEventListener('change', event => {
+      if (event.target.closest && event.target.closest('#resultsContent')) rememberNewQuoteDraft();
+    });
+
+    // 仅新建时应用服务端行业推荐；恢复会话不生成默认值。
+    function fillNewQuoteRecommendations() {
+      const existing = collectStepData(1);
+      FORMS.filter(f => f.step === 1).forEach(f => {
+        const data = (existing[f.section_id] || {}).数据;
+        if (Array.isArray(data) && data.length) return;
+        if (f.recommended_values) {
+          const values = Object.assign({}, f.recommended_values, data || {});
+          // 空白骨架字段不应吞掉推荐值。
+          Object.keys(f.recommended_values).forEach(k => {
+            if (values[k] === '' || values[k] == null) values[k] = f.recommended_values[k];
+          });
+          renderFormSection({...f, fields: (f.fields || []).map(field =>
+            ({...field, type: 'text', value: values[field.key] ?? ''}))});
+        } else if (f.recommended_rows && f.recommended_rows.length) {
+          renderTableSection({...f, rows: f.recommended_rows});
+        }
+      });
+      addAiBubble('已按所选行业预填可编辑的推荐内容，请核对付款、运输及产品需求。推荐产品尚未选用，客户、地址、规格和价格以实际资料为准。');
     }
 
     /* ================= 第 1 步：三段串行（严格按顺序，不并行） =================
@@ -5348,7 +5401,7 @@
       try {
         // 行业记忆键**故意**不在清理清单里：与技术工艺路径「记住上次选的行业」一致，
         // 同一个人通常连着建同一行业的单子，每次都退回默认行业等于每次都要重选。
-        ['cpq:requirement', 'cpq:files', 'cpq:fileContents', 'cpq:projectName', 'cpq:projectCode', 'cpq:customer', 'cpq:openSession']
+        ['cpq:requirement', 'cpq:files', 'cpq:fileContents', 'cpq:projectName', 'cpq:projectCode', 'cpq:customer', 'cpq:openSession', 'cpq:quoteFileRefs']
           .forEach(k => sessionStorage.removeItem(k));
       } catch {}
       // 只有主动新建解除绑定；普通刷新仍沿用URL里的会话。
@@ -5739,6 +5792,7 @@
         if (openId) {
           const restored = await openSession(openId);
           if (restored) {
+            restoreNewQuoteDraft();
             try { sessionStorage.removeItem('cpq:openSession'); } catch (e) {}
             BOOT_PENDING = false;
             wfMaybePromptStart();
@@ -5754,6 +5808,13 @@
         });
         if (!nw.id) throw new Error('新建报价未返回会话ID');
         currentSessionId = nw.id;
+        if (!projectCode) projectCode = 'BJD' + Date.now() + Math.floor(Math.random() * 1000);
+        if (!projectName) projectName = '新建报价项目';
+        try {
+          sessionStorage.setItem('cpq:projectCode', projectCode);
+          sessionStorage.setItem('cpq:projectName', projectName);
+        } catch (error) {}
+        if ($('projectName')) $('projectName').textContent = projectName;
         pinQuoteSession(currentSessionId);
         try {
           const mine = JSON.parse(localStorage.getItem('cpq:mySessions') || '[]');
@@ -5791,18 +5852,19 @@
 
       // 右侧表结构写死、已预渲染出空骨架；进第 1 步即可看到 6 个固定分区
       setStep(1);
-      // 建卡弹框里填的项目名称/客户名称是权威值：直接带入「测算基本信息」的 项目名称 / 客户，
-      // 不依赖大模型（首轮快速通道也不再填这些分区）
-      fillBasicFromProject(projectName, customer);
+      // 项目元数据及行业推荐确定性带入；名称可能是临时名称，未知客户待补充。
+      fillBasicFromProject(projectName, customer, projectCode);
+      fillNewQuoteRecommendations();
+      try { sessionStorage.setItem('cpq:newQuoteDraft:' + currentSessionId, JSON.stringify(collectStepData(1))); } catch (error) {}
       const hasInput = requirement || fileContents.length || files.length;
       const kickoff =
         '【会话开始】用户从报价首页进入报价流程。\n' +
         projLine + '\n' +
-        '（以上项目名称/编码/客户是用户在弹框里填写的权威值，请直接用于第 1 步「测算基本信息」的 客户、项目名称 等字段，不要另行臆造。）\n' +
+        '（以上为当前项目元数据，名称可能由系统临时生成，空客户待补充，不得称为客户已确认资料。请保留右侧已有内容，推荐值供用户核对，不得伪造。）\n' +
         '需求描述：' + (requirement || '（空——用户未上传需求文档，也未填写需求描述）') + '\n' +
         '附件：' + (files.length ? files.join('、') : '无') + '\n' +
-        '第 1 步的 6 个固定分区（s1_basic/s1_dest/s1_products/s1_techparams/s1_payment/s1_logistics）表结构已预渲染成【空骨架】在右侧，字段固定、你不用造结构；' +
-        '但**右侧现在是空的，值必须你主动调用 cpq_ui 的 render_form(values)/render_table(rows) 填进去**——不 render 右侧就一直空着。\n' +
+        '第 1 步的 6 个固定分区（s1_basic/s1_dest/s1_products/s1_techparams/s1_payment/s1_logistics）表结构及可编辑行业推荐已显示在右侧，字段固定、你不用造结构；' +
+        '右侧已有行业推荐草稿，保留已有用户值；根据真实需求补充，推荐不代表客户确认。\n' +
         '⚠️ **分工**：需求信息已通过完整性校验。**你只负责这四个分区：' +
         's1_basic（测算基本信息）、s1_dest（目的地信息·可多行）、s1_payment（付款里程碑信息）、s1_logistics（物流信息·可多行）**。\n' +
         '**产品匹配由系统在你填完之后自动做**（六维加权评分出 Top3 推荐清单供用户点选）——' +

@@ -1602,7 +1602,7 @@
       <button class="icon-btn" onclick="closeOverlays()"><i class="ti ti-x"></i></button>
     </div>
     <div class="drawer-actions">
-      <button class="btn-mini primary" onclick="goToAssistant('quote','',[])"><i class="ti ti-plus"></i> 新建报价</button>
+      <button class="btn-mini primary" onclick="requestNavigate('quote','')"><i class="ti ti-plus"></i> 新建报价</button>
       <button class="icon-btn" onclick="loadHistoryList()" title="刷新"><i class="ti ti-refresh"></i></button>
     </div>
     <div class="drawer-body" id="historyList"><div class="hist-empty">加载中…</div></div>
@@ -3293,6 +3293,8 @@
         document.getElementById('pjMsg').textContent = '';
       });
     })();
+    let quoteNavigating = false;
+    window.addEventListener('pageshow', () => { quoteNavigating = false; });
     function requestNavigate(intent, requirement) {
       if (intent === 'analytics') { HomeAnalytics.open(requirement); return; }
       // 技术工艺：不走 CPQ 项目确认框。用首页「图纸/需求文档」两槽上传的文件在 tech_app 建项目，
@@ -3300,6 +3302,23 @@
       if (intent === 'tech') { techCreateAndGo(); return; }
       const page = PAGES[intent];
       if (!page) { alert('「' + MODES[intent].tag + '」页面正在开发中，敬请期待。'); return; }
+      if (intent === 'quote') {
+        if (homeParsing || quoteUploadError) { alert(quoteUploadError || '附件保存中，请稍候'); return; }
+        if (quoteNavigating) return;
+        try {
+          sessionStorage.removeItem('cpq:openSession');
+          sessionStorage.setItem('cpq:projectName', '新建报价项目');
+          sessionStorage.setItem('cpq:projectCode', genProjectCode('quote'));
+          sessionStorage.removeItem('cpq:customer');
+          sessionStorage.setItem('cpq:industry', techIndustry());
+          quoteNavigating = true;
+          goToAssistant(intent, requirement || '', pickedFiles.slice());
+        } catch (error) {
+          quoteNavigating = false;
+          alert('新建报价失败，请重试：' + error.message);
+        }
+        return;
+      }
       // 规则类型：按需求文字关键词预填弹框里的单选钮（仅规则助手内的子类型，用户可手改）
       const ruleKind = intent === 'rule' ? detectRuleKind(requirement || '') : null;
       _pendingNav = { intent, ruleKind };
