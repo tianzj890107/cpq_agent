@@ -1,0 +1,15 @@
+{
+  "observed_at": "2026-10-28T22:00:43.175347",
+  "mode": "read_only_live_catalog_probe",
+  "prompt": "茅台酒盒，客户是贵州茅台。\n\n成品内尺寸：200mm×150mm×80mm。\n盖面纸：铜版纸，180克重，亮膜；\n底面纸：铜版纸，180克重，哑膜；\n盖板材：灰板，厚度2.5mm；\nV槽，闭合方式：天地盖；\n包装品类：酒盒，盒型：高档酒盒；\n配合间隙：1.8mm。\n预计首批定1000个。",
+  "eligible_product_parameter_rows": 0,
+  "eligible_cost_rows": 0,
+  "packaging_factor_rows": 2,
+  "packaging_addon_rows": 0,
+  "pricing_gaps": [
+    "系统成品主数据中未找到唯一匹配全部规格及1000个数量口径的成品",
+    "系统缺少唯一有效的包装附加费规则，不能拿电池规则或默认0代替"
+  ],
+  "ready": false,
+  "note": "未启用或修改任何线上报价；未使用盒型结构对比standard_cost作为订单成本"
+}

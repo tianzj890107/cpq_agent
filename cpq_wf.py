@@ -608,6 +608,20 @@ def _done_step_numbers(conn, card_id: int) -> set:
     return done
 
 
+def _direct_state(session_id, conn=None):
+    from cpq_direct_quote import state_for
+    return state_for(session_id, conn)
+
+
+def _can_card_step(card, user, step_no, direct=False):
+    if card and card.get('overall_status') == 'archived':
+        return False
+    if direct:
+        from cpq_direct_quote import authorized
+        return authorized(card, user)
+    return can_do_step(user, step_no)
+
+
 # ---------------------------------------------------------------------------
 # 卡片
 # ---------------------------------------------------------------------------
@@ -701,7 +715,7 @@ def sync_card(session_id: str, user: dict, title: str = "", customer: str = "",
             sets.append("industry = %s")
             args.append(wanted_industry)
         step = int(current_step or 0)
-        if step and step > int(card["current_step"] or 1):
+        if step and step > int(card["current_step"] or 1) and not _direct_state(session_id, conn):
             sets.append("current_step = %s")
             args.append(step)
             sets.append("overall_status = %s")
@@ -762,14 +776,19 @@ def start_step(session_id: str, step_no: int, user: dict) -> dict:
     step_no = int(step_no or 0)
     if not (1 <= step_no <= LAST_STEP):
         raise WfError("步骤号无效")
-    if not can_do_step(user, step_no):
-        need = ROLES.get(role_of_step(step_no), "指定角色")
-        raise WfError(f"第 {step_no} 步需要「{need}」完成，你当前是「{user.get('role_name')}」")
     conn = cpq_auth._connect()
     try:
         card = _fetch_card(conn, session_id)
         if not card:
             raise WfError("卡片不存在，请先保存报价会话")
+        direct = bool(_direct_state(session_id, conn))
+        if not _can_card_step(card, user, step_no, direct):
+            need = ROLES.get('sales_mgr' if direct else role_of_step(step_no), '指定角色')
+            raise WfError(f"第 {step_no} 步需要「{need}」完成，你当前是「{user.get('role_name')}」")
+        if direct:
+            state = _direct_state(session_id, conn)
+            if state['next_step'] > 6 or step_no != state['next_step']:
+                raise WfError('请按本单直接报价的当前步骤操作')
         cid = int(card["card_id"])
         now = _now()
         # 只把 pending 推进到 in_progress；已完成(done)的步骤不回退
@@ -876,7 +895,7 @@ def quote_version_state(session_id: str) -> dict:
 
 
 def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "",
-                  on_behalf_of: str = "", conn=None) -> dict:
+                  on_behalf_of: str = "", conn=None, *, _direct_validated=False) -> dict:
     """把某一步标记为完成（角色不符会被拒绝）。
 
     返回 {card, need_handoff, next_step_no, next_step_name, next_role_code/name}：
@@ -901,9 +920,6 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "",
     if stand_in and stand_in != role_of_step(step_no):
         raise WfError(f"不能以「{ROLES.get(stand_in, stand_in)}」的名义完成第 {step_no} 步")
     stand_in_used = bool(stand_in) and not can_do_step(user, step_no)
-    if not can_do_step(user, step_no) and not stand_in:
-        need = ROLES.get(role_of_step(step_no), "指定角色")
-        raise WfError(f"第 {step_no} 步需要「{need}」完成，你当前是「{user.get('role_name')}」")
     own = conn is None
     if own:
         conn = cpq_auth._connect()
@@ -911,6 +927,20 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "",
         card = _fetch_card(conn, session_id)
         if not card:
             raise WfError("卡片不存在，请先保存报价会话")
+        direct = bool(_direct_state(session_id, conn))
+        if direct and not _direct_validated:
+            raise WfError('本单请在直接报价面板逐步确认')
+        if _direct_validated and (not direct or not _can_card_step(card, user, step_no, True)):
+            raise WfError('本单直接报价权限不符')
+        if not direct and not can_do_step(user, step_no) and not stand_in:
+            need = ROLES.get(role_of_step(step_no), '指定角色')
+            raise WfError(f"第 {step_no} 步需要「{need}」完成，你当前是「{user.get('role_name')}」")
+        try:
+            supplied = json.loads(snapshot or '{}')
+        except (TypeError, ValueError):
+            supplied = {}
+        if isinstance(supplied, dict) and '_direct_quote' in supplied:
+            raise WfError('不能通过步骤快照设置直接报价模式')
         cid = int(card["card_id"])
         now = _now()
         # data_snapshot 按 DA 是 jsonb：前端传的是 JSON.stringify 的结果。
@@ -972,7 +1002,7 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "",
         nxt = next_pending_step(_done_step_numbers(conn, cid), LAST_STEP)
         done_all = nxt is None
         card_step = LAST_STEP if done_all else nxt
-        next_role = "" if done_all else role_of_step(nxt)
+        next_role = "" if done_all else ('sales_mgr' if direct else role_of_step(nxt))
         need_handoff = bool(next_role) and next_role != user.get("role_code")
         status = "completed" if done_all else ("awaiting_handoff" if need_handoff else "in_progress")
         cpq_auth._exec(
@@ -1815,8 +1845,15 @@ def card_detail(session_id: str, user: dict) -> dict:
     if not card:
         return {"card": None, "steps": [], "perms": step_perms()}
     steps = card_steps(card["card_id"])
+    direct = bool(_direct_state(session_id))
+    perms = step_perms()
+    if direct:
+        steps = [dict(s, role_code='sales_mgr', role_name=ROLES['sales_mgr'],
+                      step_name='报价成本确认' if s['step_no'] == 2 else s['step_name']) for s in steps]
+        perms = [dict(s, role_code='sales_mgr', role_name=ROLES['sales_mgr'],
+                      step_name='报价成本确认' if s['step_no'] == 2 else s['step_name']) for s in perms]
     cur_step = int(card["current_step"] or 1)
-    need_role = role_of_step(cur_step)
+    need_role = 'sales_mgr' if direct else role_of_step(cur_step)
     conn = cpq_auth._connect()
     try:
         c = cpq_auth._exec(
@@ -1830,7 +1867,7 @@ def card_detail(session_id: str, user: dict) -> dict:
     cur_row = next((s for s in steps if s["step_no"] == cur_step), None)
     cur_status = (cur_row or {}).get("status", "pending")
     return {
-        "card": card, "steps": steps, "perms": step_perms(),
+        "card": card, "steps": steps, "perms": perms, "direct_quote": direct,
         "current_step": cur_step,
         "step_status": cur_status,
         # 本步是否已“开工”：pending 表示还没人按下「开始本步骤」，前端应先询问再让智能体动手
@@ -1838,7 +1875,7 @@ def card_detail(session_id: str, user: dict) -> dict:
         "current_step_name": (cur_row or {}).get("step_name", ""),
         "need_role_code": need_role,
         "need_role_name": ROLES.get(need_role, need_role),
-        "can_edit": can_do_step(user, cur_step) if user and card['overall_status'] != 'archived' else False,
+        "can_edit": _can_card_step(card, user, cur_step, direct) if user and card['overall_status'] != 'archived' else False,
         "pending_task": pending[0] if pending else None,
         # 本步已完成但还没交出去：前端要挡住流程、催用户推送任务
         "awaiting_handoff": card["overall_status"] == "awaiting_handoff" and not pending,

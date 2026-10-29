@@ -687,6 +687,31 @@ class Handler(BaseHTTPRequestHandler):
             if not user:
                 self._send_json(401, {"ok": False, "error": "请先登录"})
                 return True
+            if path in ('/wf/card/direct-quote', '/wf/card/direct-quote/document'):
+                import cpq_direct_quote
+                try:
+                    if path.endswith('/document') and m == 'GET':
+                        result = cpq_direct_quote.command(arg('session_id'), user)
+                        blob = cpq_direct_quote.document(result['state'])
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+                        self.send_header('Content-Disposition', 'attachment; filename=quote.docx')
+                        self.send_header('Cache-Control', 'no-store')
+                        self.send_header('Content-Length', str(len(blob)))
+                        self.end_headers()
+                        self.wfile.write(blob)
+                    elif path.endswith('/direct-quote') and m == 'GET':
+                        self._send_json(200, cpq_direct_quote.command(arg('session_id'), user))
+                    elif path.endswith('/direct-quote') and m == 'POST':
+                        d = self._read_json()
+                        result = cpq_direct_quote.command(d.get('session_id'), user, d.get('action'),
+                                                          step=d.get('step'), data=d.get('data'))
+                        self._send_json(200, result)
+                    else:
+                        self._send_json(405, {'ok': False, 'error': '请求方法不支持'})
+                except ValueError as e:
+                    self._send_json(400, {'ok': False, 'error': str(e)})
+                return True
             if path == "/wf/cards" and m == "GET":
                 self._send_json(200, {"cards": cpq_wf.my_cards(user)})
             elif path == "/wf/tasks" and m == "GET":

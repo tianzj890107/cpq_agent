@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Safely push HEAD to GitLab and GitHub ytbz without rewriting history."""
+"""Safely push HEAD to both remotes on an explicitly allowed branch, without rewriting history."""
 import argparse
 import subprocess
 import sys
 
 BRANCH = "ytbz"
+ALLOWED_BRANCHES = (BRANCH, "feat/poc-1030")
 REMOTE = "gitlab"
 GITHUB_REMOTE = "origin"
 EXPECTED_PUSH_URLS = {
@@ -22,8 +23,8 @@ def push_urls(remote):
     proc = git("remote", "get-url", "--push", "--all", remote)
     return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
 
-def remote_sha(remote):
-    proc = git("ls-remote", remote, f"refs/heads/{BRANCH}", check=False)
+def remote_sha(remote, branch=BRANCH):
+    proc = git("ls-remote", remote, f"refs/heads/{branch}", check=False)
     if proc.returncode:
         raise RuntimeError(f"无法读取 {remote}: {(proc.stderr or '').strip()}")
     return proc.stdout.split()[0] if proc.stdout.strip() else None
@@ -40,8 +41,9 @@ def main():
     )
     args = parser.parse_args()
     targets = args.only or list(EXPECTED_PUSH_URLS)
-    if git("branch", "--show-current").stdout.strip() != BRANCH:
-        sys.exit(f"错误：只允许从 {BRANCH} 推送。")
+    branch = git("branch", "--show-current").stdout.strip()
+    if branch not in ALLOWED_BRANCHES:
+        sys.exit(f"错误：只允许从 {', '.join(ALLOWED_BRANCHES)} 推送。")
     if git("status", "--porcelain", "--untracked-files=no").stdout.strip():
         sys.exit("错误：工作区不干净，请先提交本任务修改。")
     head = git("rev-parse", "HEAD").stdout.strip()
@@ -53,25 +55,25 @@ def main():
                 f"请先规范化：git remote set-url --push {remote} {expected[0]}"
             )
     for remote in targets:
-        sha = remote_sha(remote)
+        sha = remote_sha(remote, branch)
         if sha and sha != head and git("merge-base", "--is-ancestor", sha, head, check=False).returncode:
-            sys.exit(f"错误：{remote}/{BRANCH} 含本地未知提交，拒绝自动合并或 force push。")
-        print(f"{remote}/{BRANCH}: {sha or '(缺失，将新建分支)'}")
+            sys.exit(f"错误：{remote}/{branch} 含本地未知提交，拒绝自动合并或 force push。")
+        print(f"{remote}/{branch}: {sha or '(缺失，将新建分支)'}")
     print(f"HEAD: {head}")
     if args.check:
         print(f"--check：未执行 push（目标远端：{', '.join(targets)}）。")
         return
     results = {}
     for remote in targets:
-        proc = git("push", remote, f"{head}:refs/heads/{BRANCH}", check=False)
+        proc = git("push", remote, f"{head}:refs/heads/{branch}", check=False)
         if proc.returncode:
             results[remote] = (False, (proc.stderr or proc.stdout).strip())
-        elif remote_sha(remote) != head:
+        elif remote_sha(remote, branch) != head:
             results[remote] = (False, "push 后 SHA 不一致")
         else:
             results[remote] = (True, "")
     for remote, (ok, detail) in results.items():
-        print(f"{remote}/{BRANCH} 推送{'并回读成功' if ok else '失败'}。")
+        print(f"{remote}/{branch} 推送{'并回读成功' if ok else '失败'}。")
         if detail:
             print(detail)
     failed = [remote for remote, (ok, _) in results.items() if not ok]
