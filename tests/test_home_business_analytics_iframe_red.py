@@ -14,12 +14,12 @@ class HomeBusinessAnalytics(unittest.TestCase):
     def test_visible_tabs_include_analytics(self):
         parser = Tags()
         parser.feed((ROOT / '报价首页.html').read_text())
-        self.assertEqual(parser.labels, ['报价智能体', '技术工艺智能体', '经营分析智能体'])
+        self.assertEqual(parser.labels, ['销售配置报价智能体', '生产工艺/BOM运营智能体', '总裁经营360智能体'])
 
     def test_iframe_and_send_integration(self):
         home = (ROOT / '报价首页.html').read_text()
         for token in ('id="analyticsPanel"', 'id="analyticsFrame"',
-                      'title="经营分析工作台"', 'home-analytics.js',
+                      'title="总裁经营360智能体工作台"', 'home-analytics.js',
                       "if (currentMode === 'analytics')", 'HomeAnalytics.open(text)'):
             with self.subTest(token=token):
                 self.assertTrue(token in home, '缺少经营分析接入：' + token)

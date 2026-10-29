@@ -4,7 +4,7 @@
 
 ## 验收范围
 
-- 可见入口依次为报价智能体、技术工艺智能体、经营分析智能体；配置 / 规则继续隐藏。
+- 10-29 最新可见入口依次为销售配置报价智能体、生产工艺/BOM运营智能体、总裁经营360智能体；配置 / 规则继续隐藏。分析全屏页标题、区域名称与 iframe title 同步新名称，路由与提示词不变。
 - 经营分析沿用 FUXI 品牌、输入框、tab 激活态和 URL `assistant=analytics`；所有模式按钮统一为向上箭头、无障碍名称为“发送需求”，输入为空不加载 iframe。
 - 点击 tab 只切换模式，不提前请求分析端。点击统一箭头发送按钮 / Enter 才加载 iframe，不弹报价项目信息框、不查 CPQ 历史、不创建项目。
 - 使用 `http://pdt-dev.eimos.com/api/ontology-agentic-analytics`；通过 URLSearchParams 的 `prompt` 字段完整传递中文、换行、&、#、? 等正文；使用已确认支持的 `theme=light&layout=single`。

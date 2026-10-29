@@ -41,7 +41,7 @@ class HomeFuxiQuoteTech(unittest.TestCase):
         node = shutil.which("node") or '/Users/sunjiongjun/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node'
         script = "const assert = require('node:assert/strict'); const modes = " + HOME[mode_start:mode_end] + r""";
 const fullQuote = '茅台酒盒\n尺寸：50mm*40mm*30mm；盖面纸，铜版纸，180克重， 亮膜；底面纸 铜版纸，哑膜，180克重；盖板材 灰板， 厚度2.5mm，V槽，闭合方式：天地盖 ，包装品类：酒盒、盒型：高档酒盒；预计首批定1000个';
-assert.equal(modes.quote.prefill, fullQuote);
+assert.equal(modes.quote.prefill, '茅台酒盒，客户是贵州茅台。\n成品内尺寸：200mm×150mm×80mm。\n盖面纸：铜版纸，180克重，亮膜；\n底面纸：铜版纸，180克重，哑膜；\n盖板材：灰板，厚度2.5mm；\nV槽，闭合方式：天地盖；\n包装品类：酒盒，盒型：高档酒盒；\n配合间隙：1.8mm。\n预计首批定1000个。');
 assert.equal(modes.tech.prefill, fullQuote.replace('预计首批定1000个', ''));
 assert.equal(modes.analytics.prefill, '为什么2月份管理单元2800采购订单金额过高，按照已审批口径，有什么改进措施和行动建议，分析数据周期1~4月');
 """
@@ -58,7 +58,19 @@ assert.equal(modes.analytics.prefill, '为什么2月份管理单元2800采购订
     def test_primary_tabs_quote_tech_and_analytics(self):
         parser = Tags()
         parser.feed(HOME)
-        self.assertEqual(parser.labels, ["报价智能体", "技术工艺智能体", "经营分析智能体"])
+        self.assertEqual(parser.labels, ["销售配置报价智能体", "生产工艺/BOM运营智能体", "总裁经营360智能体"])
+
+    def test_new_names_keep_original_mode_routes(self):
+        match = re.search(r'function tagToMode\(label\)\s*\{[\s\S]*?\n    \}', HOME)
+        self.assertIsNotNone(match)
+        node = shutil.which('node') or '/Users/sunjiongjun/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node'
+        script = match.group() + "\nconst assert = require('node:assert/strict');" + """
+assert.equal(tagToMode('销售配置报价智能体'), 'quote');
+assert.equal(tagToMode('生产工艺/BOM运营智能体'), 'tech');
+assert.equal(tagToMode('总裁经营360智能体'), 'analytics');
+"""
+        result = subprocess.run([node, '-e', script], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_fuxi_brand_and_headline_present(self):
         for text in ("FUXI", "伏羲相伴", "智慧相随"):

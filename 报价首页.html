@@ -736,7 +736,8 @@
       padding: 0 max(12px, env(safe-area-inset-right)) 0 max(12px, env(safe-area-inset-left));
       border-bottom: 1px solid var(--border-light);
     }
-    .analytics-toolbar strong { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+    .analytics-toolbar strong { font-size: 13px; font-weight: 500; color: var(--text-secondary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .analytics-toolbar > .analytics-action, .analytics-options { flex-shrink: 0; }
     .analytics-options { position: relative; margin-left: auto; }
     .analytics-options > summary { cursor: pointer; list-style: none; }
     .analytics-options > summary::-webkit-details-marker { display: none; }
@@ -1449,11 +1450,11 @@
 
       <!-- Category Tags -->
       <div class="category-tags">
-        <button type="button" class="category-tag active" aria-pressed="true"><i class="ti ti-brain" aria-hidden="true"></i> 报价智能体</button>
+        <button type="button" class="category-tag active" aria-pressed="true"><i class="ti ti-brain" aria-hidden="true"></i> 销售配置报价智能体</button>
         <button type="button" class="category-tag" hidden aria-pressed="false"><i class="ti ti-settings" aria-hidden="true"></i> 配置助手</button>
         <button type="button" class="category-tag" hidden aria-pressed="false"><i class="ti ti-scale" aria-hidden="true"></i> 规则助手</button>
-        <button type="button" class="category-tag" aria-pressed="false"><i class="ti ti-tools" aria-hidden="true"></i> 技术工艺智能体</button>
-        <button type="button" class="category-tag" aria-pressed="false"><i class="ti ti-chart-bar" aria-hidden="true"></i> 经营分析智能体</button>
+        <button type="button" class="category-tag" aria-pressed="false"><i class="ti ti-tools" aria-hidden="true"></i> 生产工艺/BOM运营智能体</button>
+        <button type="button" class="category-tag" aria-pressed="false"><i class="ti ti-chart-bar" aria-hidden="true"></i> 总裁经营360智能体</button>
       </div>
 
       <!-- Unified Input + Introduction Card -->
@@ -1499,10 +1500,10 @@
 
       <button class="analytics-action analytics-resume" id="analyticsResume" type="button" hidden>继续上次分析 <i class="ti ti-arrow-right" aria-hidden="true"></i></button>
 
-      <section class="analytics-panel" id="analyticsPanel" aria-label="经营分析智能体" hidden>
+      <section class="analytics-panel" id="analyticsPanel" aria-label="总裁经营360智能体" hidden>
         <div class="analytics-toolbar">
           <button class="analytics-action" id="analyticsEdit" type="button"><i class="ti ti-arrow-left" aria-hidden="true"></i> 返回首页</button>
-          <strong>经营分析智能体</strong>
+          <strong>总裁经营360智能体</strong>
           <details class="analytics-options">
             <summary class="analytics-action" aria-label="更多分析操作">更多 <i class="ti ti-dots" aria-hidden="true"></i></summary>
             <div class="analytics-menu">
@@ -1517,7 +1518,7 @@
           </details>
         </div>
         <p class="analytics-status" id="analyticsStatus" role="status" aria-live="polite" hidden></p>
-        <iframe class="analytics-frame" id="analyticsFrame" title="经营分析工作台" referrerpolicy="no-referrer"></iframe>
+        <iframe class="analytics-frame" id="analyticsFrame" title="总裁经营360智能体工作台" referrerpolicy="no-referrer"></iframe>
       </section>
 
       <!-- List Section -->
@@ -1755,8 +1756,8 @@
     };
     const MODES = {
       // 用户提供的默认正文；仅填入 value，不自动发送。
-      quote:  { tag: '报价智能体', intro: '请输入需求描述，或直接上传文件内容（表格、文档或图片等），帮你一键智能报价。',
-                prefill: '茅台酒盒\n尺寸：50mm*40mm*30mm；盖面纸，铜版纸，180克重， 亮膜；底面纸 铜版纸，哑膜，180克重；盖板材 灰板， 厚度2.5mm，V槽，闭合方式：天地盖 ，包装品类：酒盒、盒型：高档酒盒；预计首批定1000个',
+      quote:  { tag: '销售配置报价智能体', intro: '请输入需求描述，或直接上传文件内容（表格、文档或图片等），帮你一键智能报价。',
+                prefill: '茅台酒盒，客户是贵州茅台。\n成品内尺寸：200mm×150mm×80mm。\n盖面纸：铜版纸，180克重，亮膜；\n底面纸：铜版纸，180克重，哑膜；\n盖板材：灰板，厚度2.5mm；\nV槽，闭合方式：天地盖；\n包装品类：酒盒，盒型：高档酒盒；\n配合间隙：1.8mm。\n预计首批定1000个。',
                 ph: '请输入需求描述…（例如：帮我给××客户的储能项目做报价）', newBtn: '新建报价',
                 tabs: ['我的报价', '待办任务', '全部报价'], activeTab: 2, searchPh: '支持通过客户名&项目名搜索',
                 title: '<span class="highlight">创作无限可能</span>，智能报价' },
@@ -1768,12 +1769,12 @@
                 ph: '请输入你的问题或需求描述...', newBtn: '创建',
                 tabs: ['我的规则', '全部规则'], activeTab: 1, searchPh: '支持通过名称&编号搜索',
                 title: '<span class="highlight">创作无限可能</span>，智能助手' },
-      tech:   { tag: '技术工艺智能体', intro: '请上传零件图纸与需求/工艺说明文档（可分开上传），或直接描述零件与工艺要求，帮你评估并拆解出结构化工艺路线。',
+      tech:   { tag: '生产工艺/BOM运营智能体', intro: '请上传零件图纸与需求/工艺说明文档（可分开上传），或直接描述零件与工艺要求，帮你评估并拆解出结构化工艺路线。',
                 prefill: '茅台酒盒\n尺寸：50mm*40mm*30mm；盖面纸，铜版纸，180克重， 亮膜；底面纸 铜版纸，哑膜，180克重；盖板材 灰板， 厚度2.5mm，V槽，闭合方式：天地盖 ，包装品类：酒盒、盒型：高档酒盒；',
                 ph: '请输入零件与工艺评估需求…（例如：45钢法兰盘，批量500，关键面Ra1.6，评估加工工艺路线）', newBtn: '新建工艺评估',
                 tabs: ['我的清单', '待办任务', '全部清单'], activeTab: 2, searchPh: '支持通过名称&编号搜索',
                 title: '<span class="highlight">创作无限可能</span>，智能工艺' },
-      analytics: { tag: '经营分析智能体', intro: '描述你想了解的经营问题，进入经营分析工作台。',
+      analytics: { tag: '总裁经营360智能体', intro: '描述你想了解的经营问题，进入经营分析工作台。',
                 prefill: '为什么2月份管理单元2800采购订单金额过高，按照已审批口径，有什么改进措施和行动建议，分析数据周期1~4月',
                 ph: '请输入经营分析需求，例如：分析本季度收入、毛利及变化原因',
                 newBtn: '开始分析', tabs: [], activeTab: 0, searchPh: '',
@@ -2444,8 +2445,9 @@
     }
 
     function tagToMode(label) {
-      if (label.includes('经营分析')) return 'analytics';
+      if (label.includes('经营')) return 'analytics';
       if (label.includes('工艺') || label.includes('技术')) return 'tech';
+      if (label.includes('报价')) return 'quote';
       return label.includes('配置') ? 'config' : (label.includes('规则') ? 'rule' : 'quote');
     }
     /* ===== 批次 10 / ## 139：首页三页签（唯一口径来自 tech-home-board.js）=====
