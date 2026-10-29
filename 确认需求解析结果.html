@@ -788,6 +788,7 @@
           <button class="quick-action-btn" id="qaStep" onclick="confirmStep()"><i class="ti ti-arrow-right"></i> 进入下一大步骤</button>
           <button class="quick-action-btn" id="qaPrev" onclick="goPrev()"><i class="ti ti-arrow-left"></i> 上一步</button>
           <button class="quick-action-btn" id="qaSend" onclick="wfOpenSendDefault()"><i class="ti ti-send"></i> 转交任务</button>
+          <button class="quick-action-btn" id="qaDirectQuote" type="button">本单直接报价</button>
         </div>
         <div class="attach-chips" id="attachChips"></div>
         <div class="chat-input-wrapper">
@@ -1413,7 +1414,7 @@
         const clickable = n <= maxStep;                 // 已到达过的步骤可点
         const viewing = (n === shownStep && shownStep !== currentStep);
         step.className = 'progress-step' + (n === currentStep ? ' active' : '') + (clickable ? ' clickable' : '');
-        const state = n < currentStep ? 'completed' : (n === currentStep ? 'active' : 'pending');
+        const state = WF.directCompleted || n < currentStep ? 'completed' : (n === currentStep ? 'active' : 'pending');
         step.innerHTML =
           `<div class="step-node ${state}${viewing ? ' viewing' : ''}">` +
           (state === 'completed' ? '<i class="ti ti-check"></i>' : n) +
@@ -1457,6 +1458,7 @@
 
     // 只切换右侧面板展示的步骤（不通知 Agent）；用于点进度条查看/编辑历史步骤
     function showStep(n) {
+      if (WF.directQuote && window.CpqDirect) { window.CpqDirect.view(n); return; }
       shownStep = n;
       // 第 2/3/4 步的产品表沿用第 1 步：任何路径切到这些步骤都补齐一次（已有内容不覆盖）
       if (CARRY_MAP[n]) maybeCarry(n);
@@ -1494,6 +1496,7 @@
 
     // 收集各步分区数据 → 让后端生成报价单 Word 并下载
     async function exportDocx() {
+      if (WF.directQuote && window.CpqDirect) { await window.CpqDirect.download(); return; }
       const be = $('btnExport');
       const stepsData = [];
       for (let n = 1; n <= 7; n++) {
@@ -2321,6 +2324,13 @@
       // 留一份客户需求原文：标品接不住时要随「新增工艺」任务带给工艺经理，
       // 让他不必回头翻整段报价会话。
       WF.lastRequirementText = displayText || text || '';
+      if (window.CpqDirect && window.CpqDirect.hasPrompt(text)) {
+        STEP1_LAST_REQ = text;
+        STEP1_FORM_TASK = null;
+        STEP1_REINPUT = false;
+        if (displayText) addUserBubble(displayText);
+        return window.CpqDirect.fromPrompt(text);
+      }
       const got = await step1Intent(text, displayText);
       if (!got) return false;                       // 信息不齐，等用户补充后再来
       // ② 表单填写与推荐：智能体（open-claude）按 cpq_ui 渲染四个非产品分区
@@ -2389,13 +2399,13 @@
       // 未登录/服务未就绪时（GATE_BLOCKED）连同输入一起锁死，避免绕过登录直接跟智能体对话
       const lock = v || GATE_BLOCKED;
       $('chatSend').disabled = lock;
-      $('btnNext').disabled = lock;
+      $('btnNext').disabled = lock || !!WF.directCompleted;
       $('btnPrev').disabled = lock || currentStep <= 1;
       const qfs = $('qaFillStep'), qs = $('qaStep'), qp = $('qaPrev'), qsend = $('qaSend');
-      if (qfs) qfs.disabled = lock;
-      if (qs) qs.disabled = lock;
+      if (qfs) qfs.disabled = lock || !!WF.directQuote;
+      if (qs) qs.disabled = lock || !!WF.directCompleted;
       if (qp) qp.disabled = lock || currentStep <= 1;
-      if (qsend) qsend.disabled = lock;          // 未登录连转交也不可用（转交需要账号）
+      if (qsend) qsend.disabled = lock || !!WF.directQuote;
       const inp = $('chatInput');
       if (inp) {
         inp.disabled = GATE_BLOCKED;
@@ -2625,6 +2635,10 @@
       // 聊天里显示用户的话/附件说明（唯一 turn helper；隔离执行时退回底层气泡原语）
       const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
       say(echo);
+      if (currentStep === 1 && window.CpqDirect && window.CpqDirect.hasPrompt(payload)) {
+        runStep1(payload, '');
+        return;
+      }
       // 意图识别门槛未过（缺尺寸/应用范围/工作温度）：这条输入按「补充需求」处理，
       // 与原需求合并后重新走第 1 步快速匹配通道，不发给智能体
       if (STEP1_REINPUT && currentStep === 1) {
@@ -2663,6 +2677,7 @@
     }
 
     async function confirmStep() {
+      if (WF.directQuote && window.CpqDirect) { await window.CpqDirect.next(); return; }
       if (busy) return;
       // 唯一 turn helper：确认（含流程完成 / 待转交两条分支）同样是用户主动触发的新回合，
       // 用户气泡必须先于 Agent 输出；隔离执行时退回底层气泡原语。
@@ -2834,20 +2849,25 @@
         WF.statusLabel = d.status_label || '';
         WF.stepStarted = !!d.step_started;       // 本步是否已按下「开始本步骤」
         WF.loaded = !!d.card;
+        WF.directQuote = !!d.direct_quote;
+        if (!WF.directQuote) WF.directCompleted = false;
+        STEPS[1] = WF.directQuote ? '报价成本确认' : '工艺确认';
+        document.dispatchEvent(new CustomEvent('cpq-direct-state', {detail: {session: currentSessionId, enabled: WF.directQuote}}));
         WF.fetchFailed = false;
       } catch (e) {
         // 请求失败 ≠ 卡片不存在：切角色/瞬时繁忙都可能失败一次。
         // 这里**保留上一次的状态**，只标记本次没取到——否则一次抖动就会把界面永久锁死。
         WF.fetchFailed = true;
       }
-      if (syncStep) {
+      if (syncStep && !WF.directQuote) {
         wfApplyCardStep();               // 先把步骤纠正到卡片的真实位置
         // 交接过来的卡片：本地没有前面步骤的数据，从快照恢复（第 2 步还要据此沿用两张表）
         if (currentStep > 1) await ensureStep1Context();   // 第 1 步整步先在手
         if (CARRY_MAP[currentStep]) await ensureCarryData(currentStep);
       }
+      if (WF.directQuote && window.CpqDirect) await window.CpqDirect.restore();
       wfRenderBar();
-      wfMaybePromptStart();
+      if (!WF.directQuote) wfMaybePromptStart();
     }
 
     /* ================= 准入闸门 =================
@@ -2870,7 +2890,7 @@
       } else {
         GATE_BLOCKED = false;
         removeGateBubble();
-        if (WF.canEdit) {
+        if (WF.canEdit && !WF.directQuote) {
           wfMaybePromptStart();                    // 角色匹配 -> 「开始第 N 步」
         } else {
           // 角色不符：只由右侧看板的 #wfBar 给一条只读提示，不再往左侧会话插重复气泡；
@@ -2929,6 +2949,7 @@
     let BOOT_PENDING = true;
     const WF_AUTO = { inflight: false, failedFor: '' };
     function wfMaybePromptStart() {
+      if (WF.directQuote) return;
       const el = $('wfStartPrompt');
       if (el) el.remove();               // 旧版确认气泡（若有残留）一律清掉
       const u = wfUser();
@@ -3976,6 +3997,7 @@
     }
 
     function goPrev() {
+      if (WF.directQuote && window.CpqDirect) { window.CpqDirect.view(Math.max(1, shownStep - 1)); return; }
       if (busy || currentStep <= 1) return;
       const prev = currentStep - 1;
       // 唯一 turn helper：返回上一步也是用户主动触发的新回合（隔离执行时退回底层气泡原语）。
@@ -4404,8 +4426,49 @@
     document.addEventListener('cpq-auth-ready', onAuthChanged);
     document.addEventListener('cpq-auth-change', onAuthChanged);
 
+    window.CpqDirectHost = {
+      session: () => currentSessionId,
+      user: () => wfUser(),
+      busy: () => busy,
+      active: () => !!WF.directQuote,
+      refresh: () => wfRefresh(true),
+      say: text => addAiBubble(text),
+      lock: value => setBusy(value),
+      mount: (panel, current, viewing, completed, title) => {
+        WF.directQuote = true;
+        WF.directCompleted = completed;
+        currentStep = current; shownStep = viewing; maxStep = Math.max(maxStep, current);
+        STEPS[1] = '报价成本确认';
+        sections.forEach(sec => { sec.el.style.display = 'none'; });
+        const placeholder = $('panelPlaceholder'); if (placeholder) placeholder.style.display = 'none';
+        $('resultsContent').appendChild(panel);
+        $('stepTitle').textContent = title;
+        $('stepBadge').textContent = completed ? '已完成' : viewing < current ? '已确认' : '待确认';
+        renderProgressBar();
+        $('bottomBar').style.display = '';
+        $('viewBar').classList.remove('show');
+        $('btnPrev').disabled = busy || viewing <= 1;
+        $('btnNext').disabled = busy || completed;
+        $('btnNextText').textContent = completed ? '流程已完成' : viewing < current ? '回到当前步骤' : current === 6 ? '确认输出报价单' : '确认，进入下一步';
+        $('btnExport').style.display = completed ? '' : 'none';
+        $('btnImportDb').style.display = 'none';
+      },
+      seed: () => {
+        const rows = extractSectionRows('s1_products');
+        const basic = (collectStepData(1).s1_basic || {}).数据 || {};
+        const product = rows[0] || {};
+        return {
+          product_name: product['成品名称'] || product['成品描述'] || basic['项目名称'] || '',
+          product_code: product['成品编码'] || '',
+          customer: basic['客户'] || sessionStorage.getItem('cpq:customer') || '',
+          specification: STEP1_LAST_REQ || '',
+          quantity: product['数量'] || '',
+        };
+      },
+    };
     boot();
   </script>
+  <script src="quote-direct.js"></script>
   <script src="cpq_msg.js"></script>
 </body>
 </html>
