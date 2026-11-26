@@ -57,6 +57,21 @@ class MaterialInference(unittest.TestCase):
         self.assertIn("推定", text)
         self.assertIn("2.0mm灰板", text)
 
+    def test_grammage_inferred_from_thickness_family_or_text(self):
+        from tech_app.backend.services import packaging_material_inference as inference
+        self.assertEqual((1400.0, "inferred_thickness_density"), inference.infer_grammage("2.0mm灰板"))
+        self.assertEqual((350.0, "material_text"), inference.infer_grammage("350G玖龙粉灰"))
+        self.assertEqual((80.0, "inferred_family_default"), inference.infer_grammage("衬纸"))
+        self.assertEqual((None, ""), inference.infer_grammage("神秘材料"))
+
+    def test_cost_inputs_accepts_inferred_grammage(self):
+        inputs = parts.business_cost_inputs(row())
+        self.assertTrue(inputs.get("ok"), inputs.get("message"))
+        self.assertEqual(1400.0, inputs.get("gsm"))
+        self.assertEqual("inferred_thickness_density",
+                         (inputs.get("variables") or {}).get("grammage_source"))
+        self.assertIn("推定", parts.business_cost_assumption(inputs))
+
     def test_single_implementation_shared_with_demo_path(self):
         from tech_app.backend.services import packaging_material_inference as inference
         self.assertIs(demo.infer_material_text, inference.infer_material_text)

@@ -9,3 +9,4 @@
 - 提交 `e4a0301` 并入 `ytbz`（GitLab/GitHub 双推，保留该分支的演示前端改动）。
 - 34 需保持 `947f62c` 旧前端：同一后端修复以 `947f62c` 为基线回移到 `fix/packaging-process-preflight`（`5110c1b`）并部署 34。线上 build.commit=`5110c1b`，首页 SHA256 与 `947f62c` 一致、`quote-direct.js` 仍 404；两份样本 ODA 主转换与隔离端到端自检 verdict=ok。已开 MR `!2`（fix → master）待评审，未合并。
 - 业务件材料原文缺失时按件名推定并披露：件级对照资料读侧补 `material_text` 与 `material_source=inferred_from_part_name`，工艺/成本结论写明「材料原文缺失，按件名推定为 X」；件名认不出材料族仍按 `PACKAGING_BUSINESS_PART_MATERIAL_UNKNOWN` 拒绝，尺寸口径不放宽。推定实现收成一份 `packaging_material_inference`，演示输入与真实门禁共用。专项 8 项通过；相关 10 模块 142 项里 2 个模块因本机 ezdxf 缺 C 扩展无法运行（环境），其余 5 项为改动前既有失败，与基线一致。
+- 材料费克重缺失时按披露口径推定：原文 `<数字>g` 优先；灰板/EVA 只写厚度时按「料厚 × 族默认密度」推；只写材料族时按族默认克重推（衬纸 80、特种 120、纸管 250），来源写进 `variables.grammage_source` 并在成本结论里披露。该样本 28 件里工艺+成本两侧 25 件通过；剩余 3 件（贴牌只有 bbox、磁铁/内卡无绑定无几何）仍按 `drawing_part_size_not_confirmed` 拒绝——bbox 不得进下游、无几何不得编尺寸是既有硬规则。

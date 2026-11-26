@@ -5290,12 +5290,20 @@ def business_cost_inputs(row: Any, *, requirement: Any = None,
         can_use_face_gsm = ('面纸' in _text(record.get('name')) or '面纸' in material_text) and not any(
             word in material_text for word in ('灰板','双灰','EVA','磁铁','纸管'))
         gsm = _num((data or {}).get("face_paper_gsm")) if can_use_face_gsm and isinstance(data, dict) else None
+    gsm_source = ""
+    if not gsm:
+        # 材料原文只写厚度/材料族时按推定克重放行（Spec `packaging-part-material-inference.md`），
+        # 来源写进 variables，结论里照实披露。
+        from .packaging_material_inference import infer_grammage
+        gsm, gsm_source = infer_grammage(material_text)
     if not gsm:
         return dict(base, code=BUSINESS_COST_REJECT_CODES[2], missing_variables=["gsm"],
                     message="这一件的材料原文里没有克重（材料：%s）：补上克重，或按需求整盒口径"
                             "填这件材料的克重后再算（非面纸不得借用整盒面纸克重）" % (material_text or "未填"))
     wanted = int(_num(quantity) or 1)
     variables = {"cut_length":length,"cut_width":width,"gsm":gsm,"quote_quantity":max(1,wanted)}
+    if gsm_source:
+        variables["grammage_source"] = gsm_source
     data = requirement.get('data') if isinstance(requirement,dict) else {}
     data = data if isinstance(data,dict) else {}
     if data.get('tax_factor') not in (None,''):
@@ -5325,6 +5333,11 @@ def business_cost_assumption(inputs: Any, *, geometry_part_code: Any = "") -> st
     if _text(payload.get("material_source")) == "inferred_from_part_name":
         text += "；材料原文缺失，按件名推定为「%s」（非图纸原文，需人工核对）" % _text(
             payload.get("material_text"))
+    source = _text(variables.get("grammage_source"))
+    if source == "inferred_thickness_density":
+        text += "；克重按料厚 × 族默认密度推定为 %s g/㎡（非原文）" % _mm_text(variables.get("gsm"))
+    elif source == "inferred_family_default":
+        text += "；克重按材料族默认值推定为 %s g/㎡（非原文）" % _mm_text(variables.get("gsm"))
     code = _text(geometry_part_code)
     if code:
         text += "；这一件另有闭合几何件（%s），本结论有意按清单尺寸算" % code
