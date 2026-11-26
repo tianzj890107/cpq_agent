@@ -19,27 +19,17 @@ import math
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import packaging_material_match as material_match
+from .packaging_material_inference import (
+    FAMILY_DEFAULT_THICKNESS, MATERIAL_INFERENCE_SOURCE, NAME_FAMILY_HINTS,
+    infer_material_text)
 
 ENGINE_VERSION = "packaging-demo-inputs/4"
-
-#: 件名关键词 → 材料族（**仅用于图纸没写材料时推定**，且必须随结论披露）。通用规则，不含图号。
-NAME_FAMILY_HINTS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("greyboard", ("灰板", "衬板", "纸板", "盒背", "背板", "底板", "隔板")),
-    ("face_paper", ("面纸", "封面", "铜版", "印刷面")),
-    ("liner_paper", ("衬纸", "内衬", "包边", "内卡")),
-    ("specialty", ("特种", "充皮", "触感")),
-    ("eva", ("EVA", "内托", "泡棉")),
-    ("magnet", ("磁铁", "磁石", "磁片")),
-    ("tube", ("纸管", "圆管")),
-)
 
 #: 材料原文与件名都推不出克重时的族默认（g/㎡）：只在推导链全断时用，逐条披露。
 FAMILY_DEFAULT_GRAMMAGE: Dict[str, float] = {
     "greyboard": 0.0, "face_paper": 157.0, "white_card": 300.0, "liner_paper": 80.0,
     "specialty": 120.0, "corrugated": 300.0, "tube": 250.0, "eva": 0.0,
 }
-#: 灰板这类按厚度计的材料：推不出克重时给族默认厚度（mm），配合密度换算。
-FAMILY_DEFAULT_THICKNESS: Dict[str, float] = {"greyboard": 2.0, "eva": 10.0}
 
 #: 演示排模/校版口径（非生产参数）：认不到时给这两个值，并逐条披露。
 DEMO_IMPOSITION = 1.0
@@ -142,30 +132,6 @@ def material_text_of(row: Any) -> Dict[str, Any]:
     if inferred:
         return {"material_text": inferred, "source": "inferred_from_part_name"}
     return {"material_text": _text(reference.get("material_text")), "source": ""}
-
-
-def infer_material_text(name: Any) -> str:
-    """件名 → 材料原文（图纸没写材料时的**推定**，通用关键词规则，不含图号/客户名）。"""
-    from .packaging_part_route_match import normalize_part_name
-    text = normalize_part_name(name).upper()
-    if not text:
-        return ""
-    for family, words in NAME_FAMILY_HINTS:
-        if any(word.upper() in text for word in words):
-            if family == "greyboard":
-                return "%smm灰板" % FAMILY_DEFAULT_THICKNESS.get("greyboard", 2.0)
-            if family == "eva":
-                return "EVA"
-            if family == "magnet":
-                return "磁铁"
-            if family == "tube":
-                return "纸管"
-            if family == "face_paper":
-                return "面纸"
-            if family == "liner_paper":
-                return "衬纸"
-            return "特种纸"
-    return ""
 
 
 def _kb_materials() -> List[Dict[str, Any]]:

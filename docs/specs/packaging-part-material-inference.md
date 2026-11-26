@@ -1,0 +1,30 @@
+# 业务件材料按件名推定并写回件级资料
+
+2026-11-26
+
+## 现场复现
+
+34 上酒盒项目的业务件 `DWG-BP01` / `DWG-BP03` 排工艺返回
+`PACKAGING_BUSINESS_PART_MATERIAL_UNKNOWN`（"这一件在对照表里没有材料原文"），`retryable:false`。
+同项目 28 件里 9 件 `reference.material_text` 为空：这些件在图纸/对照表里没有材料原文，但件名
+已经带材料族（灰板 / 衬板 / 底板 / 面纸…）。演示输入路径里早就有「按件名推定材料」
+（`infer_material_text`），但它只写进演示 `poc_inputs`，**没有写回**件级对照资料，真实工艺
+门禁读不到，于是同一份数据在演示里能过、在真实门禁里被拒。
+
+## 验收
+
+1. 件级对照资料的 `material_text` 为空、且件名能识别材料族时，读侧按同一套关键词与默认厚度
+   推定材料原文，并在块上标 `material_source="inferred_from_part_name"`；已有材料原文
+   **不改写**、不标推定。
+2. 推定是读侧派生：不改历史文档、不改 `business_parts_hash`；重新生成业务部件后同样成立
+   （`business_parts_document` 本来就经这个读函数取块，因此新文档会一并落推定值与来源）。
+3. 结论必须披露：`business_process_assumption` / `business_cost_assumption` 要写出
+   "材料原文缺失，按件名推定为「X」"，不得把推定装作图纸原文。
+4. 件名识别不到材料族时仍返回 `PACKAGING_BUSINESS_PART_MATERIAL_UNKNOWN`；尺寸仍只认清单
+   尺寸，不因材料推定放宽。
+5. 推定实现只有一份：`packaging_demo_inputs.infer_material_text` 委托给新模块
+   `packaging_material_inference`，演示路径与真实门禁共用同一个函数。
+
+## 回归入口
+
+`./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_part_material_inference_red`

@@ -7,3 +7,4 @@
 - 5 项专项回归通过。相关回归共 78 项，通过 77 项。旧财务确认断言在修改前也失败。使用隔离夹具验收。
 - 34 需保持 `947f62c` 的旧前端，因此同一后端修复以 `947f62c` 为基线回移到 `fix/packaging-process-preflight`（`5110c1b`），GitLab/GitHub 双推后部署 34；`ytbz` 保留其演示前端与 `e4a0301`。
 - 复核：专项 15 项通过；线上 build.commit=`5110c1b`，首页 SHA256 与 `947f62c` 一致、`quote-direct.js` 仍 404；两份样本 ODA 27.1 主转换与隔离端到端自检 verdict=ok。
+- 业务件材料原文缺失时按件名推定并披露（回移到本分支）：件级对照资料读侧补 material_text 与 material_source=inferred_from_part_name，结论写明「按件名推定为 X」；件名认不出材料族仍按 MATERIAL_UNKNOWN 拒绝。专项 8 项通过。
