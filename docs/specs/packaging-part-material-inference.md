@@ -28,3 +28,15 @@
 ## 回归入口
 
 `./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_part_material_inference_red`
+
+## 补充：材料费克重（2026-11-26）
+
+材料原文只有厚度或只有材料族时，成本门禁按以下顺序推定克重，全部披露、不装原文：
+
+1. 原文里有 `<数字>g` → 直接采用（来源 `material_text`）；
+2. 灰板 / EVA 只写 `<数字>mm` → `料厚 × 族默认密度 × 1000`（灰板 0.7、EVA 0.9 g/cm³；来源
+   `inferred_thickness_density`）；
+3. 只写材料族 → 族默认克重（衬纸 80、特种 120、纸管 250 g/㎡；来源 `inferred_family_default`）。
+
+来源写进 `variables.grammage_source`，成本结论写明"克重按…推定为 X g/㎡（非原文）"。
+既有硬规则不动：bbox 不得进下游、无几何不得编尺寸（`drawing_part_size_not_confirmed`）。
