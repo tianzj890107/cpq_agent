@@ -36,13 +36,15 @@ def requirement_defaults(requirement):
     preferred = data.get('box_type')
     matching = {key: value for key, value in data.items() if not _missing_input(value)}
     match_result = packaging_match.match_box_types(matching)
-    confirmed_candidates = _confirmable_boxes(match_result)
+    confirmed_candidates = _demo_candidates(match_result)
     incomplete_candidates = [row for row in match_result.get('candidates') or []
-                             if row.get('status') == 'needs_input' and not row.get('out_of_range')
+                             if row.get('status') == 'needs_input'
                              and not row.get('reject_reasons')]
     if not _missing_input(preferred):
         candidates = [row for row in confirmed_candidates + incomplete_candidates
                       if row.get('box_type_code') == preferred]
+        if not candidates:
+            candidates = confirmed_candidates or incomplete_candidates
     else:
         candidates = confirmed_candidates or incomplete_candidates
         if not confirmed_candidates and len(candidates) > 1:
