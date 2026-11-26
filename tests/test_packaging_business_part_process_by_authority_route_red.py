@@ -45,7 +45,7 @@ REJECT_CODES = ("PACKAGING_BUSINESS_PART_NOT_FOUND",
                 "PACKAGING_BUSINESS_PART_MATERIAL_UNKNOWN")
 SIZE_SOURCES = ("authority_dimensions",)
 INPUT_KEYS = ("ok", "code", "message", "missing_variables", "part_code", "name",
-              "material_text", "process_text", "grounding", "size_source",
+              "material_text", "material_source", "process_text", "grounding", "size_source",
               "size_source_ref", "size_length", "size_width", "size_text")
 
 #: 一行业务部件（真样本形状：对照资料 + 未绑定几何 + 工艺路线原文）

@@ -8,3 +8,4 @@
 - 复核：专项 15 项（新红测 5 + 整件工艺 10）通过；相关 6 模块 114 项中 5 项为既有失败，改动前后基线一致。`git diff --check` 通过。
 - 提交 `e4a0301` 并入 `ytbz`（GitLab/GitHub 双推，保留该分支的演示前端改动）。
 - 34 需保持 `947f62c` 旧前端：同一后端修复以 `947f62c` 为基线回移到 `fix/packaging-process-preflight`（`5110c1b`）并部署 34。线上 build.commit=`5110c1b`，首页 SHA256 与 `947f62c` 一致、`quote-direct.js` 仍 404；两份样本 ODA 主转换与隔离端到端自检 verdict=ok。已开 MR `!2`（fix → master）待评审，未合并。
+- 业务件材料原文缺失时按件名推定并披露：件级对照资料读侧补 `material_text` 与 `material_source=inferred_from_part_name`，工艺/成本结论写明「材料原文缺失，按件名推定为 X」；件名认不出材料族仍按 `PACKAGING_BUSINESS_PART_MATERIAL_UNKNOWN` 拒绝，尺寸口径不放宽。推定实现收成一份 `packaging_material_inference`，演示输入与真实门禁共用。专项 8 项通过；相关 10 模块 142 项里 2 个模块因本机 ezdxf 缺 C 扩展无法运行（环境），其余 5 项为改动前既有失败，与基线一致。

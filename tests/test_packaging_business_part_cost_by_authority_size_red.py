@@ -42,7 +42,7 @@ REJECT_CODES = ("PACKAGING_BUSINESS_PART_NOT_FOUND",
                 "PACKAGING_BUSINESS_PART_MATERIAL_UNKNOWN")
 SIZE_SOURCES = ("authority_dimensions",)
 INPUT_KEYS = ("ok", "code", "message", "missing_variables", "part_code", "name", "material_text",
-              "gsm", "variables", "size_source", "size_source_ref", "size_text")
+              "material_source", "gsm", "variables", "size_source", "size_source_ref", "size_text")
 
 #: 一行业务部件（真样本形状：对照资料 + 未绑定几何）
 ROW = {"business_part_code": CODE, "name": "礼盒面纸",

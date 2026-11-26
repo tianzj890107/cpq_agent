@@ -3863,13 +3863,27 @@ BUSINESS_REFERENCE_DEFAULTS: Dict[str, Any] = {"thumbnail_refs": [],
 
 
 def business_part_reference_block(row: Any) -> Dict[str, Any]:
-    """件级对照资料块（Spec §2.4）：先认 `reference`，再回落旧键；都不是 dict → `{}`。纯函数。"""
+    """件级对照资料块（Spec §2.4）：先认 `reference`，再回落旧键；都不是 dict → `{}`。纯函数。
+
+    材料原文为空时按件名推定（Spec `packaging-part-material-inference.md`）：返回带
+    `material_text` 与 `material_source="inferred_from_part_name"` 的**副本**；已有材料
+    原文原样返回、不标推定。读侧派生，不改历史文档、不重算业务清单指纹。
+    """
     source = row if isinstance(row, dict) else {}
     fresh = source.get(REFERENCE_BLOCK_KEY)
     if isinstance(fresh, dict):
-        return fresh
-    legacy = source.get(LEGACY_REFERENCE_BLOCK_KEY)
-    return legacy if isinstance(legacy, dict) else {}
+        block = fresh
+    else:
+        legacy = source.get(LEGACY_REFERENCE_BLOCK_KEY)
+        block = legacy if isinstance(legacy, dict) else {}
+    if _text(block.get("material_text")):
+        return block
+    from .packaging_material_inference import (MATERIAL_INFERENCE_SOURCE,
+                                               infer_material_text)
+    inferred = infer_material_text(source.get("name"))
+    if not inferred:
+        return block
+    return dict(block, material_text=inferred, material_source=MATERIAL_INFERENCE_SOURCE)
 
 
 def _business_part_reference(row: Any) -> Dict[str, Any]:
@@ -5228,6 +5242,7 @@ def business_cost_inputs(row: Any, *, requirement: Any = None,
                              'quantity':child['quantity']*usage})
         return {'ok':True,'part_code':record['business_part_code'],'name':record.get('name'),
                 'material_text':reference.get('material_text') or record.get('material'),
+                'material_source':_text(reference.get('material_source')),
                 'variables':{},'sections':sections,'size_source':'section_dimensions',
                 'size_source_ref':'CAD sections','size_text':'；'.join(
                     s['name']+' '+_mm_text(s['variables']['cut_length'])+'×'+_mm_text(s['variables']['cut_width'])+' mm'
@@ -5238,6 +5253,7 @@ def business_cost_inputs(row: Any, *, requirement: Any = None,
     base: Dict[str, Any] = {
         "ok": False, "code": "", "message": "", "missing_variables": [],
         "part_code": code, "name": _text(record.get("name")), "material_text": material_text,
+        "material_source": _text(reference.get("material_source")),
         "gsm": None, "variables": {},
         "size_source": "", "size_source_ref": _text(reference.get("source")),
         "size_text": _text(reference.get("product_size_text")),
@@ -5306,6 +5322,9 @@ def business_cost_assumption(inputs: Any, *, geometry_part_code: Any = "") -> st
     variables = payload.get("variables") if isinstance(payload.get("variables"), dict) else {}
     text = "按清单尺寸（%s×%s mm）算的材料开料，未与 CAD 几何核过" % (
         _mm_text(variables.get("cut_length")), _mm_text(variables.get("cut_width")))
+    if _text(payload.get("material_source")) == "inferred_from_part_name":
+        text += "；材料原文缺失，按件名推定为「%s」（非图纸原文，需人工核对）" % _text(
+            payload.get("material_text"))
     code = _text(geometry_part_code)
     if code:
         text += "；这一件另有闭合几何件（%s），本结论有意按清单尺寸算" % code
@@ -5374,6 +5393,7 @@ def business_process_inputs(row: Any) -> Dict[str, Any]:
         return {'ok':True,'part_code':record['business_part_code'],'name':record.get('name'),
                 'composition':composition,'process_scope':'business_part/1',
                 'material_text':_text(reference.get('material_text')) or _text(record.get('material')),
+                'material_source':_text(reference.get('material_source')),
                 'process_text':_text(reference.get('process_text')),
                 'size_source':'section_dimensions','size_source_ref':'CAD sections',
                 'size_text':'；'.join(s['name']+' '+_mm_text(s['size_length'])+'×'+_mm_text(s['size_width'])+' mm' for s in composition),
@@ -5386,6 +5406,7 @@ def business_process_inputs(row: Any) -> Dict[str, Any]:
     base: Dict[str, Any] = {
         "ok": False, "code": "", "message": "", "missing_variables": [],
         "part_code": code, "name": _text(record.get("name")), "material_text": material_text,
+        "material_source": _text(reference.get("material_source")),
         "process_text": _text(reference.get("process_text")), "grounding": "",
         "size_source": "", "size_source_ref": _text(reference.get("source")),
         "size_length": None, "size_width": None,
@@ -5456,6 +5477,9 @@ def business_process_assumption(inputs: Any, *, geometry_part_code: Any = "") ->
         text = "按对照表的尺寸（%s×%s mm）与材料原文编制工序，未与 CAD 几何核过：" \
                "没有展开轮廓、没有排样，料厚未知" % (_mm_text(payload.get("size_length")),
                                                     _mm_text(payload.get("size_width")))
+    if _text(payload.get("material_source")) == "inferred_from_part_name":
+        text += "；材料原文缺失，按件名推定为「%s」（非图纸原文，需人工核对）" % _text(
+            payload.get("material_text"))
     code = _text(geometry_part_code)
     if code:
         text += "；这一件另有闭合几何件（%s），本结论有意按对照表编制" % code
