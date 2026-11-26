@@ -18,7 +18,8 @@ def _confirmable_boxes(result):
 def _demo_candidates(result):
     """演示兜底可用的候选：允许 out_of_range（尺寸超界仍可确认），只要求已匹配且可确认。"""
     return [row for row in result.get('candidates') or []
-            if row.get('status') == 'matched' and row.get('can_confirm')]
+            if row.get('status') in ('matched', 'needs_input')
+            and not row.get('reject_reasons')]
 
 
 def _missing_input(value):
