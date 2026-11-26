@@ -7,6 +7,14 @@ from . import packaging_cost,packaging_cost_ledger,packaging_handoff
 from ..storage import store
 from ..storage.meta_backend import get_backend
 
+BOX_MATCH_CONFLICT = 'demo_box_match_missing_or_conflicting_inputs'
+
+
+def _confirmable_boxes(result):
+    return [row for row in result.get('candidates') or []
+            if row.get('status') == 'matched' and row.get('can_confirm') and not row.get('out_of_range')]
+
+
 def _missing_input(value):
     return value is None or (isinstance(value,str) and value.strip() in
         ('','待人工确认','待确认','待填写','未填写','未填','未知','暂无','—','-'))
@@ -18,15 +26,28 @@ def requirement_defaults(requirement):
     from . import requirement_service
     data=requirement_service.resolved_packaging_order_data(data)
     result['data']=data
-    boxes=kb_repo.packaging_box_types()
-    preferred=data.get('box_type')
-    box=next((row for row in boxes if row.get('box_type_code')==preferred),None)
+    boxes = kb_repo.packaging_box_types()
+    preferred = data.get('box_type')
+    matching = {key: value for key, value in data.items() if not _missing_input(value)}
+    match_result = packaging_match.match_box_types(matching)
+    confirmed_candidates = _confirmable_boxes(match_result)
+    incomplete_candidates = [row for row in match_result.get('candidates') or []
+                             if row.get('status') == 'needs_input' and not row.get('out_of_range')
+                             and not row.get('reject_reasons')]
+    if not _missing_input(preferred):
+        candidates = [row for row in confirmed_candidates + incomplete_candidates
+                      if row.get('box_type_code') == preferred]
+    else:
+        candidates = confirmed_candidates or incomplete_candidates
+        if not confirmed_candidates and len(candidates) > 1:
+            raise ValueError(BOX_MATCH_CONFLICT)
+    if not candidates:
+        raise ValueError(BOX_MATCH_CONFLICT)
+    chosen = min(candidates, key=lambda row: (-float(row.get('total_score') or 0),
+                                              str(row.get('box_type_code'))))
+    box = next((row for row in boxes if row.get('box_type_code') == chosen.get('box_type_code')), None)
     if box is None:
-        choices=packaging_match.match_box_types(data).get('candidates') or []
-        choices=[row for row in choices if not row.get('out_of_range')]
-        choices.sort(key=lambda row:(-float(row.get('total_score') or 0),str(row.get('box_type_code'))))
-        code=choices[0].get('box_type_code') if choices else None
-        box=next((row for row in boxes if row.get('box_type_code')==code),{})
+        raise ValueError(BOX_MATCH_CONFLICT)
     defaults={'quote_quantity':1000,'fit_clearance':box.get('fit_clearance') or 1.5,
         'closure_type':box.get('closure_type') or '天地盖','v_groove':box.get('v_groove') or '否',
         'box_type':box.get('box_type_code') or '', 'packaging_product_name':box.get('name') or '包装演示项目',
@@ -57,8 +78,8 @@ def adopt_box(project_id, actor, requirement):
     match=packaging_match.load_box_match(project_id,req_no)
     if match.get('decision')=='confirmed': return
     match=packaging_match.run_box_match(project_id,req_no)
-    choices=[r for r in match.get('candidates') or [] if r.get('can_confirm') and r.get('status')=='matched']
-    if not choices: raise ValueError('demo_box_match_missing_or_conflicting_inputs')
+    choices=_confirmable_boxes(match)
+    if not choices: raise ValueError(BOX_MATCH_CONFLICT)
     choices.sort(key=lambda r:(-float(r.get('total_score') or 0),str(r.get('box_type_code'))))
     preferred=(requirement.get('data') or {}).get('box_type')
     chosen=next((r for r in choices if r.get('box_type_code')==preferred),choices[0])
@@ -80,15 +101,23 @@ def ensure_inputs(project_id, actor):
                 for r in doc.get('layout_rows') or []]
         return hashlib.sha256(json.dumps({'parts':values,'layout':layout,'scheme':doc.get('selected_scheme_id')},sort_keys=True,default=str).encode()).hexdigest()
     doc=packaging_parts.load_business_parts(project_id)
-    data=(store.load_requirement(project_id) or {}).get('data') or {}
+    original = store.load_requirement(project_id) or {}
+    data = original.get('data') or {}
     required=('quote_quantity','packaging_product_name','packaging_category','box_type',
               'inner_length','inner_width','inner_height','closure_type','v_groove','face_paper_gsm','fit_clearance')
     if (doc.get('demo_prepared_geometry_hash')==identity(doc)
             and doc.get('demo_inputs_version')==packaging_demo_inputs.ENGINE_VERSION
             and all(not _missing_input(data.get(key)) for key in required)): return True
-    requirement=requirement_defaults(store.load_requirement(project_id) or {})
+    requirement=requirement_defaults(original)
     requirement['data']['poc_auto_no_manual']=True
-    store.save_requirement(project_id,requirement,author=actor.get('username',''))
+    match = packaging_match.load_box_match(project_id, requirement.get('requirement_no') or '')
+    if match.get('decision') != 'confirmed':
+        proposed = packaging_match.match_box_types(requirement['data'])
+        preferred = requirement['data'].get('box_type')
+        if not any(row.get('box_type_code') == preferred for row in _confirmable_boxes(proposed)):
+            raise ValueError(BOX_MATCH_CONFLICT)
+    if requirement != original:
+        store.save_requirement(project_id,requirement,author=actor.get('username',''))
     adopt_box(project_id,actor,requirement)
     packaging_demo_inputs.prepare(project_id,actor=actor.get('username',''),enable_demo=True)
     prepared=packaging_parts.load_business_parts(project_id)

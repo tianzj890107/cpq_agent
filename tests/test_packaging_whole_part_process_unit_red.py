@@ -212,7 +212,8 @@ const window={dispatchEvent:()=>{},PackagingConclusionNotes:{basis:()=>({}),
         from tech_app.backend.services import packaging_demo_flow, process, packaging_match
         from tech_app.backend.models.process import ProcessPlan
         tree=ast.parse((ROOT/'tech_app/backend/main.py').read_text())
-        names={'_packaging_business_part_process_note','packaging_business_part_process'}
+        names={'_packaging_business_part_process_note','_packaging_business_part_process_inputs',
+               'packaging_business_part_process'}
         functions=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name in names]
         for fn in functions:fn.decorator_list=[]
         source=row();doc={'business_parts':[source],'business_parts_id':'V','business_parts_hash':'H'}
