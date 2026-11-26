@@ -9,3 +9,4 @@
 - 复核：专项 15 项通过；线上 build.commit=`5110c1b`，首页 SHA256 与 `947f62c` 一致、`quote-direct.js` 仍 404；两份样本 ODA 27.1 主转换与隔离端到端自检 verdict=ok。
 - 业务件材料原文缺失时按件名推定并披露（回移到本分支）：件级对照资料读侧补 material_text 与 material_source=inferred_from_part_name，结论写明「按件名推定为 X」；件名认不出材料族仍按 MATERIAL_UNKNOWN 拒绝。专项 8 项通过。
 - 材料克重按披露口径推定（回移到本分支）：原文 `<数字>g` 优先，灰板/EVA 按料厚 × 族默认密度，只写材料族按族默认克重；来源记入 variables.grammage_source 并在结论披露。该样本 28 件里 25 件工艺+成本通过，剩余 3 件仍按 drawing_part_size_not_confirmed 拒绝。
+- 已审核需求恢复演示兜底（回移到本分支）：AI 推荐 + 演示输入，不改写需求单，按 poc_reference 口径提交。

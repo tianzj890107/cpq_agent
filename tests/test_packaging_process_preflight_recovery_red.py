@@ -5,7 +5,8 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from tech_app.backend import main
-from tech_app.backend.services import packaging_demo_flow, packaging_parts, tasks
+from tech_app.backend.services import (packaging_demo_flow, packaging_demo_inputs,
+                                           packaging_name_assist, packaging_parts, tasks)
 from tech_app.backend.storage import kb_repo, store
 
 
@@ -61,25 +62,35 @@ class ProcessSubmission(unittest.IsolatedAsyncioTestCase):
         save.assert_not_called()
         self.assertEqual(before, original)
 
-    async def test_missing_evidence_does_not_prepare_demo_inputs_for_approved_requirement(self):
+    async def test_approved_requirement_runs_demo_prepare_without_rewriting(self):
+        """已审核需求缺证据时走演示兜底：AI 推荐 + 演示输入，但不改写需求单。"""
         row = business_part()
         row["geometry_binding"]["entity_ids"] = []
-        loaded = {"row": row, "doc": {"derived_from_drawing": True}}
+        failing = {"row": row, "doc": {"derived_from_drawing": True}}
+        prepared = business_part()
+        prepared["poc_inputs"] = {"mock": True, "length_mm": 100.0, "width_mm": 100.0,
+                                  "material_text": "2.0mm灰板", "gsm": 1400.0}
+        prepared["reference"].update({"length_mm": 100.0, "width_mm": 100.0,
+                                      "size_quality": "poc_reference",
+                                      "material_text": "2.0mm灰板"})
+        ok = {"row": prepared, "doc": {"derived_from_drawing": True, "poc_demo": True}}
         with (
             patch.object(main, "_workflow_project", return_value={"project_id": PROJECT}),
-            patch.object(main, "_packaging_business_part_row", return_value=loaded),
+            patch.object(main, "_packaging_business_part_row", side_effect=[failing, ok]),
             patch.object(store, "load_requirement", return_value=requirement()),
-            patch.object(packaging_demo_flow, "ensure_inputs") as prepare,
-            patch.object(tasks, "submit") as submit,
+            patch.object(store, "save_requirement") as save,
+            patch.object(packaging_name_assist, "prepare") as assist,
+            patch.object(packaging_demo_inputs, "prepare") as demo,
+            patch.object(tasks, "submit", return_value="fixture-task") as submit,
         ):
-            with self.assertRaises(HTTPException) as raised:
-                await main.packaging_business_part_process(
-                    PROJECT, row["business_part_code"], note="", attachments=[], user=ACTOR,
-                )
-        self.assertEqual(409, raised.exception.status_code)
-        self.assertEqual("drawing_part_size_not_confirmed", raised.exception.detail["code"])
-        prepare.assert_not_called()
-        submit.assert_not_called()
+            result = await main.packaging_business_part_process(
+                PROJECT, "FIXTURE-P01", note="", attachments=[], user=ACTOR,
+            )
+        self.assertEqual({"task_id": "fixture-task"}, result)
+        assist.assert_called_once()
+        demo.assert_called_once_with(PROJECT, actor=ACTOR["username"], enable_demo=False)
+        save.assert_not_called()
+        submit.assert_called_once()
 
     async def test_missing_evidence_reports_conflict_without_enqueueing(self):
         row = business_part()

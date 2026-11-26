@@ -40,3 +40,15 @@
 
 来源写进 `variables.grammage_source`，成本结论写明"克重按…推定为 X g/㎡（非原文）"。
 既有硬规则不动：bbox 不得进下游、无几何不得编尺寸（`drawing_part_size_not_confirmed`）。
+
+## 演示兜底（2026-11-26，用户决定）
+
+已审核需求缺本件证据时，提交单件工艺**不再直接 409**，而是走演示兜底：
+
+1. 先跑 AI 名称/材料推荐（`packaging_name_assist.prepare`）：材料仍缺的件由模型在候选里选，
+   结果记 `semantic_material`，来源标 `ai_semantic`；
+2. 再跑演示输入准备（`packaging_demo_inputs.prepare(..., enable_demo=False)`）：写 `poc_inputs`
+   （`mock=True`）与文档级 `poc_demo`，缺尺寸按已绑定几何或 `100×100` 占位、缺克重按演示值；
+3. **不改写已审核需求单**；随后按 `poc_reference` 口径重算并提交，结论里仍标 demo。
+
+只有演示准备本身失败（如盒型冲突、无业务部件清单）才回落到原来的 409。

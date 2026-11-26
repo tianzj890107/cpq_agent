@@ -9799,24 +9799,35 @@ async def packaging_business_part_process(
     loaded = _packaging_business_part_row(pid, code)
     try:
         row, inputs = _packaging_business_part_process_inputs(loaded)
-    except HTTPException:
+    except HTTPException as failure:
         requirement = store.load_requirement(pid) or {}
-        if requirement.get('status') not in requirement_service.EDITABLE_STATUSES:
-            raise
+        from .services import packaging_demo_inputs, packaging_name_assist
+        editable = requirement.get('status') in requirement_service.EDITABLE_STATUSES
         from .services import packaging_demo_flow
         try:
-            prepared = packaging_demo_flow.ensure_inputs(pid, user)
+            if editable:
+                prepared = packaging_demo_flow.ensure_inputs(pid, user)
+            else:
+                # 已审核需求也走演示兜底（Spec `packaging-part-material-inference.md` §演示兜底）：
+                # 只写业务部件文档的演示输入，**不改写已审核需求**；材料仍缺时先让 AI 推荐。
+                try:
+                    packaging_name_assist.prepare(pid, user.get('username', ''))
+                except Exception:                       # noqa: BLE001 - AI 不可用不阻断演示兜底
+                    pass
+                packaging_demo_inputs.prepare(pid, actor=user.get('username', ''),
+                                              enable_demo=False)
+                prepared = True
         except packaging_match.BoxMatchError as exc:
             raise HTTPException(exc.status_code, _packaging_error_detail(exc)) from exc
         except ValueError as exc:
             if str(exc) != packaging_demo_flow.BOX_MATCH_CONFLICT:
-                raise
+                raise failure
             raise HTTPException(409, {
                 'code': packaging_demo_flow.BOX_MATCH_CONFLICT,
                 'message': '演示工艺输入找不到与当前需求兼容的盒型。请核对盒型、规格和材料后再提交。',
             }) from exc
-        if not prepared:
-            raise
+        except Exception:
+            raise failure
         loaded = _packaging_business_part_row(pid, code)
         row, inputs = _packaging_business_part_process_inputs(loaded)
     doc = loaded["doc"]
