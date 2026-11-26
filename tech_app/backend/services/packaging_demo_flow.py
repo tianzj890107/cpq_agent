@@ -16,14 +16,9 @@ def _confirmable_boxes(result):
 
 
 def _demo_candidates(result):
-    """演示兜底可用的候选：matched 或 needs_input 都可用，允许 out_of_range。
-
-    needs_input 的候选同样带盒型默认值（尺寸/闭合方式/克重/间隙）；演示准备正是要靠它
-    把需求单缺的输入补齐，再由 adopt_box 重新匹配确认。
-    """
+    """演示兜底可用的候选：允许 out_of_range（尺寸超界仍可确认），只要求已匹配且可确认。"""
     return [row for row in result.get('candidates') or []
-            if row.get('status') in ('matched', 'needs_input')
-            and not row.get('reject_reasons')]
+            if row.get('status') == 'matched' and row.get('can_confirm')]
 
 
 def _missing_input(value):
