@@ -50,3 +50,47 @@ def infer_material_text(name: Any) -> str:
                 return "衬纸"
             return "特种纸"
     return ""
+
+#: 按厚度计价材料的族默认密度（g/cm³）：只在材料原文只写厚度、库内又没有密度时用，逐条披露。
+FAMILY_DEFAULT_DENSITY: Dict[str, float] = {"greyboard": 0.7, "eva": 0.9}
+
+#: 只写材料族、既没克重也没厚度时的族默认克重（g/㎡）：逐条披露，不装成原文。
+FAMILY_DEFAULT_GRAMMAGE: Dict[str, float] = {"liner_paper": 80.0, "specialty": 120.0,
+                                             "tube": 250.0}
+
+GRAMMAGE_SOURCE_TEXT = "material_text"
+GRAMMAGE_SOURCE_THICKNESS = "inferred_thickness_density"
+GRAMMAGE_SOURCE_FAMILY = "inferred_family_default"
+
+
+def material_family(text: Any) -> str:
+    """材料原文 / 件名命中的材料族（认不出返回空串）。"""
+    from .packaging_part_route_match import normalize_part_name
+    body = normalize_part_name(text).upper()
+    if not body:
+        return ""
+    for family, words in NAME_FAMILY_HINTS:
+        if any(word.upper() in body for word in words):
+            return family
+    return ""
+
+
+def infer_grammage(material_text: Any):
+    """材料原文 → `(克重, 来源)`；推不出来 `(None, "")`。
+
+    顺序：原文里的 `<数字>g` → 厚度 × 族默认密度 → 族默认克重。后两步都是**推定**，
+    来源必须随结论披露（Spec `packaging-part-material-inference.md`）。
+    """
+    import re
+    text = str(material_text or "")
+    match = re.search(r"(\d+(?:\.\d+)?)\s*[gG](?![A-Za-z])", text)
+    if match:
+        return float(match.group(1)), GRAMMAGE_SOURCE_TEXT
+    family = material_family(text)
+    thickness = re.search(r"(\d+(?:\.\d+)?)\s*(?:mm|毫米)", text, re.I)
+    if family in FAMILY_DEFAULT_DENSITY and thickness:
+        gsm = float(thickness.group(1)) * FAMILY_DEFAULT_DENSITY[family] * 1000.0
+        return round(gsm, 3), GRAMMAGE_SOURCE_THICKNESS
+    if family in FAMILY_DEFAULT_GRAMMAGE:
+        return FAMILY_DEFAULT_GRAMMAGE[family], GRAMMAGE_SOURCE_FAMILY
+    return None, ""
