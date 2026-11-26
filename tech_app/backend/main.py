@@ -9860,9 +9860,25 @@ async def packaging_business_part_process(
                     return packaging_demo_inputs.demo_process_plan(part,kwargs.get('lookup') or {},demo_inputs,allow_fallback=True,
                         note=kwargs.get('note') or '',attachments=kwargs.get('attachments') or [])
                 return process.outline_process(part,**kwargs)
-            plan, coverage = recommend(
-                part, overall=None, geom=None,
-                note=_packaging_business_part_process_note(inputs, note) + '\n' + da_process_routing.grounding(da_lookup), attachments=atts,lookup=da_lookup)
+            note_text = _packaging_business_part_process_note(inputs, note) + '\n' + da_process_routing.grounding(da_lookup)
+            demo_fallback_used = False
+            try:
+                plan, coverage = recommend(
+                    part, overall=None, geom=None,
+                    note=note_text, attachments=atts, lookup=da_lookup)
+            except ValueError as exc:
+                if str(exc) != 'packaging_process_empty':
+                    raise
+                # 真实路径给不出任何工序（外购/标识类零件，如 EVA 内托）：按演示口径补齐，
+                # 结论里明确标 demo，不冒充生产工序。
+                tasks.report_progress('  ↳ 真实路径没有可用制造内容，按演示口径补工序')
+                sizes = packaging_demo_inputs.geometry_sizes(packaging_parts.load_parts(pid) or {})
+                demo_inputs = packaging_demo_inputs.demo_inputs_for(
+                    row, sizes, allow_estimates=True)
+                plan, coverage = packaging_demo_inputs.demo_process_plan(
+                    part, da_lookup, demo_inputs, allow_fallback=True,
+                    note=note_text, attachments=atts)
+                demo_fallback_used = True
             plan_dict = plan.model_dump() if hasattr(plan,'model_dump') else dict(plan)
         steps_total = len(plan_dict.get("steps") or [])
         library = (coverage or {}).get("summary") or {}
@@ -9875,6 +9891,8 @@ async def packaging_business_part_process(
         validation = process.compute(plan_dict)
         assumption = packaging_parts.business_process_assumption(
             inputs, geometry_part_code=geometry_code)
+        if demo_fallback_used:
+            assumption = (assumption + '；' if assumption else '') + '本件真实路径没有可用制造内容，工序按演示口径补齐（演示数据，非生产口径）'
         if assumption:
             tasks.report_progress("  ↳ %s" % assumption)
         packaging_parts.save_part_process(pid, {

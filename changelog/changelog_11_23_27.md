@@ -11,3 +11,4 @@
 - 业务件材料原文缺失时按件名推定并披露：件级对照资料读侧补 `material_text` 与 `material_source=inferred_from_part_name`，工艺/成本结论写明「材料原文缺失，按件名推定为 X」；件名认不出材料族仍按 `PACKAGING_BUSINESS_PART_MATERIAL_UNKNOWN` 拒绝，尺寸口径不放宽。推定实现收成一份 `packaging_material_inference`，演示输入与真实门禁共用。专项 8 项通过；相关 10 模块 142 项里 2 个模块因本机 ezdxf 缺 C 扩展无法运行（环境），其余 5 项为改动前既有失败，与基线一致。
 - 材料费克重缺失时按披露口径推定：原文 `<数字>g` 优先；灰板/EVA 只写厚度时按「料厚 × 族默认密度」推；只写材料族时按族默认克重推（衬纸 80、特种 120、纸管 250），来源写进 `variables.grammage_source` 并在成本结论里披露。该样本 28 件里工艺+成本两侧 25 件通过；剩余 3 件（贴牌只有 bbox、磁铁/内卡无绑定无几何）仍按 `drawing_part_size_not_confirmed` 拒绝——bbox 不得进下游、无几何不得编尺寸是既有硬规则。
 - 已审核需求的单件工艺提交恢复演示兜底：先 AI 名称/材料推荐（`ai_semantic`），再写演示输入（`poc_inputs`/`poc_demo`，缺尺寸按绑定几何或 100×100 占位），不改写已审核需求单；随后按 `poc_reference` 口径提交。该样本 28 件可全部提交；契约测试改为“已审核也走演示兜底且不写需求”。相关 113 项中 4 项为既有失败（mock 后端 3、旧断言 1），与基线一致。
+- 单件工艺任务阶段补兜底：真实路径产出空工序（`packaging_process_empty`，外购/标识类零件）时，改用演示口径 `demo_process_plan(allow_fallback=True)` 补齐工序，并在结论标注“工序按演示口径补齐（演示数据，非生产口径）”。此前该情况会让任务失败。
