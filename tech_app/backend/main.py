@@ -9768,6 +9768,18 @@ def _packaging_business_part_process_note(inputs: Dict[str, Any], note: str) -> 
                                       str(note or "").strip()) if item)
 
 
+def _packaging_business_part_process_inputs(loaded):
+    try:
+        row = packaging_parts.verified_business_part_input_row(loaded["row"], loaded["doc"])
+    except ValueError as exc:
+        raise HTTPException(409, {"code": str(exc),
+                                  "message": "当前CAD归属或有效尺寸缺失，请重新解析或选择完整候选后排工艺。"}) from exc
+    inputs = packaging_parts.business_process_inputs(row)
+    if not inputs["ok"]:
+        raise _packaging_business_part_reject(inputs)
+    return row, inputs
+
+
 @app.post(PACKAGING_BUSINESS_PART_PROCESS_PATH)
 async def packaging_business_part_process(
     pid: str, code: str,
@@ -9783,18 +9795,32 @@ async def packaging_business_part_process(
     """
     _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
     _workflow_project(pid)
-    from .services import packaging_demo_flow, packaging_demo_inputs
-    automatic_demo=packaging_demo_flow.ensure_inputs(pid,user)
+    from .services import packaging_demo_inputs
     loaded = _packaging_business_part_row(pid, code)
-    doc = loaded["doc"]
     try:
-        row = packaging_parts.verified_business_part_input_row(loaded["row"], doc)
-    except ValueError as exc:
-        raise HTTPException(409, {"code": str(exc),
-                                  "message": "当前CAD归属或有效尺寸缺失，请重新解析或选择完整候选后排工艺。"}) from exc
-    inputs = packaging_parts.business_process_inputs(row)
-    if not inputs["ok"]:
-        raise _packaging_business_part_reject(inputs)
+        row, inputs = _packaging_business_part_process_inputs(loaded)
+    except HTTPException:
+        requirement = store.load_requirement(pid) or {}
+        if requirement.get('status') not in requirement_service.EDITABLE_STATUSES:
+            raise
+        from .services import packaging_demo_flow
+        try:
+            prepared = packaging_demo_flow.ensure_inputs(pid, user)
+        except packaging_match.BoxMatchError as exc:
+            raise HTTPException(exc.status_code, _packaging_error_detail(exc)) from exc
+        except ValueError as exc:
+            if str(exc) != packaging_demo_flow.BOX_MATCH_CONFLICT:
+                raise
+            raise HTTPException(409, {
+                'code': packaging_demo_flow.BOX_MATCH_CONFLICT,
+                'message': '演示工艺输入找不到与当前需求兼容的盒型。请核对盒型、规格和材料后再提交。',
+            }) from exc
+        if not prepared:
+            raise
+        loaded = _packaging_business_part_row(pid, code)
+        row, inputs = _packaging_business_part_process_inputs(loaded)
+    doc = loaded["doc"]
+    automatic_demo = doc.get('poc_demo') is True and (row.get('poc_inputs') or {}).get('mock') is True
     geometry_label = _packaging_business_geometry_label(row)
     geometry_code = geometry_label.split(":", 1)[1] if geometry_label.startswith("bound:") else ""
     part = packaging_parts.business_as_ir_part(row)
