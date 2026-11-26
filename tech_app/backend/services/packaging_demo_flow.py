@@ -15,6 +15,12 @@ def _confirmable_boxes(result):
             if row.get('status') == 'matched' and row.get('can_confirm') and not row.get('out_of_range')]
 
 
+def _demo_candidates(result):
+    """演示兜底可用的候选：允许 out_of_range（尺寸超界仍可确认），只要求已匹配且可确认。"""
+    return [row for row in result.get('candidates') or []
+            if row.get('status') == 'matched' and row.get('can_confirm')]
+
+
 def _missing_input(value):
     return value is None or (isinstance(value,str) and value.strip() in
         ('','待人工确认','待确认','待填写','未填写','未填','未知','暂无','—','-'))
@@ -78,7 +84,7 @@ def adopt_box(project_id, actor, requirement):
     match=packaging_match.load_box_match(project_id,req_no)
     if match.get('decision')=='confirmed': return
     match=packaging_match.run_box_match(project_id,req_no)
-    choices=_confirmable_boxes(match)
+    choices=_demo_candidates(match) or _confirmable_boxes(match)
     if not choices: raise ValueError(BOX_MATCH_CONFLICT)
     choices.sort(key=lambda r:(-float(r.get('total_score') or 0),str(r.get('box_type_code'))))
     preferred=(requirement.get('data') or {}).get('box_type')
@@ -114,7 +120,7 @@ def ensure_inputs(project_id, actor):
     if match.get('decision') != 'confirmed':
         proposed = packaging_match.match_box_types(requirement['data'])
         preferred = requirement['data'].get('box_type')
-        if not any(row.get('box_type_code') == preferred for row in _confirmable_boxes(proposed)):
+        if not any(row.get('box_type_code') == preferred for row in _demo_candidates(proposed)):
             raise ValueError(BOX_MATCH_CONFLICT)
     if requirement != original:
         store.save_requirement(project_id,requirement,author=actor.get('username',''))
