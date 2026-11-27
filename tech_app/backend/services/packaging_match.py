@@ -742,9 +742,10 @@ def confirm_box_for_finance_handoff(project_id, requirement, actor):
     current = load_box_match(project_id, req_no)
     if current['decision'] == 'confirmed' and current.get('confirmed_box_type'):
         if current.get('note') == HANDOFF_BOX_NOTE and current.get('stale'):
-            raise BoxMatchError('已采用的盒型依据发生变化，请重新确认盒型后再交接。',
-                                409, 'box_type_not_confirmed')
-        return
+            # 依据变了：按当前证据重算并覆盖同一条交接记录，不要求人工再确认一次。
+            current = {**current, 'decision': 'pending', 'confirmed_box_type': ''}
+        else:
+            return
     if current['decision'] not in ('pending', 'none') or actor.get('role') not in BOX_MATCH_DECIDE_ROLES:
         raise BoxMatchError('尚未确认盒型，请处理当前盒型决策后再交接。', 409, 'box_type_not_confirmed')
 
