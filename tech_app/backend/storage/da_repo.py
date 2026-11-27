@@ -687,18 +687,21 @@ def load_box_match(project_id: str, requirement_no: str = "") -> Optional[dict]:
     )
 
 
-def update_box_match_decision(project_id: str, requirement_no: str = "", **fields) -> None:
+def update_box_match_decision(project_id: str, requirement_no: str = "", *,
+                              pending_only: bool = False, **fields) -> bool:
     """只更新人工决策列;算法侧的候选/快照不在可写白名单里。"""
     columns = {key: value for key, value in fields.items()
                if key in _BOX_MATCH_DECISION_COLUMNS}
     if not columns:
-        return
+        return False
     assignments = ", ".join(f"{key} = ?" for key in columns)
-    db.execute(
+    condition = " AND decision = 'pending'" if pending_only else ""
+    cursor = db.execute(
         f"UPDATE wip_packaging_box_match SET {assignments} "
-        "WHERE project_id = ? AND requirement_no = ?",
+        f"WHERE project_id = ? AND requirement_no = ?{condition}",
         [*columns.values(), project_id, requirement_no or ""],
     )
+    return cursor.rowcount > 0
 
 
 def append_box_match_audit(project_id: str, requirement_no: str = "", action: str = "",

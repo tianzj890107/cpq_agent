@@ -1212,9 +1212,9 @@ def _send_packaging_finance_draft(project_id: str, user: Optional[dict], *, prod
                                  note: str, target_type: str, target_role_code: str,
                                  target_user_id: str, token: str, draft: bool = True) -> IntegrationPlan:
     """内部草稿核算交接：不替人确认参数/工艺，不签 waiver，不解锁正式发布。"""
-    from . import packaging_parts, packaging_route
+    from . import packaging_match, packaging_parts, packaging_route
     requirement = store.load_requirement(project_id) or {}
-    data = requirement.get("data") or {}
+    data = packaging_match.finance_handoff_order_data(project_id, requirement)
     if data.get("industry") != "packaging":
         raise IntegrationFlowError("带缺口内部草稿交接仅支持包装项目")
     plan = load_plan(project_id)

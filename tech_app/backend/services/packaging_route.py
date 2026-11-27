@@ -159,8 +159,7 @@ def _industry_of(data: dict) -> str:
 
 def _requirement_data(project_id: str) -> dict:
     doc = store.load_requirement(project_id) or {}
-    data = doc.get("data")
-    return data if isinstance(data, dict) else {}
+    return packaging_match.finance_handoff_order_data(project_id, doc)
 
 
 def _resolve_requirement_no(project_id: str, requirement_no: str) -> str:

@@ -146,7 +146,7 @@ def handoff_package(project_id: str, requirement_no: str = "", *,
     if _industry_of(doc) != INDUSTRY:
         raise HandoffError("这不是包装需求单，包装交接只接管 industry=packaging 的项目",
                            400, "not_packaging")
-    data = doc.get("data") if isinstance(doc.get("data"), dict) else {}
+    data = packaging_match.finance_handoff_order_data(pid, doc)
     req_no = _resolve_requirement_no(pid, requirement_no)
     from . import requirement_service
     data=requirement_service.resolved_packaging_order_data(data)

@@ -144,7 +144,7 @@ def sync_integration(project_id, actor, route=None):
     from ..models.integration import IntegrationParam,IntegrationParamPlan
     from ..models.process import ProcessPlan,ProcessStep,ProcessType
     from ..time_utils import now_cst_str
-    data=(store.load_requirement(project_id) or {}).get('data') or {}
+    data=packaging_match.finance_handoff_order_data(project_id,store.load_requirement(project_id) or {})
     plan=integration.load_plan(project_id)
     if plan.params is None:
         plan.params=IntegrationParamPlan(assembly_name=data.get('packaging_product_name') or project_id,
@@ -204,12 +204,15 @@ def prepare_route(project_id,actor, *, regenerate_assembly=False, note='', attac
         tasks.report_progress('全部零件工艺已齐，直接复用，不调用模型')
     plan=integration.load_plan(project_id)
     tasks.report_progress('直接汇总零件已有工艺，跳过排模与新增组装')
-    req_no=(store.load_requirement(project_id) or {}).get('requirement_no') or ''
+    requirement=store.load_requirement(project_id) or {}
+    req_no=requirement.get('requirement_no') or ''
     try:
+        if confirmed_only and enabled(project_id):
+            packaging_match.confirm_box_for_finance_handoff(project_id, requirement, actor)
         packaging_bom.build_bom(project_id,req_no)
         packaging_route.build_route(project_id,req_no)
         route=packaging_route.confirm_route(project_id,req_no,actor=actor)
-    except (packaging_bom.BomError,packaging_route.RouteError,ValueError) as exc:
+    except (packaging_match.BoxMatchError,packaging_bom.BomError,packaging_route.RouteError,ValueError) as exc:
         if confirmed_only:
             raise integration.IntegrationFlowError(str(exc), getattr(exc, 'status_code', 409)) from exc
         plan.packaging_assembly_attempt.update(status='partial')
