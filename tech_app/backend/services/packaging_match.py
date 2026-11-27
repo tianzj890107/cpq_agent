@@ -31,6 +31,8 @@ PACKAGING_INDUSTRY = "packaging"
 #: Spec §2.1 —— 匹配真正需要的 7 个键（顺序即契约）。
 MATCH_INPUT_KEYS = ("inner_length", "inner_width", "inner_height", "closure_type",
                     "v_groove", "face_paper_gsm", "fit_clearance")
+HANDOFF_BOX_NOTE = "工艺交接沿用兼容盒型，模板补齐部分仅供演示核算"
+_HANDOFF_INPUTS = "finance_handoff_inputs"
 
 #: 配合间隙容差（mm）；口径来自权重表该行的 rule_expr。
 FIT_CLEARANCE_TOLERANCE_MM = 0.5
@@ -637,10 +639,23 @@ def _resolve_requirement_no(project_id: str, requirement_no: str) -> str:
 def run_box_match(project_id: str, requirement_no: str = "") -> dict:
     """读需求单字段 → 匹配 → 落库（pending）；已有确认时只换候选与输入快照。"""
     doc, _data, inputs = _require_packaging(project_id)
-    result = match_box_types(inputs)
+    req_no = _requirement_no(doc, requirement_no)
+    record = da_repo.load_box_match(project_id, req_no) or {}
+    stored = _record_input_snapshot(record).get(_HANDOFF_INPUTS)
+    if (record.get('note') == HANDOFF_BOX_NOTE and record.get('decision') == 'confirmed'
+            and stored and stored.get('basis') == _handoff_basis(_handoff_source(_data))):
+        inputs[_HANDOFF_INPUTS] = stored
+        result = match_box_types(stored['values'])
+    else:
+        result = match_box_types(inputs)
+    _save_match(project_id, req_no, inputs, result)
+    return result
+
+
+def _save_match(project_id, requirement_no, inputs, result):
     da_repo.save_box_match({
         "project_id": project_id,
-        "requirement_no": _requirement_no(doc, requirement_no),
+        "requirement_no": requirement_no,
         "industry": PACKAGING_INDUSTRY,
         "engine_version": result["engine_version"],
         "inputs": inputs,
@@ -648,7 +663,85 @@ def run_box_match(project_id: str, requirement_no: str = "") -> dict:
         "missing_inputs": result["missing_inputs"],
         "suggested_box_type": result["suggested_box_type"],
     })
-    return result
+
+
+def _handoff_source(data):
+    from . import requirement_service
+
+    evidence = dict(data)
+    for key in (*MATCH_INPUT_KEYS, 'box_type'):
+        assumption = (data.get('demo_assumptions') or {}).get(key) or {}
+        if assumption.get('mock') is True and _canonical(data.get(key)) == _canonical(assumption.get('value')):
+            evidence[key] = assumption.get('original_value')
+    return requirement_service.resolved_packaging_order_data(evidence)
+
+
+def _handoff_basis(data):
+    return {key: _canonical(data.get(key)) for key in (*MATCH_INPUT_KEYS, 'box_type', 'box_family',
+                                                        'packaging_category', 'packaging_product_name')}
+
+
+def _usable_handoff_candidates(result):
+    return [row for row in result['candidates'] if row.get('can_confirm') and row.get('status') == 'matched'
+            and not row.get('out_of_range') and not row.get('reject_reasons')
+            and not {'size_range', 'closure_type'}.intersection(row.get('undecidable_dimensions') or [])]
+
+
+def confirm_box_for_finance_handoff(project_id, requirement, actor):
+    """Use ordered evidence or a compatible selected template on the existing decision record."""
+    req_no = _requirement_no(requirement, '')
+    current = load_box_match(project_id, req_no)
+    if current['decision'] == 'confirmed' and current.get('confirmed_box_type'):
+        if current.get('note') == HANDOFF_BOX_NOTE and current.get('stale'):
+            raise BoxMatchError('已采用的盒型依据发生变化，请重新确认盒型后再交接。',
+                                409, 'box_type_not_confirmed')
+        return
+    if current['decision'] not in ('pending', 'none') or actor.get('role') not in BOX_MATCH_DECIDE_ROLES:
+        raise BoxMatchError('尚未确认盒型，请处理当前盒型决策后再交接。', 409, 'box_type_not_confirmed')
+
+    raw = requirement.get('data') or {}
+    evidence = _handoff_source(raw)
+    values = {key: evidence.get(key) for key in MATCH_INPUT_KEYS}
+    preferred = _text(evidence.get('box_type'))
+    if preferred:
+        template = next((box for box in kb_repo.packaging_box_types() if box.get('box_type_code') == preferred), {})
+        for key, axis in (('inner_length', 'l'), ('inner_width', 'w'), ('inner_height', 'h')):
+            low, high = _num(template.get(f'size_{axis}_min')), _num(template.get(f'size_{axis}_max'))
+            if _blank(values[key]) and low is not None and high is not None and 0 < low <= high:
+                values[key] = (low + high) / 2
+        if _blank(values['closure_type']) and template.get('closure_type'):
+            values['closure_type'] = template['closure_type']
+    result = match_box_types(values)
+    choices = _usable_handoff_candidates(result)
+    if preferred:
+        choices = [item for item in choices if item['box_type_code'] == preferred]
+    if len(choices) != 1:
+        raise BoxMatchError('尚未确认可用于交接的盒型。请在需求中核对盒型、成品内尺寸和闭合方式。',
+                            409, 'box_type_not_confirmed')
+
+    code = choices[0]['box_type_code']
+    snapshot = {key: raw.get(key) for key in MATCH_INPUT_KEYS}
+    snapshot[_HANDOFF_INPUTS] = {'box_type': code, 'basis': _handoff_basis(evidence), 'values': values}
+    _save_match(project_id, req_no, snapshot, result)
+    decide_box_match(project_id, req_no, 'confirmed', code, actor=actor, note=HANDOFF_BOX_NOTE, pending_only=True)
+
+
+def finance_handoff_order_data(project_id, requirement, *, record=None):
+    """Read handoff dimensions without changing the approved requirement."""
+    data = requirement.get('data')
+    data = data if isinstance(data, dict) else {}
+    if _industry_of(data) != PACKAGING_INDUSTRY:
+        return data
+    if record is None:
+        record = da_repo.load_box_match(project_id, _requirement_no(requirement, '')) or {}
+    if record.get('note') != HANDOFF_BOX_NOTE or record.get('decision') != 'confirmed':
+        return data
+    context = _record_input_snapshot(record).get(_HANDOFF_INPUTS) or {}
+    if (not context.get('box_type') or context['box_type'] != record.get('confirmed_box_type')
+            or context.get('basis') != _handoff_basis(_handoff_source(data))):
+        return data
+    values = {key: value for key, value in (context.get('values') or {}).items() if key in MATCH_INPUT_KEYS and not _blank(value)}
+    return {**data, **values, 'box_type': context['box_type']}
 
 
 def _record_input_snapshot(record: dict) -> dict:
@@ -711,6 +804,11 @@ def load_box_match(project_id: str, requirement_no: str = "") -> dict:
     snapshot = _record_input_snapshot(record)
     stale_reasons = [key for key in MATCH_INPUT_KEYS
                      if _canonical(snapshot.get(key)) != _canonical(inputs.get(key))]
+    if out['decision'] == 'confirmed' and out.get('note') == HANDOFF_BOX_NOTE:
+        basis = (snapshot.get(_HANDOFF_INPUTS) or {}).get('basis') or {}
+        observed = _handoff_basis(_handoff_source(_data))
+        stale_reasons.extend(key for key, value in observed.items()
+                             if value != basis.get(key) and key not in stale_reasons)
     out["stale"] = bool(stale_reasons)
     out["stale_reasons"] = stale_reasons
     if out["decision"] == "new_tooling":
@@ -759,7 +857,7 @@ def _audit_detail(actor: dict, box_type_code: str, score: Optional[float], note:
 
 def decide_box_match(project_id: str, requirement_no: str, decision: str,
                      box_type_code: Optional[str] = None, *, actor: Optional[dict] = None,
-                     note: str = "") -> dict:
+                     note: str = "", pending_only: bool = False) -> dict:
     """四态决策：确认推荐 / 换成别的候选 / 退回补充需求 / 新制评估。"""
     actor = actor or {}
     role = _text(actor.get("role"))
@@ -806,7 +904,7 @@ def decide_box_match(project_id: str, requirement_no: str, decision: str,
         "confirmed_by": _text(actor.get("username")),
         "updated_at": da_db.now(),
     }
-    if note:
+    if note or (not pending_only and record.get('note') == HANDOFF_BOX_NOTE):
         update["note"] = note
     if state == "confirmed":
         update["confirmed_box_type"] = code
@@ -815,7 +913,15 @@ def decide_box_match(project_id: str, requirement_no: str, decision: str,
             update["confirmed_at"] = _text(record.get("confirmed_at"))
         else:
             update["confirmed_at"] = da_db.now()
-    da_repo.update_box_match_decision(project_id, requirement_no, **update)
+    if pending_only:
+        if not da_repo.update_box_match_decision(project_id, requirement_no, pending_only=True, **update):
+            latest = load_box_match(project_id, requirement_no)
+            if latest['decision'] == 'confirmed' and latest.get('confirmed_box_type'):
+                return latest
+            raise BoxMatchError('盒型决策已变化，请核对后再交接。', 409, 'box_type_not_confirmed')
+        extra['automatic_handoff'] = True
+    else:
+        da_repo.update_box_match_decision(project_id, requirement_no, **update)
     # 确认一个没有部件模板的盒型：不阻断，但必须留下可判分支的痕迹（Spec
     # `packaging-box-candidate-rank-and-runnability.md` §2.3）—— 返回体与审计两处都给，
     # 前端与事后追溯才都看得见"选了它往下走 BOM 会 409 no_part_template"。

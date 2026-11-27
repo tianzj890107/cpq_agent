@@ -475,11 +475,11 @@ def packaging_param_projection(project_id: str) -> Optional[list]:
     不需要重建需求单。仍认不出的，照旧由 `missing_required()` 如实点名，不编值。
     Spec：`docs/specs/packaging-requirement-text-derived-params.md`（C5）。
     """
-    from . import product_params, requirement_service
+    from . import packaging_match, product_params, requirement_service
     if not packaging_handoff_family(project_id):
         return None
     requirement = store.load_requirement(project_id) or {}
-    data = requirement.get("data") or {}
+    data = packaging_match.finance_handoff_order_data(project_id, requirement)
     fields = {str(field.get("code") or ""): field
               for field in product_params.packaging_family_fields()}
     rows = []

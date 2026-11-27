@@ -860,8 +860,7 @@ def _industry_of(data: dict) -> str:
 
 def _requirement_data(project_id: str) -> dict:
     doc = store.load_requirement(project_id) or {}
-    data = doc.get("data")
-    data=dict(data) if isinstance(data,dict) else {}
+    data = dict(packaging_match.finance_handoff_order_data(project_id, doc))
     if data.get('industry')=='packaging':
         from . import integration, packaging_workspace, requirement_service
         data=requirement_service.resolved_packaging_order_data(data)

@@ -1984,6 +1984,7 @@ def build_bom(project_id: str, requirement_no: str = "", *,
     if _text(record.get("decision")) != "confirmed" or not box_code:
         raise BomError("尚未确认盒型，无法展开部件（Spec §2.1）", 409,
                        "box_type_not_confirmed")
+    data = packaging_match.finance_handoff_order_data(project_id, doc, record=record)
 
     # 判死之前**先**读零件 / 业务部件文档（Spec `packaging-business-tables-are-answer-keys-only.md`
     # §2.3）：判据是"这个项目有没有零件文档"，不是"业务表（部件模板表）里有没有模板"。

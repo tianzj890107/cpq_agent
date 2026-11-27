@@ -154,8 +154,10 @@ class DemoFlow(unittest.TestCase):
 
     def test_first_batch_remains_confirmable_after_a_later_part_triggers_demo_preparation(self):
         from cpq_packaging_quote import PricingError, demo_completion_eligible, price
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
         from tech_app.backend import main
-        from tech_app.backend.services import (integration, packaging_demo_flow, packaging_name_assist,
+        from tech_app.backend.services import (integration, packaging_demo_flow, packaging_match, packaging_name_assist,
                                                packaging_process_confirmation)
         from tests.test_packaging_process_preflight_recovery_red import ACTOR, business_part
 
@@ -205,11 +207,35 @@ class DemoFlow(unittest.TestCase):
             self.assertFalse(first_process['business_stale'])
 
         self.assertTrue(state["ready"], f"本批已生成但确认缺少有效结论: {state['missing']}")
+        self.assertEqual(approved, store.load_requirement(PID))
         integration.confirm_process(PID, ACTOR)
-        with mock.patch.object(integration.cpq_bridge, 'send_to_finance', return_value={
-            'task_id': 'fixture-finance', 'target_user_id': '9', 'target_username': 'fixture-fi',
-        }):
-            integration.send_to_finance(PID, ACTOR, target_type='user', target_user_id='9')
+        # The original action can encounter a correct box on the approved requirement,
+        # but no match decision and a missing internal measurement.
+        pending_box_requirement = store.load_requirement(PID)
+        pending_box_requirement['data'].pop('inner_width')
+        store.save_requirement(PID, pending_box_requirement)
+        approved = store.load_requirement(PID)
+        da_db.execute('DELETE FROM wip_packaging_box_match WHERE project_id=? AND requirement_no=?', (PID, REQ_NO))
+        app = FastAPI()
+        endpoint = '/api/projects/{project_id}/integration/send-to-finance'
+        app.add_api_route(endpoint, main.integration_send_to_finance, methods=['POST'])
+        app.dependency_overrides[main.current_user] = lambda: ACTOR
+        with (TestClient(app) as client,
+              mock.patch.object(main.cost_flow, 'grant_task_project_access', return_value={}),
+              mock.patch.object(integration.cpq_bridge, 'send_to_finance', return_value={
+                  'task_id': 'fixture-finance', 'target_user_id': '9', 'target_username': 'fixture-fi',
+              }) as send):
+            request = {'target_type': 'user', 'target_user_id': '9'}
+            for _ in range(2):
+                response = client.post(endpoint.format(project_id=PID), json=request)
+                self.assertEqual(200, response.status_code, response.text)
+                self.assertEqual('fixture-finance', response.json()['finance']['task_id'])
+            send.assert_called_once()
+            payload = send.call_args.args[6]['tech_cost']['requirement']
+            self.assertGreater(payload['inner_width'], 0)
+        self.assertEqual(BOX, packaging_match.load_box_match(PID, REQ_NO)['confirmed_box_type'])
+        packaging_match.run_box_match(PID, REQ_NO)
+        self.assertFalse(packaging_match.load_box_match(PID, REQ_NO)['stale'])
         with mock.patch.object(packaging_demo_inputs, 'prepare_processes', side_effect=AssertionError('工艺已确认')):
             result = packaging_demo_flow.run(PID, actor={'username': 'fixture-fi', 'role': 'finance_manager'})
         self.assertEqual(2, result['cost_projection']['counts']['parts_costed'])
@@ -217,6 +243,7 @@ class DemoFlow(unittest.TestCase):
         self.assertTrue(demo_completion_eligible(package))
         self.assertFalse(package['cost']['readiness']['formal_ready'])
         self.assertFalse(package['publishable'])
+        self.assertEqual(payload['inner_width'], package['requirement']['inner_width'])
         with self.assertRaises(PricingError):
             price(package, gross_margin_rate=.25, publish=True)
         self.assertTrue(packaging_process_confirmation.status(PID)['confirmed'])
@@ -232,6 +259,31 @@ class DemoFlow(unittest.TestCase):
         packaging_parts.save_business_parts(PID, current)
         changed = packaging_process_confirmation.snapshot(PID)
         self.assertIn(first['business_part_code'], changed['missing'])
+
+    def test_handoff_never_overrides_manual_rejection_or_relies_on_old_demo_assumptions(self):
+        from tech_app.backend.services import packaging_match
+        from tests.test_packaging_process_preflight_recovery_red import ACTOR
+
+        self._prepare_project()
+        for scenario in ('manual_return', 'incompatible', 'old_mock_only'):
+            with self.subTest(scenario=scenario):
+                decision = 'returned' if scenario == 'manual_return' else 'pending'
+                da_repo.update_box_match_decision(PID, REQ_NO, decision=decision, confirmed_box_type='')
+                before = da_repo.load_box_match(PID, REQ_NO)
+                requirement = {'requirement_no': REQ_NO, 'status': 'approved', 'data': dict(REQ)}
+                if scenario == 'incompatible':
+                    requirement['data']['closure_type'] = '磁吸滑盖'
+                if scenario == 'old_mock_only':
+                    keys = ('box_type', 'inner_length', 'inner_width', 'inner_height')
+                    requirement['data']['demo_assumptions'] = {
+                        key: {'value': REQ[key], 'original_value': None, 'mock': True} for key in keys
+                    }
+                store.save_requirement(PID, requirement)
+                saved = store.load_requirement(PID)
+                with self.assertRaises(packaging_match.BoxMatchError):
+                    packaging_match.confirm_box_for_finance_handoff(PID, saved, ACTOR)
+                self.assertEqual(before, da_repo.load_box_match(PID, REQ_NO))
+                self.assertEqual(saved, store.load_requirement(PID))
 
     def test_batch_workers_can_save_distinct_part_results_at_the_same_time(self):
         codes = [f'FIXTURE-P{i:02d}' for i in range(1, 29)]
