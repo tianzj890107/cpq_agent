@@ -72,6 +72,13 @@ class MaterialInference(unittest.TestCase):
                          (inputs.get("variables") or {}).get("grammage_source"))
         self.assertIn("推定", parts.business_cost_assumption(inputs))
 
+    def test_demo_inputs_do_not_change_business_identity(self):
+        base = {"business_parts": [{"business_part_code": "X", "name": "件"}]}
+        with_demo = {"poc_demo": True, "demo_inputs_version": "v",
+                     "business_parts": [{**base["business_parts"][0],
+                                         "poc_inputs": {"mock": True, "length_mm": 100}}]}
+        self.assertEqual(parts._business_identity(base), parts._business_identity(with_demo))
+
     def test_single_implementation_shared_with_demo_path(self):
         from tech_app.backend.services import packaging_material_inference as inference
         self.assertIs(demo.infer_material_text, inference.infer_material_text)
