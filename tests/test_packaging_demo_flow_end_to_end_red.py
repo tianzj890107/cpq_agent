@@ -6,11 +6,14 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import pathlib
 import tempfile
 import sys
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -148,6 +151,104 @@ class DemoFlow(unittest.TestCase):
         self.assertTrue(doc.get("poc_demo") is True)
         self.assertTrue(all(row.get("poc_inputs", {}).get("mock") is True
                             for row in doc.get("business_parts") or []))
+
+    def test_first_batch_remains_confirmable_after_a_later_part_triggers_demo_preparation(self):
+        from cpq_packaging_quote import PricingError, demo_completion_eligible, price
+        from tech_app.backend import main
+        from tech_app.backend.services import (integration, packaging_demo_flow, packaging_name_assist,
+                                               packaging_process_confirmation)
+        from tests.test_packaging_process_preflight_recovery_red import ACTOR, business_part
+
+        self._prepare_project()
+        requirement = store.load_requirement(PID)
+        requirement["status"] = "approved"
+        store.save_requirement(PID, requirement)
+        approved = store.load_requirement(PID)
+        first = business_part()
+        latter = {**business_part(), "business_part_code": "FIXTURE-P02", "geometry_binding": {}}
+        packaging_parts.save_business_parts(PID, {
+            "derived_from_drawing": True,
+            "business_parts": [first, latter],
+        })
+        plan = {"part_class": "packaging", "steps": [{"step_no": 10, "name": "模切", "standard_seconds": 30}]}
+        recommendation = (plan, {"summary": {}})
+        queued = []
+
+        def finish_task(project, kind, job, **options):
+            queued.append(job())
+            return f"task-{len(queued)}"
+
+        async def submit_both():
+            for row in (first, latter):
+                await main.packaging_business_part_process(
+                    PID, row["business_part_code"], note="", attachments=[], user=ACTOR,
+                )
+
+        with (
+            mock.patch.object(main, "_workflow_project", return_value={"project_id": PID}),
+            mock.patch.object(main.tasks, "submit", side_effect=finish_task),
+            mock.patch.object(main.process, "outline_process", return_value=recommendation),
+            mock.patch.object(main.process, "compute", return_value={}),
+            mock.patch.object(packaging_demo_inputs, "demo_process_plan", return_value=recommendation),
+            mock.patch.object(packaging_name_assist, "prepare"),
+        ):
+            asyncio.run(submit_both())
+            self.assertEqual(2, len(queued))
+            self.assertTrue(all(item["plan"]["steps"] for item in queued))
+            state = packaging_process_confirmation.snapshot(PID)
+            current = packaging_parts.load_business_parts(PID)
+            self.assertEqual(first, current["business_parts"][0])
+            self.assertTrue(current["business_parts"][1]["poc_inputs"]["mock"])
+            first_process = main.get_packaging_business_part_process(
+                PID, first['business_part_code'], user=ACTOR,
+            )
+            self.assertFalse(first_process['business_stale'])
+
+        self.assertTrue(state["ready"], f"本批已生成但确认缺少有效结论: {state['missing']}")
+        integration.confirm_process(PID, ACTOR)
+        with mock.patch.object(integration.cpq_bridge, 'send_to_finance', return_value={
+            'task_id': 'fixture-finance', 'target_user_id': '9', 'target_username': 'fixture-fi',
+        }):
+            integration.send_to_finance(PID, ACTOR, target_type='user', target_user_id='9')
+        with mock.patch.object(packaging_demo_inputs, 'prepare_processes', side_effect=AssertionError('工艺已确认')):
+            result = packaging_demo_flow.run(PID, actor={'username': 'fixture-fi', 'role': 'finance_manager'})
+        self.assertEqual(2, result['cost_projection']['counts']['parts_costed'])
+        package = result['handoff_package']
+        self.assertTrue(demo_completion_eligible(package))
+        self.assertFalse(package['cost']['readiness']['formal_ready'])
+        self.assertFalse(package['publishable'])
+        with self.assertRaises(PricingError):
+            price(package, gross_margin_rate=.25, publish=True)
+        self.assertTrue(packaging_process_confirmation.status(PID)['confirmed'])
+        self.assertEqual(approved, store.load_requirement(PID))
+        self.assertEqual(current, packaging_parts.load_business_parts(PID))
+
+        for revision in range(packaging_parts.MAX_VERSIONS):
+            current['business_parts'][1]['name'] = f'其他零件修改 {revision}'
+            packaging_parts.save_business_parts(PID, current)
+        unchanged = packaging_process_confirmation.snapshot(PID)
+        self.assertNotIn(first['business_part_code'], unchanged['missing'])
+        current['business_parts'][0]['geometry_binding']['bbox'][2] += 10
+        packaging_parts.save_business_parts(PID, current)
+        changed = packaging_process_confirmation.snapshot(PID)
+        self.assertIn(first['business_part_code'], changed['missing'])
+
+    def test_batch_workers_can_save_distinct_part_results_at_the_same_time(self):
+        codes = [f'FIXTURE-P{i:02d}' for i in range(1, 29)]
+        read_documents = packaging_parts._part_doc_items
+
+        def slow_read(*args, **kwargs):
+            items = read_documents(*args, **kwargs)
+            time.sleep(0.002)
+            return items
+
+        def save_result(code):
+            return packaging_parts.save_part_process(PID, {'part_code': code, 'plan': {'steps': [{'name': '模切'}]}})
+
+        with mock.patch.object(packaging_parts, '_part_doc_items', side_effect=slow_read):
+            with ThreadPoolExecutor(max_workers=4) as workers:
+                list(workers.map(save_result, codes))
+        self.assertTrue(all(packaging_parts.load_part_process(PID, code) for code in codes))
 
     def test_a4_demo_never_writes_a_confirmed_size(self):
         self._prepare_project()

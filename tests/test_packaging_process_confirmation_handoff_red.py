@@ -19,7 +19,7 @@ class Confirmation(unittest.TestCase):
                     'reference': {'material_text': '2mm灰板'}, 'quantity': 1,
                     'geometry_binding': {'entity_ids': ['E1'], 'status': 'bound'},
                     'sections': [{'section_id': 'S', 'entity_ids': ['E1'], 'quantity': 1}]}]}
-        self.collected = {'missing': [], 'records': [{'part_code': 'A', 'usage_qty': 1,
+        self.collected = {'missing': [], 'active': True, 'records': [{'part_code': 'A', 'usage_qty': 1,
                           'plan': {'steps': [{'step_no': 10, 'name': '模切'}]}}]}
         patches = [patch.object(integration.store, 'load_integration', side_effect=lambda pid: copy.deepcopy(self.saved)),
                    patch.object(integration.store, 'save_integration', side_effect=lambda pid, data, **kw: self.saved.update(json.loads(json.dumps(data)))),
@@ -94,6 +94,16 @@ class Confirmation(unittest.TestCase):
             self.assertEqual('SENT', integration.send_to_finance('P', {'role': 'engineer'}, target_type='user', target_user_id='9'))
             prepare.assert_called_once_with('P', {'role': 'engineer'}, confirmed_only=True)
             self.assertEqual('9', send.call_args.kwargs['target_user_id'])
+        self.assertTrue(confirmation.status('P')['confirmed'])
+
+    def test_finance_send_reports_unconfirmed_box_before_creating_a_task(self):
+        self.confirm()
+        with patch('tech_app.backend.services.packaging_bom.da_repo.load_box_match', return_value=None), \
+             patch.object(integration, '_send_packaging_finance_draft') as send:
+            with self.assertRaisesRegex(integration.IntegrationFlowError, '尚未确认盒型') as rejected:
+                integration.send_to_finance('P', {'role': 'engineer'}, target_type='user', target_user_id='9')
+            self.assertEqual(409, rejected.exception.status_code)
+            send.assert_not_called()
         self.assertTrue(confirmation.status('P')['confirmed'])
 
 

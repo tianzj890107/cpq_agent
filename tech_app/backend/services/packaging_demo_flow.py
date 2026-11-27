@@ -95,7 +95,7 @@ def adopt_box(project_id, actor, requirement):
     packaging_match.decide_box_match(project_id,req_no,'confirmed',chosen['box_type_code'],
         actor=actor,note='自动采用匹配结果，非人工审核')
 
-def ensure_inputs(project_id, actor):
+def ensure_inputs(project_id, actor, *, part_code=''):
     """原有入口内部准备，不增加按钮；同一候选版本不重复改写。"""
     if not enabled(project_id): return False
     def identity(doc):
@@ -128,6 +128,10 @@ def ensure_inputs(project_id, actor):
     if requirement != original:
         store.save_requirement(project_id,requirement,author=actor.get('username',''))
     adopt_box(project_id,actor,requirement)
+    if part_code:
+        packaging_demo_inputs.prepare(project_id, actor=actor.get('username', ''),
+                                      enable_demo=True, part_code=part_code)
+        return True
     packaging_demo_inputs.prepare(project_id,actor=actor.get('username',''),enable_demo=True)
     prepared=packaging_parts.load_business_parts(project_id)
     prepared['demo_prepared_geometry_hash']=identity(prepared)
@@ -185,20 +189,19 @@ def prepare_names(project_id, actor):
 
 
 def prepare_route(project_id,actor, *, regenerate_assembly=False, note='', attachments=None, prepare_associations=True, confirmed_only=False):
+    from . import integration, packaging_process_instances, tasks
+
     if not confirmed_only:
         ensure_inputs(project_id,actor)
-    from . import packaging_process_instances
-    from . import tasks
     collected=packaging_process_instances.collect(project_id)
     if collected['missing'] or not collected['active']:
         if confirmed_only:
-            raise ValueError('当前零件工艺已变化，请重新生成并确认工艺')
+            raise integration.IntegrationFlowError('当前零件工艺已变化，请重新生成并确认工艺', 409)
         tasks.report_progress(f'项目路线准备：仅补齐缺失工艺 {len(collected["missing"])} 件，其他有效工艺直接复用')
         generated=packaging_demo_inputs.prepare_processes(project_id,actor=actor.get('username',''))
         if generated['failures']:raise ValueError('demo_process_incomplete:'+str(generated['failures']))
     else:
         tasks.report_progress('全部零件工艺已齐，直接复用，不调用模型')
-    from . import integration
     plan=integration.load_plan(project_id)
     tasks.report_progress('直接汇总零件已有工艺，跳过排模与新增组装')
     req_no=(store.load_requirement(project_id) or {}).get('requirement_no') or ''
@@ -207,16 +210,19 @@ def prepare_route(project_id,actor, *, regenerate_assembly=False, note='', attac
         packaging_route.build_route(project_id,req_no)
         route=packaging_route.confirm_route(project_id,req_no,actor=actor)
     except (packaging_bom.BomError,packaging_route.RouteError,ValueError) as exc:
+        if confirmed_only:
+            raise integration.IntegrationFlowError(str(exc), getattr(exc, 'status_code', 409)) from exc
         plan.packaging_assembly_attempt.update(status='partial')
         plan.packaging_assembly_attempt.setdefault('issues',[]).append({'stage':'项目路线','index':1,
             'code':type(exc).__name__,'reason':'组装工序已保存，但项目路线/BOM更新未完成；后续成本需重新核对（'+type(exc).__name__+'）'})
-        from . import integration
         integration.save_plan(project_id,plan,actor.get('username',''))
         tasks.report_progress('组装工序已保存，项目路线更新未完成；请查看工作区原因')
         return plan
     return sync_integration(project_id,actor,route)
 
 def run(project_id, *, actor, run_model=None, progress=None):
+    from . import integration, packaging_process_confirmation, packaging_process_instances
+
     if actor.get('role') not in packaging_cost.COST_WRITE_ROLES:
         raise ValueError('demo_flow_forbidden_role')
     def report(text):
@@ -224,26 +230,35 @@ def run(project_id, *, actor, run_model=None, progress=None):
     requirement=store.load_requirement(project_id) or {}
     if (requirement.get('data') or {}).get('industry')!='packaging':
         raise ValueError('demo_flow_requires_packaging')
-    requirement=requirement_defaults(requirement)
-    store.save_requirement(project_id,requirement,author=actor.get('username',''))
     req_no=requirement.get('requirement_no') or ''
-    report('自动采用盒型匹配，保留演示来源')
-    adopt_box(project_id,actor,requirement)
-    report('补齐演示输入，并自动生成逐件工艺')
-    ensure_inputs(project_id,actor)
-    from . import packaging_process_instances
-    collected=packaging_process_instances.collect(project_id)
-    processes=({'ready':True,'failures':[],'reused':True,'results':[]}
-               if collected['active'] and not collected['missing'] else
-               packaging_demo_inputs.prepare_processes(project_id,actor=actor.get('username',''),run=run_model))
-    if processes['failures']: raise ValueError('demo_process_incomplete:'+str(processes['failures']))
-    report('自动展开BOM、生成并采用项目路线')
-    packaging_bom.build_bom(project_id,req_no)
-    packaging_route.build_route(project_id,req_no)
-    packaging_route.confirm_route(project_id,req_no,actor=actor)
-    sync_integration(project_id,actor,packaging_route.load_route(project_id,req_no))
-    report('同一公式账计算全部零件与项目成本')
-    packaging_cost.build_cost(project_id,req_no,actor=actor)
+    plan = integration.load_plan(project_id)
+    handoff = plan.finance_handoff
+    pinned_confirmation = handoff.source_process_confirmation_hash if handoff and not handoff.draft else ''
+    processes = {'ready': True, 'failures': [], 'reused': True, 'results': []}
+    if pinned_confirmation:
+        current = packaging_process_confirmation.status(project_id, plan=plan)
+        if not current['confirmed'] or current['input_hash'] != pinned_confirmation:
+            raise ValueError('财务接收的工艺版本已变化，请由工艺人员重新确认并交接后再测算。')
+        report('沿用财务接收的已确认工艺和路线，演示估算仅用于成本')
+        packaging_cost.build_cost(project_id, req_no, actor=actor, demo_estimates=True)
+    else:
+        requirement=requirement_defaults(requirement)
+        store.save_requirement(project_id,requirement,author=actor.get('username',''))
+        report('自动采用盒型匹配，保留演示来源')
+        adopt_box(project_id,actor,requirement)
+        report('补齐演示输入，并自动生成逐件工艺')
+        ensure_inputs(project_id,actor)
+        collected=packaging_process_instances.collect(project_id)
+        if collected['missing'] or not collected['active']:
+            processes=packaging_demo_inputs.prepare_processes(project_id,actor=actor.get('username',''),run=run_model)
+        if processes['failures']: raise ValueError('demo_process_incomplete:'+str(processes['failures']))
+        report('自动展开BOM、生成并采用项目路线')
+        packaging_bom.build_bom(project_id,req_no)
+        packaging_route.build_route(project_id,req_no)
+        packaging_route.confirm_route(project_id,req_no,actor=actor)
+        sync_integration(project_id,actor,packaging_route.load_route(project_id,req_no))
+        report('同一公式账计算全部零件与项目成本')
+        packaging_cost.build_cost(project_id,req_no,actor=actor)
     projection=packaging_cost_ledger.load(project_id)
     if not projection['ready']: raise ValueError('demo_cost_incomplete:'+str(projection['counts'])+str(projection['reconciliation_errors']))
     report('生成交接包与报价草稿，不发布正式报价')

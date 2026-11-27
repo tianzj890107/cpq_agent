@@ -271,7 +271,7 @@ def _merge_demo_sections(part, children):
 
 def prepare_processes(project_id, *, actor='', run=None):
     """显式演示准备：原生路线优先，未知件走现有相似检索+LLM，失败不伪报完成。"""
-    from . import packaging_parts, packaging_layout, da_process_routing, packaging_process_instances, tasks
+    from . import packaging_conclusions, packaging_parts, packaging_layout, da_process_routing, packaging_process_instances, tasks
     from .packaging_part_route_match import is_external_part
     doc=packaging_parts.load_business_parts(project_id) or {}
     if doc.get('poc_demo') is not True:
@@ -310,6 +310,7 @@ def prepare_processes(project_id, *, actor='', run=None):
                 'process_scope':packaging_process_instances.BUSINESS_PART_PROCESS_SCOPE,
                 'business_parts_hash':doc.get('business_parts_hash'),
                 'business_parts_id':doc.get('business_parts_id'),
+                'business_part_input_fingerprint':packaging_conclusions.part_input_fingerprint(row, doc),
                 'process_origin':coverage.get('process_origin'),
                 'cost_parameters':{'mock':True,'source':'demo_process_parameters'},
                 'actor':actor,'mock':True})
@@ -438,7 +439,7 @@ def demo_inputs_for(row: Any, sizes: Dict[str, Dict[str, Any]], *,
     }
 
 
-def build(project_id: str, *, limit: int = 0) -> Dict[str, Any]:
+def build(project_id: str, *, limit: int = 0, part_code: str = "") -> Dict[str, Any]:
     """纯读：算出这个项目每一件的演示输入与全项目的统计（不写任何文档）。"""
     from . import packaging_parts
     business = packaging_parts.load_business_parts(project_id) or {}
@@ -448,6 +449,8 @@ def build(project_id: str, *, limit: int = 0) -> Dict[str, Any]:
     rows: List[Dict[str, Any]] = []
     for row in (business.get("business_parts") or []):
         if not isinstance(row, dict):
+            continue
+        if part_code and row.get("business_part_code") != part_code:
             continue
         if limit and len(rows) >= limit:
             break
@@ -472,7 +475,8 @@ def build(project_id: str, *, limit: int = 0) -> Dict[str, Any]:
                                  if row.get("ok") is False and row.get("reason") != "no_geometry_size"]}
 
 
-def prepare(project_id: str, *, actor: str = "", enable_demo: bool = False) -> Dict[str, Any]:
+def prepare(project_id: str, *, actor: str = "", enable_demo: bool = False,
+            part_code: str = "") -> Dict[str, Any]:
     """把这个项目的演示输入写进业务部件文档（新版本），并按需打开项目的 `poc_demo` 开关。
 
     只写两处：业务部件文档的 `poc_demo` / `poc_inputs` / `cost_parameters`，以及需求单上的
@@ -481,14 +485,15 @@ def prepare(project_id: str, *, actor: str = "", enable_demo: bool = False) -> D
     from . import packaging_parts
     from ..storage import store
 
-    result = build(project_id)
+    result = build(project_id, part_code=part_code)
     business = packaging_parts.load_business_parts(project_id) or {}
     if not business.get("business_parts"):
         raise ValueError("这个项目还没有业务部件清单（先跑图纸解析）")
     by_code = {row["business_part_code"]: row for row in result["rows"]}
     doc = copy.deepcopy(business)
     doc["poc_demo"] = True
-    doc["demo_inputs_version"] = ENGINE_VERSION
+    if not part_code:
+        doc["demo_inputs_version"] = ENGINE_VERSION
     geometry_sizes_map=geometry_sizes(packaging_parts.load_parts(project_id) or {})
     tax_factor = _kb_tax_factor()
     written, skipped = 0, []
@@ -496,6 +501,8 @@ def prepare(project_id: str, *, actor: str = "", enable_demo: bool = False) -> D
         if not isinstance(row, dict):
             continue
         code = _text(row.get("business_part_code"))
+        if part_code and code != part_code:
+            continue
         value = by_code.get(code)
         if not value or not value.get("ok"):
             skipped.append({"business_part_code": code,
@@ -559,7 +566,7 @@ def prepare(project_id: str, *, actor: str = "", enable_demo: bool = False) -> D
             "overhead_seconds": DEMO_OVERHEAD_SECONDS, "overhead_rate": DEMO_OVERHEAD_RATE,
         }
         written += 1
-    saved = packaging_parts.save_business_parts(project_id, doc)
+    saved = packaging_parts.save_business_parts(project_id, doc) if written or not part_code else business
     if enable_demo:
         requirement = copy.deepcopy(store.load_requirement(project_id) or {})
         data = requirement.get("data") if isinstance(requirement.get("data"), dict) else {}
@@ -579,6 +586,40 @@ def prepare(project_id: str, *, actor: str = "", enable_demo: bool = False) -> D
     return {"version": ENGINE_VERSION, "project_id": project_id,
             "business_parts_id": _text(saved.get("business_parts_id")),
             "written": written, "skipped": skipped, "build": result}
+
+
+def cost_estimates(project_id, business_doc, tax_factor):
+    """Resolve cost-only estimates without writing confirmed manufacturing inputs."""
+    from . import packaging_parts
+
+    sizes = geometry_sizes(packaging_parts.load_parts(project_id) or {})
+    materials = _kb_materials()
+    result = {}
+
+    def estimate(row):
+        pinned = row.get('poc_inputs') or {}
+        if pinned.get('mock') is True:
+            return pinned
+        value = demo_inputs_for(row, sizes, materials=materials, allow_estimates=True)
+        if not value.get('ok'):
+            return {}
+        return {'mock': True, 'length_mm': value['length_mm'], 'width_mm': value['width_mm'],
+                'gsm': value['grammage'], 'ton_price': value['unit_price'] * 1000,
+                'tax_factor': tax_factor, 'imposition_count': DEMO_IMPOSITION,
+                'proof_base': DEMO_PROOF_BASE, 'note': value['note']}
+
+    for row in business_doc.get('business_parts') or []:
+        code = str(row.get('business_part_code') or '')
+        if not code:
+            continue
+        result[code] = estimate(row)
+        for section in row.get('sections') or []:
+            material = section.get('material_text') or material_text_of(row)['material_text']
+            child = dict(section, reference={'material_text': material},
+                         geometry_binding={'component_ids': section.get('component_ids') or []},
+                         confirmed_size=section.get('confirmed_size') or section.get('estimated_size') or {})
+            result[code + '::' + str(section.get('section_id') or '')] = estimate(child)
+    return result
 
 
 __all__ = ["ENGINE_VERSION", "NAME_FAMILY_HINTS", "FAMILY_DEFAULT_GRAMMAGE",

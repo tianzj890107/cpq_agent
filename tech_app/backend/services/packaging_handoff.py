@@ -155,6 +155,9 @@ def handoff_package(project_id: str, requirement_no: str = "", *,
     cost = packaging_cost.load_cost(pid, req_no, scenario=(scenario or None))
     if not cost.get("built"):
         raise HandoffError("成本尚未测算，无法回传报价", 409, "cost_not_built")
+    demo_cost_estimates = (cost.get('source_versions') or {}).get('demo_cost_estimates') is True
+    if demo_cost_estimates:
+        data = dict(data, poc_demo=True, poc_auto_no_manual=True)
 
     box = packaging_match.load_box_match(pid, req_no)
     bom = packaging_bom.load_bom(pid, req_no)
@@ -213,6 +216,8 @@ def handoff_package(project_id: str, requirement_no: str = "", *,
         "source": source,
     }
     publish_gate = _publish_gate(pid, package, cost)
+    if demo_cost_estimates:
+        publish_gate['publishable'] = False
     package.update(publish_gate)
     return package
 

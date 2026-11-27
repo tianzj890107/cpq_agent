@@ -208,39 +208,25 @@ const window={dispatchEvent:()=>{},PackagingConclusionNotes:{basis:()=>({}),
             fixture.doCleanups()
 
     def test_real_single_part_handler_uses_one_parent_recommendation(self):
-        from fastapi import Depends, Form, File, UploadFile, HTTPException
-        from tech_app.backend.services import packaging_demo_flow, process, packaging_match
+        from tech_app.backend import main
+        from tech_app.backend.services import process
         from tech_app.backend.models.process import ProcessPlan
-        tree=ast.parse((ROOT/'tech_app/backend/main.py').read_text())
-        names={'_packaging_business_part_process_note','_packaging_business_part_process_inputs',
-               'packaging_business_part_process'}
-        functions=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name in names]
-        for fn in functions:fn.decorator_list=[]
         source=row();doc={'business_parts':[source],'business_parts_id':'V','business_parts_hash':'H'}
-        namespace={'__name__':'tech_app.backend.main','__package__':'tech_app.backend','Dict':dict,'Any':object,
-            'List':list,'UploadFile':UploadFile,'Form':Form,'File':File,'Depends':Depends,
-            'current_user':lambda:None,'HTTPException':HTTPException,'packaging_parts':parts,
-            'packaging_match':packaging_match,'process':process,'tasks':tasks,
-            '_require':lambda *a:None,'_workflow_project':lambda p:None,
-            '_packaging_business_part_row':lambda *a:{'row':source,'doc':doc},
-            '_packaging_business_geometry_label':lambda r:'business','_digest_value':lambda r:'hash',
-            '_task_key':lambda *a:'key','now_cst_str':lambda:'2026-10-13',
-            '_packaging_business_part_reject':lambda value:AssertionError(value)}
-        async def attachments(items):return []
-        namespace['_read_attachments']=attachments
-        exec(compile(ast.Module(body=functions,type_ignores=[]),'whole-part-handler','exec'),namespace)
         captured=[];jobs=[]
         def recommend(part,**kw):
             captured.append((part.part_id,part.name,kw))
             return ProcessPlan(part_id='P',part_class='packaging',steps=plan()['steps']),{'summary':{}}
-        with patch.object(packaging_demo_flow,'ensure_inputs',return_value=False), \
+        with patch.object(main, '_workflow_project'), \
+             patch.object(main, '_packaging_business_part_row', return_value={'row':source, 'doc':doc}), \
              patch.object(parts,'verified_business_part_input_row',side_effect=lambda r,d:r), \
              patch.object(tasks,'submit',side_effect=lambda p,k,job,**kw:jobs.append(job) or 'task'), \
              patch.object(tasks,'report_progress'),patch.object(tasks,'current_task_id',return_value='task'), \
              patch.object(da_process_routing,'for_row',return_value={}) as lookup, \
              patch.object(process,'outline_process',side_effect=recommend), \
              patch.object(parts,'save_part_process') as saved:
-            asyncio.run(namespace['packaging_business_part_process']('isolated','P',note='',attachments=[],user={'username':'PE1'}))
+            asyncio.run(main.packaging_business_part_process(
+                'isolated', 'P', note='', attachments=[], user={'username':'PE1', 'role':'process_manager'},
+            ))
             result=jobs[0]()
         self.assertEqual([('P',source['name'])],[(p,n) for p,n,k in captured])
         self.assertEqual(1,lookup.call_count)

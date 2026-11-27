@@ -116,9 +116,10 @@ def collect(project_id, document=None):
             continue
         record=dict(record)
         from . import packaging_conclusions
-        if (record.get('business_parts_hash') and doc.get('business_parts_hash')
-                and record['business_parts_hash'] != doc['business_parts_hash']
-                and not packaging_conclusions.usable(project_id, record, doc)):
+        if (doc.get('business_parts_hash')
+                and (record.get('business_part_input_fingerprint') or (
+                    record.get('business_parts_hash') and record['business_parts_hash'] != doc['business_parts_hash']))
+                and not packaging_conclusions.usable(project_id, record, doc, current_row=row)):
             missing.append(code)
             continue
         record['part_code']=code

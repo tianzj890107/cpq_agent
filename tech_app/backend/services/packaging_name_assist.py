@@ -163,15 +163,34 @@ def resolve_document(document, materials, *, run=None):
     return doc
 
 
-def prepare(project_id, actor='', *, run=None):
+def prepare(project_id, actor='', *, run=None, part_code=''):
     """仅由显式POST/PUT业务准备调用；GET不进入此处。"""
     from . import packaging_parts
     from ..storage import kb_repo, store
     doc = packaging_parts.load_business_parts(project_id) or {}
     if not doc.get('derived_from_drawing') or doc.get('auto_geometry_inputs') is False:return doc
     materials = kb_repo.list_materials(industry='packaging')
-    updated = resolve_document(doc, materials, run=run)
+    if part_code:
+        parts = doc.get('business_parts') or []
+        selected = next((row for row in parts if row.get('business_part_code') == part_code), None)
+        if selected is None:
+            return doc
+        resolved = resolve_document({'business_parts': [selected]}, materials, run=run)
+        row = resolved['business_parts'][0]
+        if row == selected:
+            return doc
+        # The model call can outlast a user edit in another tab. Merge into the latest
+        # document and discard the suggestion if its own source row has changed.
+        doc = packaging_parts.load_business_parts(project_id) or {}
+        parts = doc.get('business_parts') or []
+        current = next((part for part in parts if part.get('business_part_code') == part_code), None)
+        if current != selected or not doc.get('derived_from_drawing') or doc.get('auto_geometry_inputs') is False:
+            return doc
+        updated = dict(doc, business_parts=[row if part is current else part for part in parts])
+    else:
+        updated = resolve_document(doc, materials, run=run)
+        resolved = updated
     if updated != doc:
         packaging_parts.save_business_parts(project_id, updated)
-        store.audit(project_id, 'packaging_name_semantics', {'by':actor, **updated.get('name_assist', {})})
+        store.audit(project_id, 'packaging_name_semantics', {'by':actor, **resolved.get('name_assist', {})})
     return updated

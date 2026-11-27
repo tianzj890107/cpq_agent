@@ -137,6 +137,42 @@ const fetch=async(url,options)=>{
 '''
         subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)
 
+    def test_status_timeout_keeps_polling_the_already_submitted_task(self):
+        script = '''
+const assert = require('node:assert/strict');
+let currentProject = 'p', allPartsProcessBusy = true;
+const emitted = [];
+const window = { dispatchEvent: event => emitted.push(event.detail) };
+class CustomEvent { constructor(name, init) { this.detail = init.detail; } }
+class FormData {}
+const API = '', sleep = async () => {}, forwardTaskDetail = () => {}, refreshBoardActionState = () => {};
+let posts = 0;
+const polls = [];
+const fetch = async (url, options) => {
+  let data = { plan: null };
+  if (options.method === 'POST') {
+    posts++;
+    data = { task_id: 'saved-task' };
+  } else if (url.includes('/tasks/')) {
+    polls.push(url);
+    if (polls.length === 1) throw new DOMException('test status timeout', 'AbortError');
+    if (polls.length === 2) return { ok: false, status: 503, json: async () => { throw new SyntaxError(); } };
+    data = { status: 'succeeded', result: { plan: { steps: [{ name: '模切' }] } } };
+  }
+  return { ok: true, json: async () => data };
+};
+''' + batch_body() + '''
+(async () => {
+  await runPackagingBusinessProcessBatch('p', [{ code: 'A' }], []);
+  assert.equal(emitted.at(-1).status, 'succeeded', '单次状态查询超时不能把已有任务判失败');
+  assert.equal(posts, 1);
+  assert.ok(polls.length >= 2);
+  assert.ok(polls.every(url => url === '/api/projects/p/tasks/saved-task'));
+})().catch(error => { console.error(error); process.exit(1); });
+'''
+        result = subprocess.run(['node', '-e', script], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 class SectionParallelTest(unittest.TestCase):
     def _inputs(self, count):

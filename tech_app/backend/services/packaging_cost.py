@@ -2203,8 +2203,10 @@ def packaging_cost_readiness_gate(cost: Any) -> dict:
     unbuilt = not gaps and payload.get("built") is False
     if unbuilt:
         reasons.append("成本尚未测算")
-    # §2.1：结论只由 **阻断缺口 / 静默按 0 / 尚未测算** 决定，advisory 不再参与。
-    verdict = READINESS_PROVISIONAL if (blocking or silent or unbuilt) else READINESS_FORMAL
+    demo_estimates = (payload.get('source_versions') or {}).get('demo_cost_estimates') is True
+    if demo_estimates:
+        reasons.append('使用了演示核算参数，成本仅供内部演示')
+    verdict = READINESS_PROVISIONAL if (blocking or silent or unbuilt or demo_estimates) else READINESS_FORMAL
     return {
         "version": READINESS_VERSION,
         # 键**必须永远存在**（Spec §2.3）：空 payload 也要有，取不到给 `""`。
@@ -2312,7 +2314,8 @@ def formal_cost_or_raise(cost: Any, waiver: Any = None) -> dict:
 
 
 def compute_project(project_id: str, requirement_no: str = "", *,
-                    scenario: Optional[dict] = None, actor: Any = None) -> dict:
+                    scenario: Optional[dict] = None, actor: Any = None,
+                    demo_estimates: bool = False) -> dict:
     """组装 → 逐行算 → 三层汇总（**不落库**，Spec §4.5）。
 
     ``actor`` 只用于留痕（`computed_by` / `computed_by_role`，Spec §2.3），不参与算式、
@@ -2390,6 +2393,29 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     demo_enabled = data.get('poc_demo') is True and demo_doc.get('poc_demo') is True
     gaps: list = []
     assumptions: list = []
+    if demo_estimates:
+        from . import packaging_demo_inputs
+        demo_enabled = True
+        demo_rows = packaging_demo_inputs.cost_estimates(project_id, demo_doc, tax_factor)
+        for key in ('tooling_amortize_qty', 'committed_volume', 'cumulative_quantity'):
+            if _num(data.get(key)) is None:
+                data[key] = quantity
+        for step in steps:
+            estimate = demo_rows.get(step.get('part_code')) or {}
+            if not estimate.get('mock'):
+                continue
+            params = dict(step.get('cost_parameters') or {})
+            estimated_fields = []
+            for key, value in {'machine_length': estimate.get('length_mm'), 'machine_width': estimate.get('width_mm'),
+                               'imposition_count': estimate.get('imposition_count')}.items():
+                if value is not None and _num(params.get(key)) is None:
+                    params[key] = value
+                    estimated_fields.append(key)
+            if _num(step.get('standard_seconds')) is None:
+                step['standard_seconds'] = packaging_demo_inputs.DEMO_STANDARD_SECONDS
+                estimated_fields.append('standard_seconds')
+            step['cost_parameters'] = dict(params, mock=True, demo_estimated_fields=estimated_fields)
+        assumptions.append('工艺与路线沿用已确认版本，缺少的核算参数按演示口径测算。')
 
     def loss_rate_with_source(material_text: str, material=None) -> tuple:
         if req_loss is not None:
@@ -2595,6 +2621,8 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                 if key not in (step.get('cost_parameters') or {}) and key not in layout_parameters:
                     variables.pop(key, None)
         inputs_source = 'part_route_parameters' if step.get('part_code') else 'legacy_project_parameters'
+        if variables.get('demo_estimated_fields'):
+            inputs_source = 'demo_cost_estimates'
         if step.get('part_code'):
             required = set(expression_variables(entry['expression']))
             absent = [key for key in ('machine_length','machine_width','imposition_count')
@@ -2853,6 +2881,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         # 路线版本 / BOM 指纹 / BOM 行数一起落库。字段名说的是"照着哪一版算的"，
         # 就必须在读接口那一刻**不再重取**（读侧的比对见 `load_cost()`）。
         "source_versions": {
+            **({'demo_cost_estimates': True} if demo_estimates else {}),
             "loss_resolution_policy": LOSS_RESOLUTION_POLICY,
             "calculation_profile": CURRENT_PROFILE,
             "assembly_time_policy": packaging_assembly.TIME_POLICY,
@@ -2962,10 +2991,11 @@ def _business_parts_scope(project_id: str) -> dict:
 
 
 def build_cost(project_id: str, requirement_no: str = "", actor: Any = None, *,
-               scenario: Optional[dict] = None) -> dict:
+               scenario: Optional[dict] = None, demo_estimates: bool = False) -> dict:
     """算 + 落库：同一 `(项目, 需求单, 场景)` 先删明细再重建，写项目审计（Spec §3.2）。"""
     cost = _with_readiness(compute_project(project_id, requirement_no,
-                                           scenario=scenario, actor=actor))
+                                           scenario=scenario, actor=actor,
+                                           **({'demo_estimates': True} if demo_estimates else {})))
     da_repo.save_packaging_cost(cost["project_id"], cost["requirement_no"],
                                 cost["scenario_code"], cost, cost["items"])
     # 单件视图直接归集本账，不再回填另一份独立的单件材料费记录。
