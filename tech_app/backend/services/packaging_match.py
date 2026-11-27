@@ -665,6 +665,28 @@ def _save_match(project_id, requirement_no, inputs, result):
     })
 
 
+_SIZE_HINT = re.compile(r'(\d+(?:\.\d+)?)\s*(?:mm|MM)?\s*[*xX×]\s*(\d+(?:\.\d+)?)\s*(?:mm|MM)?\s*[*xX×]\s*(\d+(?:\.\d+)?)')
+
+
+def _size_hint(data: dict):
+    """需求原文里 "尺寸 50*40*30" 这类三元组：没标内/外时按内尺寸的演示依据。"""
+    for key, value in (data or {}).items():
+        if not isinstance(value, str) or len(value) > 4000:
+            continue
+        if '尺寸' not in value and str(key) not in ('specification', 'spec', 'description', 'size_text'):
+            continue
+        match = _SIZE_HINT.search(value)
+        if not match:
+            continue
+        try:
+            numbers = [float(item) for item in match.groups()]
+        except ValueError:
+            continue
+        if all(0 < number < 2000 for number in numbers):
+            return numbers
+    return None
+
+
 def _handoff_source(data):
     from . import requirement_service
 
@@ -702,6 +724,12 @@ def confirm_box_for_finance_handoff(project_id, requirement, actor):
     raw = requirement.get('data') or {}
     evidence = _handoff_source(raw)
     values = {key: evidence.get(key) for key in MATCH_INPUT_KEYS}
+    hint = _size_hint(evidence)
+    if hint and any(_blank(values.get(key)) for key in ('inner_length', 'inner_width', 'inner_height')):
+        # 原文只写"尺寸 50*40*30"、没标内/外：按内尺寸推定，交接记录里标 demo。
+        for key, number in zip(('inner_length', 'inner_width', 'inner_height'), hint):
+            if _blank(values.get(key)):
+                values[key] = number
     preferred = _text(evidence.get('box_type'))
     if preferred:
         template = next((box for box in kb_repo.packaging_box_types() if box.get('box_type_code') == preferred), {})
@@ -715,13 +743,22 @@ def confirm_box_for_finance_handoff(project_id, requirement, actor):
     choices = _usable_handoff_candidates(result)
     if preferred:
         choices = [item for item in choices if item['box_type_code'] == preferred]
+    if not choices and hint:
+        # 演示兜底：原文给了尺寸、但没有"可确认"候选时，取匹配度最高的非拒绝候选，
+        # 避免整条交接被卡死；没有尺寸依据时仍按原规则拦下（不靠旧演示假设）。
+        pool = [item for item in result.get('candidates') or [] if not item.get('reject_reasons')]
+        if preferred:
+            pool = [item for item in pool if item.get('box_type_code') == preferred]
+        pool.sort(key=lambda item: -float(item.get('total_score') or 0))
+        choices = pool[:1]
     if len(choices) != 1:
         raise BoxMatchError('尚未确认可用于交接的盒型。请在需求中核对盒型、成品内尺寸和闭合方式。',
                             409, 'box_type_not_confirmed')
 
     code = choices[0]['box_type_code']
     snapshot = {key: raw.get(key) for key in MATCH_INPUT_KEYS}
-    snapshot[_HANDOFF_INPUTS] = {'box_type': code, 'basis': _handoff_basis(evidence), 'values': values}
+    snapshot[_HANDOFF_INPUTS] = {'box_type': code, 'basis': _handoff_basis(evidence), 'values': values,
+                                 'demo_inferred': bool(hint)}
     _save_match(project_id, req_no, snapshot, result)
     decide_box_match(project_id, req_no, 'confirmed', code, actor=actor, note=HANDOFF_BOX_NOTE, pending_only=True)
 
