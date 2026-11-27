@@ -12,3 +12,4 @@
 - 已审核需求恢复演示兜底（回移到本分支）：AI 推荐 + 演示输入，不改写需求单，按 poc_reference 口径提交。
 - 空工序兜底（回移到本分支）：真实路径 packaging_process_empty 时改走 demo_process_plan 补齐，结论标演示口径。
 - 盒型候选放宽（回移）：演示兜底允许 out_of_range 候选。
+- 业务清单指纹排除演示字段（回移到本分支）：演示准备不再把 BOM/路线打成 stale。

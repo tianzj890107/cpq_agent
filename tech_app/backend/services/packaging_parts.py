@@ -4284,12 +4284,28 @@ def business_parts_gap_of(doc: Any) -> Dict[str, Any]:
                               or {"components": record.get("parts") or []})
 
 
+#: 演示准备写进去的字段：**不算业务内容**，不进业务清单指纹（否则演示输入会把
+#: BOM/路线打成 stale，回传报价时被"过期草稿"挡住）。Spec `packaging-part-material-inference.md`。
+DEMO_ONLY_KEYS = ("poc_inputs", "poc_demo", "demo_inputs_version", "demo_prepared_geometry_hash")
+
+
+def _strip_demo_inputs(value: Any) -> Any:
+    """递归剥掉演示专用字段（dict / list / 嵌套 sections）。纯函数。"""
+    if isinstance(value, dict):
+        return {key: _strip_demo_inputs(item) for key, item in value.items()
+                if key not in DEMO_ONLY_KEYS and not str(key).startswith("demo_")}
+    if isinstance(value, list):
+        return [_strip_demo_inputs(item) for item in value]
+    return value
+
+
 def _business_identity(doc: Dict[str, Any]) -> Tuple[str, str]:
     """业务部件文档的版本锚点：同一份内容 → 同一个 id（落库幂等）。"""
     from .packaging_semantics import model as sem_model
 
     body = {key: value for key, value in doc.items()
             if key not in ("business_parts_id", "business_parts_hash")}
+    body = _strip_demo_inputs(body)
     digest = sem_model.sha256_hex(sem_model.canonical_json(sem_model.json_safe(body)))
     return "business-parts:" + digest[:16], digest
 
