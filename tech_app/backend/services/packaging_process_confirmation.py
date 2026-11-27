@@ -12,7 +12,7 @@ def snapshot(project_id, document=None):
     # 候选池、图片、显示序号、保存时间不参与确认；实体、组成及工艺业务内容参与。
     def part_input(row):
         keys = ('business_part_code', 'scheme_id', 'name', 'material', 'material_text', 'reference',
-                'poc_inputs', 'confirmed_size', 'automatic_size', 'estimated_size', 'quantity',
+                'confirmed_size', 'automatic_size', 'estimated_size', 'quantity',
                 'usage_qty', 'cost_parameters', 'sections_source', 'section_id', 'entity_ids', 'component_ids')
         result = {key: row[key] for key in keys if key in row}
         binding = row.get('geometry_binding') or {}

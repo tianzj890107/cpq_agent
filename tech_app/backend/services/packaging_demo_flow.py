@@ -212,6 +212,11 @@ def prepare_route(project_id,actor, *, regenerate_assembly=False, note='', attac
         packaging_bom.build_bom(project_id,req_no)
         packaging_route.build_route(project_id,req_no)
         route=packaging_route.confirm_route(project_id,req_no,actor=actor)
+        if packaging_route.load_route(project_id,req_no).get('stale'):
+            # 盒型资料/演示输入刚写入时，首次构建可能锚在旧快照上：再建一次让路线与当前版本一致。
+            packaging_bom.build_bom(project_id,req_no)
+            packaging_route.build_route(project_id,req_no)
+            route=packaging_route.confirm_route(project_id,req_no,actor=actor)
     except (packaging_match.BoxMatchError,packaging_bom.BomError,packaging_route.RouteError,ValueError) as exc:
         if confirmed_only:
             raise integration.IntegrationFlowError(str(exc), getattr(exc, 'status_code', 409)) from exc
