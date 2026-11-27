@@ -687,6 +687,33 @@ def _size_hint(data: dict):
     return None
 
 
+_GRAMMAGE_HINT = re.compile(r'(\d{2,4})\s*(?:克重|克|gsm)', re.I)
+_CLOSURE_HINTS = ('天地盖', '双开门', '书型盒', '翻盖', '抽屉')
+
+
+def _text_hint_values(data: dict) -> dict:
+    """从需求原文（描述/规格）里抽盒型匹配能用的值：尺寸、闭合方式、V 槽、面纸克重。"""
+    pieces = [str(value) for key, value in (data or {}).items()
+              if isinstance(value, str)
+              and (str(key) in ('description', 'specification', 'spec', 'requirement_note', 'title')
+                   or '尺寸' in value or '闭合' in value)]
+    text = ' '.join(pieces)
+    out = {}
+    hint = _size_hint({'_': text})
+    if hint:
+        out['inner_length'], out['inner_width'], out['inner_height'] = hint
+    for name in _CLOSURE_HINTS:
+        if name in text:
+            out['closure_type'] = name
+            break
+    if 'V槽' in text or 'V 槽' in text:
+        out['v_groove'] = True
+    grammage = _GRAMMAGE_HINT.search(text)
+    if grammage:
+        out['face_paper_gsm'] = float(grammage.group(1))
+    return out
+
+
 def _handoff_source(data):
     from . import requirement_service
 
@@ -724,12 +751,14 @@ def confirm_box_for_finance_handoff(project_id, requirement, actor):
     raw = requirement.get('data') or {}
     evidence = _handoff_source(raw)
     values = {key: evidence.get(key) for key in MATCH_INPUT_KEYS}
-    hint = _size_hint(evidence)
-    if hint and any(_blank(values.get(key)) for key in ('inner_length', 'inner_width', 'inner_height')):
-        # 原文只写"尺寸 50*40*30"、没标内/外：按内尺寸推定，交接记录里标 demo。
-        for key, number in zip(('inner_length', 'inner_width', 'inner_height'), hint):
-            if _blank(values.get(key)):
-                values[key] = number
+    # 原文里有尺寸/闭合方式/克重时用它补空值（"尺寸 50*40*30" 没标内/外，按内尺寸推定），
+    # 交接记录里标 demo；原需求与已确认工艺不动。
+    hints = _text_hint_values({**(evidence or {}), **(raw or {})})
+    for key, value in hints.items():
+        if key in values and _blank(values.get(key)):
+            values[key] = value
+    hint = ([hints['inner_length'], hints['inner_width'], hints['inner_height']]
+            if all(key in hints for key in ('inner_length', 'inner_width', 'inner_height')) else None)
     preferred = _text(evidence.get('box_type'))
     if preferred:
         template = next((box for box in kb_repo.packaging_box_types() if box.get('box_type_code') == preferred), {})
