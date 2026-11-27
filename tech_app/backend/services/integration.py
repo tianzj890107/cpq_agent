@@ -1221,6 +1221,21 @@ def _send_packaging_finance_draft(project_id: str, user: Optional[dict], *, prod
     parts = packaging_parts.load_business_parts(project_id) or {}
     route = packaging_route.load_route(project_id)
     if not parts.get("business_parts") or not route.get("built") or not route.get("steps") or route.get("stale"):
+        # 自愈：清单/路线缺失或过期时，按当前版本重建 BOM 与路线并确认，再读回判断，
+        # 不再让"先点一次生成路线"成为发送的前置条件。
+        from . import packaging_bom, packaging_match
+        req_no = str((store.load_requirement(project_id) or {}).get("requirement_no") or "")
+        try:
+            packaging_match.confirm_box_for_finance_handoff(
+                project_id, store.load_requirement(project_id) or {}, user or {})
+            packaging_bom.build_bom(project_id, req_no)
+            packaging_route.build_route(project_id, req_no)
+            packaging_route.confirm_route(project_id, req_no, actor=(user or {}))
+        except Exception:  # noqa: BLE001 - 自愈失败仍按原规则给出缺口
+            pass
+        parts = packaging_parts.load_business_parts(project_id) or {}
+        route = packaging_route.load_route(project_id)
+    if not parts.get("business_parts") or not route.get("built") or not route.get("steps") or route.get("stale"):
         raise IntegrationFlowError("请先生成当前版本的包装零件清单与包装路线，不能发送空白或过期草稿")
     source_hash = str(parts.get("business_parts_hash") or "")
     confirmation_hash = str(plan.packaging_process_confirmation.get('input_hash') or '')
