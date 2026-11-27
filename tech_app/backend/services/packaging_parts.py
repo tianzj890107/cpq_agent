@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import copy
 import hashlib
+import threading
 import json
 import math
 import re
@@ -3037,9 +3038,14 @@ def _save_part_doc(project_id: str, key: str, payload: Dict[str, Any], *,
     return record
 
 
+_part_process_write_locks = [threading.Lock() for _ in range(64)]
+
+
 def save_part_process(project_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     """落一版单件工艺结论（Spec §2.1）。结论**不写技术 IR**。"""
-    return _save_part_doc(project_id, DOC_KEY_PROCESS, payload)
+    # Batch workers replace the same project document. Keep the read and write together.
+    with _part_process_write_locks[hash(project_id) % len(_part_process_write_locks)]:
+        return _save_part_doc(project_id, DOC_KEY_PROCESS, payload)
 
 
 def load_part_process(project_id: str, part_code: str,
@@ -4354,7 +4360,8 @@ def load_business_process_context(project_id: str, part_code: str) -> Dict[str, 
     """工艺读回仅需当前件和身份；投影在缓存文档复制前执行，不复制整图候选。"""
     def project(payload):
         doc = next((item for item in (payload.get('items') or []) if isinstance(item, dict)), {})
-        result = {key: doc[key] for key in ('business_parts_id', 'business_parts_hash') if key in doc}
+        keys = ('business_parts_id', 'business_parts_hash', 'derived_from_drawing', 'auto_geometry_inputs', 'poc_demo')
+        result = {key: doc[key] for key in keys if key in doc}
         result['business_parts'] = [row for row in doc.get('business_parts') or []
                                     if isinstance(row, dict) and str(row.get('business_part_code') or '') == part_code]
         return result

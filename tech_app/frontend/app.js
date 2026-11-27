@@ -1866,16 +1866,19 @@ async function runPackagingBusinessProcessBatch(project, ready, skipped) {
       detail: {...detail, label: detail.label, taskId: detail.taskId, log: detail.log.slice()}}));
     forwardTaskDetail({...detail, log: detail.log.slice()});
   };
-  const read = async (url, options) => {
+  const read = async (url, options, timeout = 30000) => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30000);
+    const timer = setTimeout(() => controller.abort(), timeout);
     try {
       const response = await fetch(url, {...options, signal: controller.signal});
-      const data = await response.json();
-      if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data.message || `HTTP ${response.status}`));
-      return data;
+      if (response.ok) return await response.json();
+      const data = await response.json().catch(() => ({}));
+      const message = data?.detail || data?.message || `HTTP ${response.status}`;
+      throw Object.assign(new Error(typeof message === 'string' ? message : JSON.stringify(message)), {status: response.status});
     } catch (error) {
-      if (error.name === 'AbortError') throw new Error('读取/提交超时，保留旧工艺；已提交任务状态待核对');
+      if (error.name === 'AbortError') {
+        throw Object.assign(new Error('读取/提交超时，保留旧工艺；已提交任务状态待核对'), {name: error.name});
+      }
       throw error;
     } finally { clearTimeout(timer); }
   };
@@ -1911,26 +1914,39 @@ async function runPackagingBusinessProcessBatch(project, ready, skipped) {
       detail.log.push(detail.progress); publish();
       const submitted = await read(base, {method: 'POST', body: new FormData()});
       if (!submitted.task_id) throw new Error('工艺任务没有返回task_id');
+      const taskUrl = `${API}/api/projects/${encodeURIComponent(project)}/tasks/${encodeURIComponent(submitted.task_id)}`;
+      const deadline = Date.now() + 1500 * pollCeiling;
       let cursor = 0;
       let delay = pollBase;
-      for (let attempt = 0; attempt < 1500; attempt++) {
+      for (let attempt = 0; attempt < 1500 && Date.now() < deadline; attempt++) {
         await sleep(delay);
         delay = Math.min(pollCeiling, Math.round(delay * 1.5));
         if (project !== currentProject) throw new Error('项目已切换；已提交任务继续后台运行');
-        const task = await read(`${API}/api/projects/${encodeURIComponent(project)}/tasks/${encodeURIComponent(submitted.task_id)}`);
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        let task;
+        try {
+          task = await read(taskUrl, undefined, Math.min(30000, remaining));
+        } catch (error) {
+          if (error.name !== 'AbortError' && error.name !== 'TypeError' && ![429, 502, 503, 504].includes(error.status)) throw error;
+          detail.progress = `${item.code}：状态查询暂时不可用，正在继续查询原任务`;
+          publish();
+          continue;
+        }
         const logs = task.progress_log || [];
         detail.log.push(...logs.slice(cursor).map(line => `${item.code}：${line}`)); cursor = logs.length;
         detail.progress = `${item.code}：${task.progress || task.status}`; publish();
         if (task.status === 'failed') throw new Error(task.error || '工艺生成失败');
+        if (['cancelled', 'interrupted'].includes(task.status)) throw new Error(task.error || '工艺生成中断');
         if (['succeeded', 'partial'].includes(task.status)) {
           if (!task.result?.plan?.steps?.length) throw new Error('任务完成但未返回工序');
           if (task.status === 'partial') failures++;
           completed++;
           detail.log.push(`${item.code}：${task.status === 'partial' ? '部分完成' : '已完成'}，${task.result.plan.steps.length}道工序`);
-          break;
+          return;
         }
-        if (attempt === 1499) throw new Error('工艺任务等待超时，后台状态待核对');
       }
+      throw new Error('工艺任务等待超时，后台状态待核对');
     } catch (error) {
       // 项目切换属于**整批**收尾（interrupted），不能被记成单件失败。
       if (String(error.message || '').indexOf('项目已切换') >= 0) throw error;

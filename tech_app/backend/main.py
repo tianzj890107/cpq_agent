@@ -27,6 +27,7 @@ from urllib.parse import quote
 from fastapi import (
     Body, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile,
 )
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse,
@@ -9457,7 +9458,10 @@ def _packaging_part_conclusion_version(pid: str, record: Any, business=None) -> 
     business = packaging_parts.load_business_parts(pid) if business is None else business
     business_reason = packaging_parts.business_binding_stale_reason(
         payload.get("business_parts_id"), (business or {}).get("business_parts_id"))
-    if business_reason == PACKAGING_PART_BUSINESS_STALE_REASON:
+    if payload.get('business_part_input_fingerprint') and (business or {}).get('business_parts_hash'):
+        from .services import packaging_conclusions
+        business_reason = '' if packaging_conclusions.usable(pid, payload, business) else PACKAGING_PART_BUSINESS_STALE_REASON
+    elif business_reason == PACKAGING_PART_BUSINESS_STALE_REASON:
         from .services import packaging_conclusions
         if packaging_conclusions.usable(pid, payload, business or {}):
             business_reason = ""
@@ -9780,6 +9784,55 @@ def _packaging_business_part_process_inputs(loaded):
     return row, inputs
 
 
+_packaging_process_prepare_locks = [threading.Lock() for _ in range(64)]
+
+
+def _prepare_packaging_part_process(pid, code, user):
+    loaded = _packaging_business_part_row(pid, code)
+    try:
+        row, inputs = _packaging_business_part_process_inputs(loaded)
+        return loaded, row, inputs
+    except HTTPException:
+        pass
+
+    # Two incomplete parts in the same batch share the business document. Recheck under
+    # the lock and write only this part, so an independent result keeps its input version.
+    with _packaging_process_prepare_locks[hash(pid) % len(_packaging_process_prepare_locks)]:
+        loaded = _packaging_business_part_row(pid, code)
+        try:
+            row, inputs = _packaging_business_part_process_inputs(loaded)
+            return loaded, row, inputs
+        except HTTPException as failure:
+            from .services import packaging_demo_flow, packaging_demo_inputs, packaging_name_assist
+            doc = loaded['doc']
+            if not doc.get('derived_from_drawing') or doc.get('auto_geometry_inputs') is False:
+                raise
+            requirement = store.load_requirement(pid) or {}
+            try:
+                if requirement.get('status') in requirement_service.EDITABLE_STATUSES:
+                    packaging_demo_flow.ensure_inputs(pid, user, part_code=code)
+                else:
+                    actor = user.get('username', '')
+                    try:
+                        packaging_name_assist.prepare(pid, actor, part_code=code)
+                    except Exception:  # 名称模型不可用时仍可采用规则估算。
+                        pass
+                    packaging_demo_inputs.prepare(pid, actor=actor, part_code=code)
+            except packaging_match.BoxMatchError as exc:
+                raise HTTPException(exc.status_code, _packaging_error_detail(exc)) from exc
+            except ValueError as exc:
+                if str(exc) != packaging_demo_flow.BOX_MATCH_CONFLICT:
+                    raise failure from exc
+                raise HTTPException(409, {
+                    'code': packaging_demo_flow.BOX_MATCH_CONFLICT,
+                    'message': '演示工艺输入找不到与当前需求兼容的盒型。请核对盒型、规格和材料后再提交。',
+                }) from exc
+
+        loaded = _packaging_business_part_row(pid, code)
+        row, inputs = _packaging_business_part_process_inputs(loaded)
+        return loaded, row, inputs
+
+
 @app.post(PACKAGING_BUSINESS_PART_PROCESS_PATH)
 async def packaging_business_part_process(
     pid: str, code: str,
@@ -9795,47 +9848,15 @@ async def packaging_business_part_process(
     """
     _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
     _workflow_project(pid)
-    from .services import packaging_demo_inputs
-    loaded = _packaging_business_part_row(pid, code)
-    try:
-        row, inputs = _packaging_business_part_process_inputs(loaded)
-    except HTTPException as failure:
-        requirement = store.load_requirement(pid) or {}
-        from .services import packaging_demo_inputs, packaging_name_assist
-        editable = requirement.get('status') in requirement_service.EDITABLE_STATUSES
-        from .services import packaging_demo_flow
-        try:
-            if editable:
-                prepared = packaging_demo_flow.ensure_inputs(pid, user)
-            else:
-                # 已审核需求也走演示兜底（Spec `packaging-part-material-inference.md` §演示兜底）：
-                # 只写业务部件文档的演示输入，**不改写已审核需求**；材料仍缺时先让 AI 推荐。
-                try:
-                    packaging_name_assist.prepare(pid, user.get('username', ''))
-                except Exception:                       # noqa: BLE001 - AI 不可用不阻断演示兜底
-                    pass
-                packaging_demo_inputs.prepare(pid, actor=user.get('username', ''),
-                                              enable_demo=False)
-                prepared = True
-        except packaging_match.BoxMatchError as exc:
-            raise HTTPException(exc.status_code, _packaging_error_detail(exc)) from exc
-        except ValueError as exc:
-            if str(exc) != packaging_demo_flow.BOX_MATCH_CONFLICT:
-                raise failure
-            raise HTTPException(409, {
-                'code': packaging_demo_flow.BOX_MATCH_CONFLICT,
-                'message': '演示工艺输入找不到与当前需求兼容的盒型。请核对盒型、规格和材料后再提交。',
-            }) from exc
-        except Exception:
-            raise failure
-        loaded = _packaging_business_part_row(pid, code)
-        row, inputs = _packaging_business_part_process_inputs(loaded)
+    from .services import packaging_conclusions, packaging_demo_inputs
+    loaded, row, inputs = await run_in_threadpool(_prepare_packaging_part_process, pid, code, user)
     doc = loaded["doc"]
     automatic_demo = doc.get('poc_demo') is True and (row.get('poc_inputs') or {}).get('mock') is True
     geometry_label = _packaging_business_geometry_label(row)
     geometry_code = geometry_label.split(":", 1)[1] if geometry_label.startswith("bound:") else ""
     part = packaging_parts.business_as_ir_part(row)
     atts = await _read_attachments(attachments)
+    input_fingerprint = packaging_conclusions.part_input_fingerprint(loaded['row'], doc)
     expected = _digest_value({"part": row, "note": note, "process_scope": "business_part/1"})
 
     def job():
@@ -9913,6 +9934,7 @@ async def packaging_business_part_process(
             "business_part_code": inputs["part_code"],
             "business_parts_id": str(doc.get("business_parts_id") or ""),
             "business_parts_hash": str(doc.get("business_parts_hash") or ""),
+            "business_part_input_fingerprint": input_fingerprint,
             "source": {"task_id": tasks.current_task_id(),
                        "computed_at": now_cst_str(),
                        "actor": str(user.get("username") or "")},

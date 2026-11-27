@@ -206,6 +206,26 @@ const aiSetTab=value=>tab=value;const aiSay=()=>{};
         result=svc.resolve_document(doc,materials,run=self.runner(entries))
         self.assertNotIn('semantic_material',result['business_parts'][0])
 
+    def test_scoped_material_suggestion_preserves_other_parts_and_layout(self):
+        from tech_app.backend.services import packaging_parts
+        from tech_app.backend.storage import kb_repo, store
+
+        service = self.service()
+        doc = dict(self.doc(), derived_from_drawing=True)
+        latest = copy.deepcopy(doc)
+        latest['business_parts'][1]['reference'] = {'material_text': '人工补充材料'}
+        run = self.runner([{'key': 'material:P1', 'candidate_codes': ['M1'],
+                            'confidence': .9, 'reason': '内围衬纸语义'}])
+        with patch.object(packaging_parts, 'load_business_parts', side_effect=[doc, latest]), \
+             patch.object(packaging_parts, 'save_business_parts') as save, \
+             patch.object(kb_repo, 'list_materials', return_value=[{'material_code': 'M1', 'name': '内衬纸'}]), \
+             patch.object(store, 'audit'):
+            actual = service.prepare('fixture', run=run, part_code='P1')
+        self.assertEqual('M1', actual['business_parts'][0]['semantic_material']['material_code'])
+        self.assertEqual(latest['business_parts'][1:], actual['business_parts'][1:])
+        self.assertEqual(latest['layout_rows'], actual['layout_rows'])
+        save.assert_called_once_with('fixture', actual)
+
     def test_saved_model_layout_survives_read_without_model_and_expires_on_change(self):
         svc=self.service();from tech_app.backend.services import packaging_layout
         run=self.runner([{'key':'layout:L1','candidate_codes':['P1','P2'],'confidence':.9,'reason':'同方案语义'}])

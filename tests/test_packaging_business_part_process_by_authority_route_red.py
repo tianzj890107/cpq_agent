@@ -98,6 +98,9 @@ class _Backend:
     def get_doc(self, project_id, key):
         return self.docs.get(key) or {}
 
+    def read_projected_doc(self, project_id, key, project):
+        return project(self.get_doc(project_id, key))
+
     def put_doc(self, project_id, key, doc):
         self.writes += 1
         self.docs[key] = doc
@@ -161,6 +164,8 @@ def _post(*, doc=DOC, code=CODE, note="", row=None):
 
 def _get(*, doc=DOC, code=CODE, stored=None):
     backend = _Backend()
+    if doc is not None:
+        backend.docs[parts.BUSINESS_DOC_KEY] = {"items": [doc]}
     if stored is not None:
         backend.docs[parts.DOC_KEY_PROCESS] = {"items": [stored]}
     with _Patch((main, "_workflow_project", lambda *a, **k: None),

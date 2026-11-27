@@ -76,7 +76,7 @@ class ProcessSubmission(unittest.IsolatedAsyncioTestCase):
         ok = {"row": prepared, "doc": {"derived_from_drawing": True, "poc_demo": True}}
         with (
             patch.object(main, "_workflow_project", return_value={"project_id": PROJECT}),
-            patch.object(main, "_packaging_business_part_row", side_effect=[failing, ok]),
+            patch.object(main, "_packaging_business_part_row", side_effect=[failing, failing, ok]),
             patch.object(store, "load_requirement", return_value=requirement()),
             patch.object(store, "save_requirement") as save,
             patch.object(packaging_name_assist, "prepare") as assist,
@@ -87,8 +87,8 @@ class ProcessSubmission(unittest.IsolatedAsyncioTestCase):
                 PROJECT, "FIXTURE-P01", note="", attachments=[], user=ACTOR,
             )
         self.assertEqual({"task_id": "fixture-task"}, result)
-        assist.assert_called_once()
-        demo.assert_called_once_with(PROJECT, actor=ACTOR["username"], enable_demo=False)
+        assist.assert_called_once_with(PROJECT, ACTOR["username"], part_code="FIXTURE-P01")
+        demo.assert_called_once_with(PROJECT, actor=ACTOR["username"], part_code="FIXTURE-P01")
         save.assert_not_called()
         submit.assert_called_once()
 
